@@ -15,25 +15,6 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final BridgeController controller = Get.find();
-  late final TextEditingController _baseUrlController;
-  late final TextEditingController _tokenController;
-  bool _confirmRisk = true;
-  bool _showToken = false;
-  String _pairingStatus = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _baseUrlController = TextEditingController(text: controller.baseUrl.value);
-    _tokenController = TextEditingController();
-  }
-
-  @override
-  void dispose() {
-    _baseUrlController.dispose();
-    _tokenController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,137 +22,83 @@ class _SettingsPageState extends State<SettingsPage> {
       () => LiquidBackground(
         child: Scaffold(
           backgroundColor: Colors.transparent,
-          appBar: const LiquidPageAppBar(title: '设置', showMore: true),
+          appBar: const LiquidPageAppBar(title: '设置'),
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(36, 92, 36, 40),
+            padding: const EdgeInsets.fromLTRB(34, 92, 34, 40),
             children: [
-              _SettingsCard(
-                icon: Icons.router_outlined,
-                title: '连接设置',
+              _SettingsOverview(
+                connected: controller.connected.value,
+                workspaceCount: controller.workspaces.length,
+                deviceName: controller.deviceName.value,
+              ),
+              const SizedBox(height: 30),
+              const _SettingsSection(
+                icon: Icons.tune,
+                title: '运行方式',
                 children: [
-                  _TextSettingRow(
-                    title: 'Bridge 地址',
-                    subtitle: '本地网桥连接',
-                    controller: _baseUrlController,
-                    onSubmitted: (_) => _connect(),
+                  _InfoRow(
+                    title: '自动重连',
+                    subtitle: '已启用，Bridge 断开后自动恢复连接',
+                    icon: Icons.sync,
                   ),
-                  const SizedBox(height: 24),
-                  _ConnectionStatusRow(
-                    connected: controller.connected.value,
-                    label: controller.connectionLabel.value,
-                    error: controller.lastError.value,
+                  SizedBox(height: 18),
+                  _InfoRow(
+                    title: '历史会话',
+                    subtitle: '读取 Recodex 事件和本机 Codex 历史',
+                    icon: Icons.history,
                   ),
-                  const SizedBox(height: 34),
-                  const _ValueRow(
-                    title: 'Relay 服务',
-                    subtitle: '远程中继代理',
-                    value: '已禁用',
-                    mutedDot: true,
+                  SizedBox(height: 18),
+                  _InfoRow(
+                    title: '高风险二次确认',
+                    subtitle: '提交、推送等写操作默认需要确认',
+                    icon: Icons.verified_outlined,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 26),
+              _SettingsSection(
+                icon: Icons.security,
+                title: '安全',
+                children: [
+                  _InfoRow(
+                    title: '设备密钥',
+                    subtitle: controller.hasDeviceKey ? '已保存' : '未保存',
+                    icon: controller.hasDeviceKey
+                        ? Icons.verified_user_outlined
+                        : Icons.no_encryption_outlined,
+                  ),
+                  const SizedBox(height: 18),
+                  _InfoRow(
+                    title: '已授权设备',
+                    subtitle: '${controller.devices.length} 台',
+                    icon: Icons.devices_outlined,
                   ),
                   const SizedBox(height: 22),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _pairingStatus,
-                          style: TextStyle(
-                            color: _pairingStatus.contains('失败')
-                                ? const Color(0xffba1a1a)
-                                : const Color(0xff747878),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      BluePillButton(
-                        label: controller.busy.value ? '获取中' : '获取配对信息',
-                        icon: controller.busy.value ? Icons.sync : Icons.link,
-                        onPressed: controller.busy.value ? null : _fetchPairing,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  const Text(
-                    '真机连接时 Bridge 地址应使用电脑局域网地址，例如 http://192.168.x.x:8765。',
-                    style: TextStyle(
-                      color: Color(0xff747878),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: OutlinedButton.icon(
+                      onPressed: controller.clearStoredCredentials,
+                      icon: const Icon(Icons.logout),
+                      label: const Text('清除本机密钥'),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 44),
-              _SettingsCard(
-                icon: Icons.shield_outlined,
-                title: '安全与配对',
+              const SizedBox(height: 26),
+              const _SettingsSection(
+                icon: Icons.info_outline,
+                title: '关于',
                 children: [
-                  _ValueRow(
-                    title: '已授权设备',
-                    subtitle: '当前配对设备',
-                    value: controller.deviceName.value,
-                    icon: Icons.phone_iphone,
+                  _InfoRow(
+                    title: '应用',
+                    subtitle: 'Remodex Companion',
+                    icon: Icons.terminal,
                   ),
-                  const SizedBox(height: 34),
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: _SettingLabel(
-                          title: '重新配对',
-                          subtitle: '使用 Bridge 生成的令牌',
-                        ),
-                      ),
-                      SizedBox(
-                        width: 230,
-                        child: TextField(
-                          controller: _tokenController,
-                          obscureText: !_showToken,
-                          textAlign: TextAlign.center,
-                          decoration: InputDecoration(
-                            hintText: '输入配对令牌',
-                            suffixIcon: IconButton(
-                              tooltip: _showToken ? '隐藏令牌' : '显示令牌',
-                              onPressed: () =>
-                                  setState(() => _showToken = !_showToken),
-                              icon: Icon(
-                                _showToken
-                                    ? Icons.visibility_off
-                                    : Icons.visibility,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: BluePillButton(
-                      label: controller.busy.value ? '连接中' : '连接 Bridge',
-                      icon: controller.busy.value
-                          ? Icons.sync
-                          : Icons.qr_code_2,
-                      onPressed: controller.busy.value ? null : _connect,
-                    ),
-                  ),
-                  const SizedBox(height: 34),
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: _SettingLabel(
-                          title: '二次确认',
-                          subtitle: '高风险操作需确认',
-                        ),
-                      ),
-                      Switch(
-                        value: _confirmRisk,
-                        activeThumbColor: const Color(0xff005fc7),
-                        onChanged: (value) =>
-                            setState(() => _confirmRisk = value),
-                      ),
-                    ],
+                  SizedBox(height: 18),
+                  _InfoRow(
+                    title: '版本',
+                    subtitle: 'v1.0.4',
+                    icon: Icons.new_releases_outlined,
                   ),
                 ],
               ),
@@ -181,40 +108,89 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
   }
+}
 
-  void _connect() {
-    controller.connect(
-      inputBaseUrl: _baseUrlController.text,
-      token: _tokenController.text,
-      inputDeviceName: controller.deviceName.value,
+class _SettingsOverview extends StatelessWidget {
+  const _SettingsOverview({
+    required this.connected,
+    required this.workspaceCount,
+    required this.deviceName,
+  });
+
+  final bool connected;
+  final int workspaceCount;
+  final String deviceName;
+
+  @override
+  Widget build(BuildContext context) {
+    return LiquidGlass(
+      radius: 38,
+      opacity: 0.74,
+      padding: const EdgeInsets.fromLTRB(30, 28, 30, 28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.86),
+                ),
+                child: Icon(
+                  connected ? Icons.cloud_done_outlined : Icons.cloud_off,
+                  color: const Color(0xff005fc7),
+                  size: 32,
+                ),
+              ),
+              const SizedBox(width: 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '应用控制台',
+                      style: TextStyle(
+                        fontSize: 25,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      connected ? 'Bridge 在线' : 'Bridge 未连接',
+                      style: const TextStyle(
+                        color: Color(0xff747878),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: _MetricChip(label: '工作区', value: '$workspaceCount'),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _MetricChip(label: '设备', value: deviceName),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
-  }
-
-  Future<void> _fetchPairing() async {
-    setState(() => _pairingStatus = '正在获取配对信息...');
-    final info = await controller.fetchPairing(_baseUrlController.text);
-    if (!mounted) return;
-    if (info == null) {
-      setState(() {
-        _pairingStatus = controller.lastError.value.isEmpty
-            ? '获取失败，请检查 Bridge 地址和后台是否启动。'
-            : '获取失败：${controller.lastError.value}';
-      });
-      return;
-    }
-    _baseUrlController.text = info.baseUrl;
-    _tokenController.text = info.token;
-    setState(() {
-      _showToken = true;
-      _pairingStatus = info.token.isEmpty
-          ? '未获取到令牌，请重启或刷新 Bridge 配对窗口。'
-          : '已获取新令牌。';
-    });
   }
 }
 
-class _SettingsCard extends StatelessWidget {
-  const _SettingsCard({
+class _SettingsSection extends StatelessWidget {
+  const _SettingsSection({
     required this.icon,
     required this.title,
     required this.children,
@@ -227,26 +203,27 @@ class _SettingsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return LiquidGlass(
-      radius: 54,
-      opacity: 0.72,
-      padding: const EdgeInsets.fromLTRB(48, 46, 48, 42),
+      radius: 34,
+      opacity: 0.7,
+      padding: const EdgeInsets.fromLTRB(30, 28, 30, 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(icon, color: const Color(0xff005fc7), size: 34),
-              const SizedBox(width: 22),
+              Icon(icon, color: const Color(0xff005fc7), size: 28),
+              const SizedBox(width: 14),
               Text(
                 title,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  color: const Color(0xff005fc7),
+                style: const TextStyle(
+                  color: Color(0xff005fc7),
+                  fontSize: 22,
                   fontWeight: FontWeight.w900,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 66),
+          const SizedBox(height: 28),
           ...children,
         ],
       ),
@@ -254,192 +231,71 @@ class _SettingsCard extends StatelessWidget {
   }
 }
 
-class _TextSettingRow extends StatelessWidget {
-  const _TextSettingRow({
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({
     required this.title,
     required this.subtitle,
-    required this.controller,
-    required this.onSubmitted,
+    required this.icon,
   });
 
   final String title;
   final String subtitle;
-  final TextEditingController controller;
-  final ValueChanged<String> onSubmitted;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
+        Icon(icon, color: const Color(0xff5d6266), size: 24),
+        const SizedBox(width: 14),
         Expanded(
-          child: _SettingLabel(title: title, subtitle: subtitle),
+          child: _Label(title: title, subtitle: subtitle),
         ),
-        SizedBox(
-          width: 230,
-          child: TextField(
-            controller: controller,
-            textAlign: TextAlign.center,
-            keyboardType: TextInputType.url,
-            onSubmitted: onSubmitted,
+      ],
+    );
+  }
+}
+
+class _MetricChip extends StatelessWidget {
+  const _MetricChip({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
             style: const TextStyle(
-              color: Color(0xff005fc7),
-              fontSize: 18,
+              color: Color(0xff747878),
+              fontSize: 12,
               fontWeight: FontWeight.w800,
             ),
-            decoration: const InputDecoration(border: InputBorder.none),
           ),
-        ),
-      ],
+          const SizedBox(height: 4),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+          ),
+        ],
+      ),
     );
   }
 }
 
-class _ValueRow extends StatelessWidget {
-  const _ValueRow({
-    required this.title,
-    required this.subtitle,
-    required this.value,
-    this.icon,
-    this.mutedDot = false,
-  });
-
-  final String title;
-  final String subtitle;
-  final String value;
-  final IconData? icon;
-  final bool mutedDot;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: _SettingLabel(title: title, subtitle: subtitle),
-        ),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xffeef3fb),
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (icon != null) ...[
-                Icon(icon, size: 18, color: const Color(0xff005fc7)),
-                const SizedBox(width: 8),
-              ],
-              if (mutedDot) ...[
-                const Icon(Icons.circle, size: 13, color: Color(0xffc3c8cc)),
-                const SizedBox(width: 12),
-              ],
-              Text(
-                value,
-                style: const TextStyle(
-                  color: Color(0xff005fc7),
-                  fontWeight: FontWeight.w900,
-                  fontSize: 18,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ConnectionStatusRow extends StatelessWidget {
-  const _ConnectionStatusRow({
-    required this.connected,
-    required this.label,
-    required this.error,
-  });
-
-  final bool connected;
-  final String label;
-  final String error;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = connected
-        ? const Color(0xff0b7a3b)
-        : label == 'connecting' || label == 'auth' || label == 'reconnecting'
-        ? const Color(0xff005fc7)
-        : const Color(0xffba1a1a);
-    final text = connected
-        ? '已连接'
-        : label == 'connecting'
-        ? '正在连接'
-        : label == 'auth'
-        ? '正在认证'
-        : label == 'reconnecting'
-        ? '正在重连'
-        : label == 'failed'
-        ? '连接失败'
-        : '未连接';
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Expanded(
-          child: _SettingLabel(title: '连接状态', subtitle: 'Bridge 实时状态'),
-        ),
-        Flexible(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 12,
-                ),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      connected ? Icons.check_circle : Icons.info_outline,
-                      size: 18,
-                      color: color,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      text,
-                      style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (error.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Text(
-                  error,
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(
-                    color: Color(0xffba1a1a),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _SettingLabel extends StatelessWidget {
-  const _SettingLabel({required this.title, required this.subtitle});
+class _Label extends StatelessWidget {
+  const _Label({required this.title, required this.subtitle});
 
   final String title;
   final String subtitle;
@@ -451,12 +307,12 @@ class _SettingLabel extends StatelessWidget {
       children: [
         Text(
           title,
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
         ),
         const SizedBox(height: 4),
         Text(
           subtitle,
-          style: const TextStyle(color: Color(0xff747878), fontSize: 15),
+          style: const TextStyle(color: Color(0xff747878), fontSize: 14),
         ),
       ],
     );

@@ -10,8 +10,8 @@ class RemodexDrawer extends StatelessWidget {
     required this.workspaces,
     required this.selectedWorkspace,
     required this.onSelectWorkspace,
+    required this.onPairing,
     required this.onSettings,
-    required this.onAbout,
     super.key,
   });
 
@@ -19,8 +19,8 @@ class RemodexDrawer extends StatelessWidget {
   final List<WorkspaceInfo> workspaces;
   final WorkspaceInfo? selectedWorkspace;
   final ValueChanged<WorkspaceInfo> onSelectWorkspace;
+  final VoidCallback onPairing;
   final VoidCallback onSettings;
-  final VoidCallback onAbout;
 
   @override
   Widget build(BuildContext context) {
@@ -65,64 +65,60 @@ class RemodexDrawer extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 30),
-                const Text(
-                  '工作区',
-                  style: TextStyle(
-                    color: Color(0xff747878),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
+                Row(
+                  children: [
+                    const Text(
+                      '工作区',
+                      style: TextStyle(
+                        color: Color(0xff747878),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${workspaces.length}',
+                      style: const TextStyle(
+                        color: Color(0xff747878),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
-                if (workspaces.isEmpty)
-                  const _WorkspaceLine(name: '暂无工作区', path: '连接 Bridge 后同步')
-                else
-                  ...workspaces
-                      .take(4)
-                      .map(
-                        (workspace) => _WorkspaceLine(
-                          name: workspace.name,
-                          path: workspace.path,
-                          active: selectedWorkspace?.name == workspace.name,
-                          onTap: () => onSelectWorkspace(workspace),
+                Expanded(
+                  child: ListView(
+                    padding: EdgeInsets.zero,
+                    children: [
+                      if (workspaces.isEmpty)
+                        const _WorkspaceLine(
+                          name: '暂无工作区',
+                          path: '连接 Bridge 后同步',
+                        )
+                      else
+                        ...workspaces.map(
+                          (workspace) => _WorkspaceLine(
+                            name: workspace.name,
+                            path: workspace.path,
+                            active: selectedWorkspace?.name == workspace.name,
+                            onTap: () => onSelectWorkspace(workspace),
+                          ),
                         ),
-                      ),
-                const SizedBox(height: 26),
-                _MenuItem(
-                  icon: Icons.folder,
-                  label: '项目文件',
-                  active: true,
-                  onTap: () => Navigator.of(context).pop(),
+                    ],
+                  ),
                 ),
-                _MenuItem(icon: Icons.history, label: '历史记录', onTap: () {}),
-                _MenuItem(
-                  icon: Icons.menu_book_outlined,
-                  label: '文档',
-                  onTap: () {},
-                ),
-                _MenuItem(
-                  icon: Icons.devices_outlined,
-                  label: '配对',
-                  onTap: onSettings,
-                ),
-                const Spacer(),
-                _MenuItem(
-                  icon: Icons.settings_outlined,
-                  label: '设置',
-                  onTap: onSettings,
-                ),
-                _MenuItem(
-                  icon: Icons.info_outline,
-                  label: '关于',
-                  onTap: onAbout,
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  '项目：Remodex\nv1.0.4',
-                  style: TextStyle(
-                    color: Color(0xff747878),
-                    fontSize: 11,
-                    height: 1.35,
+                const SizedBox(height: 14),
+                _BottomDock(onPairing: onPairing, onSettings: onSettings),
+                const SizedBox(height: 12),
+                Center(
+                  child: Text(
+                    'Remodex v1.0.4',
+                    style: TextStyle(
+                      color: const Color(0xff747878).withValues(alpha: 0.86),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ],
@@ -194,8 +190,56 @@ class _WorkspaceLine extends StatelessWidget {
   }
 }
 
-class _MenuItem extends StatelessWidget {
-  const _MenuItem({
+class _BottomDock extends StatelessWidget {
+  const _BottomDock({required this.onPairing, required this.onSettings});
+
+  final VoidCallback onPairing;
+  final VoidCallback onSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.72)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xff9da8b7).withValues(alpha: 0.14),
+            offset: const Offset(0, 14),
+            blurRadius: 28,
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(6),
+        child: Row(
+          children: [
+            Expanded(
+              child: _DockButton(
+                icon: Icons.devices_outlined,
+                label: '配对',
+                onTap: onPairing,
+                active: true,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: _DockButton(
+                icon: Icons.settings_outlined,
+                label: '设置',
+                onTap: onSettings,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DockButton extends StatelessWidget {
+  const _DockButton({
     required this.icon,
     required this.label,
     required this.onTap,
@@ -209,31 +253,33 @@ class _MenuItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: active
-            ? Colors.white.withValues(alpha: 0.82)
-            : Colors.transparent,
+    final color = active ? const Color(0xff005fc7) : const Color(0xff303132);
+    return Material(
+      color: active ? Colors.white.withValues(alpha: 0.86) : Colors.transparent,
+      borderRadius: BorderRadius.circular(22),
+      child: InkWell(
         borderRadius: BorderRadius.circular(22),
-        child: ListTile(
-          dense: true,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: color, size: 19),
+              const SizedBox(width: 7),
+              Flexible(
+                child: Text(
+                  label,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ],
           ),
-          leading: Icon(
-            icon,
-            color: active ? const Color(0xff005fc7) : null,
-            size: 20,
-          ),
-          title: Text(
-            label,
-            style: TextStyle(
-              color: active ? const Color(0xff005fc7) : const Color(0xff303132),
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          onTap: onTap,
         ),
       ),
     );

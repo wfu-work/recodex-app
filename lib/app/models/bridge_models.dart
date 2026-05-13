@@ -94,12 +94,16 @@ class SessionRecord {
     required this.workspace,
     required this.prompt,
     required this.status,
+    required this.createdAt,
+    required this.updatedAt,
   });
 
   final String id;
   final String workspace;
   final String prompt;
   final String status;
+  final String createdAt;
+  final String updatedAt;
 
   factory SessionRecord.fromJson(Map<String, dynamic> json) {
     return SessionRecord(
@@ -107,8 +111,13 @@ class SessionRecord {
       workspace: json['workspace'] as String? ?? '',
       prompt: json['prompt'] as String? ?? '',
       status: json['status'] as String? ?? '',
+      createdAt: json['createdAt'] as String? ?? '',
+      updatedAt: json['updatedAt'] as String? ?? '',
     );
   }
+
+  DateTime get updatedAtDate =>
+      DateTime.tryParse(updatedAt) ?? DateTime.fromMillisecondsSinceEpoch(0);
 }
 
 class SessionEvent {

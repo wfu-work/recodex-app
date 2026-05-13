@@ -8,7 +8,7 @@ import '../components/menu_drawer.dart';
 import '../components/status_chips.dart';
 import '../controllers/bridge_controller.dart';
 import '../models/bridge_models.dart';
-import 'about_page.dart';
+import 'pairing_page.dart';
 import 'settings_page.dart';
 
 class MainPage extends StatefulWidget {
@@ -42,8 +42,8 @@ class _MainPageState extends State<MainPage> {
               controller.selectWorkspace(workspace);
               Navigator.of(context).pop();
             },
+            onPairing: () => _openPage(const PairingPage()),
             onSettings: () => _openPage(const SettingsPage()),
-            onAbout: () => _openPage(const AboutPage()),
           ),
           body: SafeArea(
             child: Stack(

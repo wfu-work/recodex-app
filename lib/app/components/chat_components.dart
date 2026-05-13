@@ -177,6 +177,8 @@ class ComposerBar extends StatelessWidget {
 
 String _eventTitle(String kind) {
   return switch (kind) {
+    'user' => '你',
+    'assistant' => 'Codex',
     'error' => '执行出错',
     'interrupted' => '已中断',
     'done' => '任务完成',

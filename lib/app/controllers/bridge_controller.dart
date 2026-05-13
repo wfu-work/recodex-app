@@ -33,6 +33,7 @@ class BridgeController extends GetxController {
   Timer? _reconnectTimer;
   int _messageSeq = 0;
   bool _manualDisconnect = false;
+  String? _requestedEventsSessionId;
 
   bool get canUseWorkspace =>
       connected.value && selectedWorkspace.value != null;
@@ -112,6 +113,9 @@ class BridgeController extends GetxController {
   void selectWorkspace(WorkspaceInfo? workspace) {
     selectedWorkspace.value = workspace;
     gitSnapshot.value = null;
+    currentSessionId.value = null;
+    events.clear();
+    _loadLatestSessionEventsForSelectedWorkspace();
   }
 
   void startSession(String prompt) {
@@ -235,12 +239,14 @@ class BridgeController extends GetxController {
           selectedWorkspace.value ??= workspaces.isEmpty
               ? null
               : workspaces.first;
+          _loadLatestSessionEventsForSelectedWorkspace();
         case 'session.list.result':
           sessions.assignAll(
             ((map['sessions'] as List?) ?? const []).whereType<Map>().map(
               (item) => SessionRecord.fromJson(item.cast<String, dynamic>()),
             ),
           );
+          _loadLatestSessionEventsForSelectedWorkspace();
         case 'device.list.result':
           devices.assignAll(
             ((map['devices'] as List?) ?? const []).whereType<Map>().map(
@@ -257,6 +263,14 @@ class BridgeController extends GetxController {
           events.add(SessionEvent.fromJson(map));
           currentSessionId.value = null;
           _send('session.list', {});
+        case 'session.events.result':
+          final sessionId = map['sessionId'] as String? ?? '';
+          if (sessionId != _requestedEventsSessionId) break;
+          events.assignAll(
+            ((map['events'] as List?) ?? const []).whereType<Map>().map(
+              (item) => SessionEvent.fromJson(item.cast<String, dynamic>()),
+            ),
+          );
         case 'session.error':
           final message =
               map['message'] as String? ??
@@ -324,6 +338,28 @@ class BridgeController extends GetxController {
     socket.add(
       jsonEncode({'type': type, 'id': 'm_$_messageSeq', 'payload': payload}),
     );
+  }
+
+  void _loadLatestSessionEventsForSelectedWorkspace() {
+    if (!connected.value || currentSessionId.value != null) return;
+    final workspace = selectedWorkspace.value;
+    if (workspace == null) return;
+
+    final candidates = sessions.where(
+      (session) =>
+          session.workspace == workspace.path ||
+          session.workspace == workspace.name,
+    );
+    if (candidates.isEmpty) return;
+
+    final latest = candidates.reduce(
+      (current, next) =>
+          next.updatedAtDate.isAfter(current.updatedAtDate) ? next : current,
+    );
+    if (_requestedEventsSessionId == latest.id && events.isNotEmpty) return;
+
+    _requestedEventsSessionId = latest.id;
+    _send('session.events', {'sessionId': latest.id});
   }
 
   Future<void> _loadStoredCredentials() async {
