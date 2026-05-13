@@ -20,7 +20,7 @@ class RecodexApp extends StatelessWidget {
         Get.put(BridgeController(), permanent: true);
       }),
       theme: RecodexTheme.light,
-      home: const ShellPage(),
+      home: const MainPage(),
     );
   }
 }
