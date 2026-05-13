@@ -53,7 +53,11 @@ class _MainPageState extends State<MainPage> {
                     SliverToBoxAdapter(
                       child: _HomeHeader(
                         path: _workspacePath,
-                        onSettings: () => _openPage(const SettingsPage()),
+                        added: _diffAdded,
+                        removed: _diffRemoved,
+                        onRefreshGit: controller.canUseWorkspace
+                            ? () => controller.gitStatus(includeDiff: true)
+                            : null,
                       ),
                     ),
                     if (controller.lastError.value.isNotEmpty)
@@ -71,7 +75,11 @@ class _MainPageState extends State<MainPage> {
                             const SizedBox(height: 26),
                         itemBuilder: (context, index) {
                           if (controller.events.isEmpty) {
-                            return const _WelcomeTimeline();
+                            return _WelcomeTimeline(
+                              connected: controller.connected.value,
+                              connectionLabel: controller.connectionLabel.value,
+                              workspaceCount: controller.workspaces.length,
+                            );
                           }
                           final event = controller.events[index];
                           if (event.kind == 'tool') {
@@ -110,6 +118,10 @@ class _MainPageState extends State<MainPage> {
     return workspace.path.isEmpty ? workspace.name : workspace.path;
   }
 
+  int get _diffAdded => _parseDiffStat(controller.gitSnapshot.value?.stat).$1;
+
+  int get _diffRemoved => _parseDiffStat(controller.gitSnapshot.value?.stat).$2;
+
   void _sendPrompt() {
     final prompt = _promptController.text.trim();
     if (prompt.isEmpty) return;
@@ -126,10 +138,17 @@ class _MainPageState extends State<MainPage> {
 }
 
 class _HomeHeader extends StatelessWidget {
-  const _HomeHeader({required this.path, required this.onSettings});
+  const _HomeHeader({
+    required this.path,
+    required this.added,
+    required this.removed,
+    required this.onRefreshGit,
+  });
 
   final String path;
-  final VoidCallback onSettings;
+  final int added;
+  final int removed;
+  final VoidCallback? onRefreshGit;
 
   @override
   Widget build(BuildContext context) {
@@ -175,8 +194,8 @@ class _HomeHeader extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           GestureDetector(
-            onTap: onSettings,
-            child: const DiffChip(added: 682, removed: 32),
+            onTap: onRefreshGit,
+            child: DiffChip(added: added, removed: removed),
           ),
         ],
       ),
@@ -184,25 +203,66 @@ class _HomeHeader extends StatelessWidget {
   }
 }
 
+(int, int) _parseDiffStat(String? stat) {
+  if (stat == null || stat.trim().isEmpty) return (0, 0);
+  var added = 0;
+  var removed = 0;
+  for (final line in stat.split('\n')) {
+    final insertions = RegExp(r'(\d+)\s+insertion').firstMatch(line);
+    final deletions = RegExp(r'(\d+)\s+deletion').firstMatch(line);
+    if (insertions != null) {
+      added += int.tryParse(insertions.group(1) ?? '') ?? 0;
+    }
+    if (deletions != null) {
+      removed += int.tryParse(deletions.group(1) ?? '') ?? 0;
+    }
+  }
+  return (added, removed);
+}
+
 class _WelcomeTimeline extends StatelessWidget {
-  const _WelcomeTimeline();
+  const _WelcomeTimeline({
+    required this.connected,
+    required this.connectionLabel,
+    required this.workspaceCount,
+  });
+
+  final bool connected;
+  final String connectionLabel;
+  final int workspaceCount;
 
   @override
   Widget build(BuildContext context) {
+    final status = connected
+        ? '已连接'
+        : connectionLabel == 'reconnecting'
+        ? '重连中'
+        : '待命';
+    final title = connected
+        ? 'Bridge 已连接，已加载 $workspaceCount 个工作区'
+        : connectionLabel == 'connecting' || connectionLabel == 'auth'
+        ? '正在连接本地 Bridge'
+        : connectionLabel == 'reconnecting'
+        ? '正在重新连接本地 Bridge'
+        : '等待本地 Bridge 连接';
+    final icon = connected
+        ? Icons.check_circle_outline
+        : connectionLabel == 'connecting' ||
+              connectionLabel == 'auth' ||
+              connectionLabel == 'reconnecting'
+        ? Icons.sync
+        : Icons.radio_button_unchecked;
+
     return Column(
-      children: const [
+      children: [
         AssistantBubble(
           event: SessionEvent(
             kind: 'message',
             text: '选择一个工作区，然后输入任务。你可以让我分析项目结构、修改代码、运行测试，或在提交前检查 Git 状态。',
           ),
         ),
-        SizedBox(height: 26),
-        ToolCallRow(
-          title: '等待本地 Bridge 连接',
-          status: '待命',
-          icon: Icons.radio_button_unchecked,
-        ),
+        const SizedBox(height: 26),
+        ToolCallRow(title: title, status: status, icon: icon),
       ],
     );
   }

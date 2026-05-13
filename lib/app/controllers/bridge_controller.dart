@@ -29,9 +29,13 @@ class BridgeController extends GetxController {
   final currentSessionId = RxnString();
 
   WebSocket? _socket;
+  StreamSubscription<dynamic>? _socketSubscription;
+  Timer? _reconnectTimer;
   int _messageSeq = 0;
+  bool _manualDisconnect = false;
 
-  bool get canUseWorkspace => connected.value && selectedWorkspace.value != null;
+  bool get canUseWorkspace =>
+      connected.value && selectedWorkspace.value != null;
   bool get hasDeviceKey => deviceKey.value.isNotEmpty;
 
   @override
@@ -51,19 +55,21 @@ class BridgeController extends GetxController {
     required String token,
     required String inputDeviceName,
   }) async {
+    _manualDisconnect = false;
+    _reconnectTimer?.cancel();
     busy.value = true;
     lastError.value = '';
     connectionLabel.value = 'connecting';
 
     try {
-      await disconnect(silent: true);
+      await _closeSocket();
       baseUrl.value = _normalizeBaseUrl(inputBaseUrl);
       deviceName.value = inputDeviceName.trim().isEmpty
           ? 'Flutter phone'
           : inputDeviceName.trim();
       final wsUrl = '${baseUrl.value.replaceFirst(RegExp('^http'), 'ws')}/ws';
       _socket = await WebSocket.connect(wsUrl);
-      _socket!.listen(
+      _socketSubscription = _socket!.listen(
         _handleRawMessage,
         onDone: _handleDone,
         onError: _handleSocketError,
@@ -78,19 +84,29 @@ class BridgeController extends GetxController {
       _fail(error);
       connectionLabel.value = 'failed';
       connected.value = false;
+      _scheduleReconnect();
     } finally {
       busy.value = false;
     }
   }
 
   Future<void> disconnect({bool silent = false}) async {
+    _manualDisconnect = true;
+    _reconnectTimer?.cancel();
+    await _closeSocket();
+    connected.value = false;
+    connectionLabel.value = 'offline';
+  }
+
+  Future<void> _closeSocket() async {
     final socket = _socket;
+    final subscription = _socketSubscription;
     _socket = null;
+    _socketSubscription = null;
+    await subscription?.cancel();
     if (socket != null) {
       await socket.close();
     }
-    connected.value = false;
-    connectionLabel.value = 'offline';
   }
 
   void selectWorkspace(WorkspaceInfo? workspace) {
@@ -103,7 +119,10 @@ class BridgeController extends GetxController {
     if (workspace == null) return;
     events.clear();
     currentSessionId.value = null;
-    _send('session.start', {'workspace': workspace.name, 'prompt': prompt.trim()});
+    _send('session.start', {
+      'workspace': workspace.name,
+      'prompt': prompt.trim(),
+    });
   }
 
   void interrupt() {
@@ -115,7 +134,9 @@ class BridgeController extends GetxController {
   void gitStatus({required bool includeDiff}) {
     final workspace = selectedWorkspace.value;
     if (workspace == null) return;
-    _send(includeDiff ? 'git.diff' : 'git.status', {'workspace': workspace.name});
+    _send(includeDiff ? 'git.diff' : 'git.status', {
+      'workspace': workspace.name,
+    });
   }
 
   void gitCommit(String message, {required bool confirm}) {
@@ -187,7 +208,9 @@ class BridgeController extends GetxController {
       final decoded = jsonDecode(raw as String) as Map<String, dynamic>;
       final type = decoded['type'] as String? ?? '';
       final payload = decoded['payload'];
-      final map = payload is Map<String, dynamic> ? payload : <String, dynamic>{};
+      final map = payload is Map<String, dynamic>
+          ? payload
+          : <String, dynamic>{};
 
       switch (type) {
         case 'bridge.hello':
@@ -198,29 +221,31 @@ class BridgeController extends GetxController {
           final newKey = map['deviceKey'] as String? ?? '';
           if (newKey.isNotEmpty) {
             deviceKey.value = newKey;
-            unawaited(_storeCredentials());
           }
+          unawaited(_storeCredentials());
           _send('workspace.list', {});
           _send('session.list', {});
           _send('device.list', {});
         case 'workspace.list.result':
           workspaces.assignAll(
-            ((map['workspaces'] as List?) ?? const [])
-                .whereType<Map>()
-                .map((item) => WorkspaceInfo.fromJson(item.cast<String, dynamic>())),
+            ((map['workspaces'] as List?) ?? const []).whereType<Map>().map(
+              (item) => WorkspaceInfo.fromJson(item.cast<String, dynamic>()),
+            ),
           );
-          selectedWorkspace.value ??= workspaces.isEmpty ? null : workspaces.first;
+          selectedWorkspace.value ??= workspaces.isEmpty
+              ? null
+              : workspaces.first;
         case 'session.list.result':
           sessions.assignAll(
-            ((map['sessions'] as List?) ?? const [])
-                .whereType<Map>()
-                .map((item) => SessionRecord.fromJson(item.cast<String, dynamic>())),
+            ((map['sessions'] as List?) ?? const []).whereType<Map>().map(
+              (item) => SessionRecord.fromJson(item.cast<String, dynamic>()),
+            ),
           );
         case 'device.list.result':
           devices.assignAll(
-            ((map['devices'] as List?) ?? const [])
-                .whereType<Map>()
-                .map((item) => DeviceInfo.fromJson(item.cast<String, dynamic>())),
+            ((map['devices'] as List?) ?? const []).whereType<Map>().map(
+              (item) => DeviceInfo.fromJson(item.cast<String, dynamic>()),
+            ),
           );
         case 'session.created':
           final record = SessionRecord.fromJson(map);
@@ -234,13 +259,27 @@ class BridgeController extends GetxController {
           _send('session.list', {});
         case 'session.error':
           final message =
-              map['message'] as String? ?? map['text'] as String? ?? 'Unknown error';
+              map['message'] as String? ??
+              map['text'] as String? ??
+              'Unknown error';
+          if (map['code'] == 'auth_failed') {
+            deviceKey.value = '';
+            connected.value = false;
+            connectionLabel.value = 'failed';
+            unawaited(_storage.delete(key: 'recodex_device_key'));
+            unawaited(_closeSocket());
+          }
           lastError.value = message;
           events.add(SessionEvent(kind: 'error', text: message));
           currentSessionId.value = null;
         case 'session.interrupted':
           currentSessionId.value = null;
-          events.add(const SessionEvent(kind: 'interrupted', text: 'Interrupted by user.'));
+          events.add(
+            const SessionEvent(
+              kind: 'interrupted',
+              text: 'Interrupted by user.',
+            ),
+          );
         case 'git.status.result':
         case 'git.diff.result':
           gitSnapshot.value = GitSnapshot.fromJson(map);
@@ -253,7 +292,8 @@ class BridgeController extends GetxController {
             unawaited(disconnect());
           }
         case 'confirm.required':
-          lastError.value = map['message'] as String? ?? 'Confirmation required.';
+          lastError.value =
+              map['message'] as String? ?? 'Confirmation required.';
         default:
           break;
       }
@@ -265,25 +305,39 @@ class BridgeController extends GetxController {
   void _handleDone() {
     connected.value = false;
     connectionLabel.value = 'offline';
+    _socket = null;
+    _socketSubscription = null;
+    _scheduleReconnect();
   }
 
   void _handleSocketError(Object error) {
     connected.value = false;
     connectionLabel.value = 'failed';
     _fail(error);
+    _scheduleReconnect();
   }
 
   void _send(String type, Map<String, dynamic> payload) {
     final socket = _socket;
     if (socket == null) return;
     _messageSeq += 1;
-    socket.add(jsonEncode({'type': type, 'id': 'm_$_messageSeq', 'payload': payload}));
+    socket.add(
+      jsonEncode({'type': type, 'id': 'm_$_messageSeq', 'payload': payload}),
+    );
   }
 
   Future<void> _loadStoredCredentials() async {
     try {
+      final storedBaseUrl = await _storage.read(key: 'recodex_base_url');
+      final storedDeviceName = await _storage.read(key: 'recodex_device_name');
       final storedDeviceId = await _storage.read(key: 'recodex_device_id');
       final storedDeviceKey = await _storage.read(key: 'recodex_device_key');
+      if (storedBaseUrl != null && storedBaseUrl.isNotEmpty) {
+        baseUrl.value = _normalizeBaseUrl(storedBaseUrl);
+      }
+      if (storedDeviceName != null && storedDeviceName.isNotEmpty) {
+        deviceName.value = storedDeviceName;
+      }
       if (storedDeviceId != null && storedDeviceId.isNotEmpty) {
         deviceId.value = storedDeviceId;
       } else {
@@ -291,6 +345,7 @@ class BridgeController extends GetxController {
       }
       if (storedDeviceKey != null && storedDeviceKey.isNotEmpty) {
         deviceKey.value = storedDeviceKey;
+        unawaited(_autoConnect());
       }
     } catch (_) {
       // Tests and unsupported desktop targets may not have a secure storage backend.
@@ -299,11 +354,38 @@ class BridgeController extends GetxController {
 
   Future<void> _storeCredentials() async {
     try {
+      await _storage.write(key: 'recodex_base_url', value: baseUrl.value);
+      await _storage.write(key: 'recodex_device_name', value: deviceName.value);
       await _storage.write(key: 'recodex_device_id', value: deviceId.value);
       await _storage.write(key: 'recodex_device_key', value: deviceKey.value);
     } catch (_) {
       // Keep the in-memory key for the current connection if secure storage is unavailable.
     }
+  }
+
+  Future<void> _autoConnect() {
+    return connect(
+      inputBaseUrl: baseUrl.value,
+      token: '',
+      inputDeviceName: deviceName.value,
+    );
+  }
+
+  void _scheduleReconnect() {
+    if (_manualDisconnect ||
+        deviceKey.value.isEmpty ||
+        _reconnectTimer != null) {
+      return;
+    }
+    connectionLabel.value = 'reconnecting';
+    _reconnectTimer = Timer(const Duration(seconds: 3), () {
+      _reconnectTimer = null;
+      if (!_manualDisconnect &&
+          !connected.value &&
+          deviceKey.value.isNotEmpty) {
+        unawaited(_autoConnect());
+      }
+    });
   }
 
   void _fail(Object error) {
