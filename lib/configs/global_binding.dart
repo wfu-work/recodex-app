@@ -1,0 +1,16 @@
+import 'package:get/get.dart';
+
+import '../app/controllers/bridge_controller.dart';
+import '../app/controllers/theme_controller.dart';
+
+class GlobalBinding extends Bindings {
+  @override
+  void dependencies() {
+    if (!Get.isRegistered<BridgeController>()) {
+      Get.put<BridgeController>(BridgeController(), permanent: true);
+    }
+    if (!Get.isRegistered<ThemeController>()) {
+      Get.put<ThemeController>(ThemeController(), permanent: true);
+    }
+  }
+}

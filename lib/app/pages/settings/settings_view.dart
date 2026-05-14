@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../components/liquid_background.dart';
-import '../components/liquid_glass.dart';
-import '../components/liquid_page_app_bar.dart';
-import '../controllers/bridge_controller.dart';
-import '../controllers/theme_controller.dart';
-import 'about_page.dart';
-import 'service_page.dart';
-import '../theme/recodex_theme.dart';
+import '../../components/liquid_background.dart';
+import '../../components/liquid_glass.dart';
+import '../../components/liquid_page_app_bar.dart';
+import '../../controllers/bridge_controller.dart';
+import '../../controllers/theme_controller.dart';
+import '../../routes/app_pages.dart';
+import '../../theme/recodex_theme.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -30,7 +29,7 @@ class _SettingsPageState extends State<SettingsPage> {
           backgroundColor: Colors.transparent,
           appBar: const LiquidPageAppBar(title: '设置'),
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(24, 88, 24, 36),
+            padding: const EdgeInsets.fromLTRB(24, 38, 24, 36),
             children: [
               _SettingsGroup(
                 title: '外观',
@@ -94,7 +93,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         : 'Bridge 未连接',
                     trailing: _StatusDot(connected: controller.connected.value),
                     trailingIcon: Icons.chevron_right,
-                    onTap: () => _openPage(const ServicePage()),
+                    onTap: () => _openPage(Routes.service),
                   ),
                 ],
               ),
@@ -107,7 +106,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     title: '关于我们',
                     subtitle: 'Remodex Companion',
                     trailingIcon: Icons.chevron_right,
-                    onTap: () => _openPage(const AboutPage()),
+                    onTap: () => _openPage(Routes.about),
                   ),
                   _DividerLine(),
                   const _SettingsTile(
@@ -129,8 +128,8 @@ class _SettingsPageState extends State<SettingsPage> {
     return themeController.fontSizeLabel;
   }
 
-  void _openPage(Widget page) {
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+  void _openPage(String route) {
+    Get.toNamed(route);
   }
 }
 

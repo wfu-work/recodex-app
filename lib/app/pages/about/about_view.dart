@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../components/liquid_background.dart';
-import '../components/liquid_glass.dart';
-import '../components/liquid_page_app_bar.dart';
-import '../theme/recodex_theme.dart';
+import '../../components/liquid_background.dart';
+import '../../components/liquid_glass.dart';
+import '../../components/liquid_page_app_bar.dart';
+import '../../theme/recodex_theme.dart';
 
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
@@ -95,7 +95,7 @@ class _HeroBrand extends StatelessWidget {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(34),
             child: Image.asset(
-              'assets/brand/recodex_icon_1024.png',
+              'assets/images/recodex_icon_1024.png',
               fit: BoxFit.cover,
             ),
           ),

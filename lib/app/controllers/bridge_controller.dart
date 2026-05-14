@@ -37,6 +37,8 @@ class BridgeController extends GetxController {
   bool _manualDisconnect = false;
   String? _requestedEventsSessionId;
   String? _requestedEventsPrompt;
+  String? _storedWorkspaceName;
+  String? _storedWorkspacePath;
 
   bool get canUseWorkspace =>
       connected.value && selectedWorkspace.value != null;
@@ -122,8 +124,11 @@ class BridgeController extends GetxController {
 
   void selectWorkspace(WorkspaceInfo? workspace) {
     selectedWorkspace.value = workspace;
+    unawaited(_storeSelectedWorkspace(workspace));
     gitSnapshot.value = null;
     currentSessionId.value = null;
+    _requestedEventsSessionId = null;
+    _requestedEventsPrompt = null;
     events.clear();
     refreshContext();
     gitStatus(includeDiff: true);
@@ -281,9 +286,7 @@ class BridgeController extends GetxController {
               (item) => WorkspaceInfo.fromJson(item.cast<String, dynamic>()),
             ),
           );
-          selectedWorkspace.value ??= workspaces.isEmpty
-              ? null
-              : workspaces.first;
+          selectedWorkspace.value ??= _restoreSelectedWorkspace();
           refreshContext();
           gitStatus(includeDiff: true);
           _loadLatestSessionEventsForSelectedWorkspace();
@@ -419,7 +422,11 @@ class BridgeController extends GetxController {
           session.workspace == workspace.path ||
           session.workspace == workspace.name,
     );
-    if (candidates.isEmpty) return;
+    if (candidates.isEmpty) {
+      _requestedEventsSessionId = null;
+      _requestedEventsPrompt = null;
+      return;
+    }
 
     final latest = candidates.reduce(
       (current, next) =>
@@ -462,6 +469,12 @@ class BridgeController extends GetxController {
       final storedDeviceKey = await _storage.read(key: 'recodex_device_key');
       final storedPairingToken = await _storage.read(
         key: 'recodex_pairing_token',
+      );
+      _storedWorkspaceName = await _storage.read(
+        key: 'recodex_selected_workspace_name',
+      );
+      _storedWorkspacePath = await _storage.read(
+        key: 'recodex_selected_workspace_path',
       );
       if (storedBaseUrl != null && storedBaseUrl.isNotEmpty) {
         baseUrl.value = _normalizeBaseUrl(storedBaseUrl);
@@ -513,6 +526,45 @@ class BridgeController extends GetxController {
       }
     } catch (_) {
       // Keep the in-memory key for the current connection if secure storage is unavailable.
+    }
+  }
+
+  WorkspaceInfo? _restoreSelectedWorkspace() {
+    if (workspaces.isEmpty) return null;
+    final storedName = _storedWorkspaceName?.trim() ?? '';
+    final storedPath = _storedWorkspacePath?.trim() ?? '';
+    for (final workspace in workspaces) {
+      if (storedPath.isNotEmpty && workspace.path == storedPath) {
+        return workspace;
+      }
+      if (storedName.isNotEmpty && workspace.name == storedName) {
+        return workspace;
+      }
+    }
+    return workspaces.first;
+  }
+
+  Future<void> _storeSelectedWorkspace(WorkspaceInfo? workspace) async {
+    try {
+      if (workspace == null) {
+        _storedWorkspaceName = null;
+        _storedWorkspacePath = null;
+        await _storage.delete(key: 'recodex_selected_workspace_name');
+        await _storage.delete(key: 'recodex_selected_workspace_path');
+        return;
+      }
+      _storedWorkspaceName = workspace.name;
+      _storedWorkspacePath = workspace.path;
+      await _storage.write(
+        key: 'recodex_selected_workspace_name',
+        value: workspace.name,
+      );
+      await _storage.write(
+        key: 'recodex_selected_workspace_path',
+        value: workspace.path,
+      );
+    } catch (_) {
+      // Keep the in-memory selection for this run if secure storage is unavailable.
     }
   }
 

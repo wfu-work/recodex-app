@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../components/liquid_background.dart';
-import '../components/liquid_glass.dart';
-import '../components/liquid_page_app_bar.dart';
-import '../controllers/bridge_controller.dart';
-import '../theme/recodex_theme.dart';
+import '../../components/liquid_background.dart';
+import '../../components/liquid_glass.dart';
+import '../../components/liquid_page_app_bar.dart';
+import '../../controllers/bridge_controller.dart';
+import '../../theme/recodex_theme.dart';
 
 class PairingPage extends StatefulWidget {
   const PairingPage({super.key});
@@ -55,7 +55,7 @@ class _PairingPageState extends State<PairingPage> {
               return ListView(
                 padding: EdgeInsets.fromLTRB(
                   horizontalPadding,
-                  92,
+                  32,
                   horizontalPadding,
                   40,
                 ),

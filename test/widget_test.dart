@@ -5,9 +5,16 @@ import 'package:recodex/main.dart';
 void main() {
   testWidgets('shows remodex home first', (tester) async {
     await tester.pumpWidget(const RecodexApp());
+    await tester.pumpAndSettle();
 
-    expect(find.text('Remodex'), findsOneWidget);
-    expect(find.text('未选择工作区'), findsOneWidget);
-    expect(find.text('输入任务...'), findsOneWidget);
+    expect(find.text('Recodex', skipOffstage: false), findsOneWidget);
+    expect(find.text('等待本地 Bridge 连接', skipOffstage: false), findsOneWidget);
+    expect(
+      find.text(
+        'Ask anything... @files, \$skills, /commands',
+        skipOffstage: false,
+      ),
+      findsOneWidget,
+    );
   });
 }

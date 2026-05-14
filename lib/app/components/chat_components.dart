@@ -1,10 +1,11 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../controllers/theme_controller.dart';
 import '../models/bridge_models.dart';
 import '../theme/recodex_theme.dart';
-import 'liquid_glass.dart';
 
 class AssistantBubble extends StatelessWidget {
   const AssistantBubble({required this.event, super.key});
@@ -826,10 +827,9 @@ class ComposerBar extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        LiquidGlass(
+        _ComposerGlassPanel(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
           radius: 30,
-          opacity: 0.78,
           child: Column(
             children: [
               TextField(
@@ -970,6 +970,67 @@ class ComposerBar extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _ComposerGlassPanel extends StatelessWidget {
+  const _ComposerGlassPanel({
+    required this.child,
+    required this.padding,
+    required this.radius,
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final shape = BorderRadius.circular(radius);
+    final baseAlpha = isDark ? 0.58 : 0.48;
+    return ClipRRect(
+      borderRadius: shape,
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 54, sigmaY: 54),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: shape,
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                colors.glassHighlight.withValues(alpha: isDark ? 0.20 : 0.72),
+                colors.glassColor.withValues(alpha: baseAlpha),
+                colors.surfaceOverlay.withValues(alpha: isDark ? 0.24 : 0.36),
+              ],
+              stops: const [0, 0.46, 1],
+            ),
+            border: Border.all(
+              color: colors.glassBorder.withValues(alpha: isDark ? 0.58 : 0.86),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: colors.headerShadow.withValues(
+                  alpha: isDark ? 0.42 : 0.18,
+                ),
+                offset: const Offset(0, 18),
+                blurRadius: 34,
+              ),
+              BoxShadow(
+                color: colors.glassHighlight.withValues(
+                  alpha: isDark ? 0.08 : 0.54,
+                ),
+                offset: const Offset(-5, -5),
+                blurRadius: 18,
+              ),
+            ],
+          ),
+          child: Padding(padding: padding, child: child),
+        ),
+      ),
     );
   }
 }

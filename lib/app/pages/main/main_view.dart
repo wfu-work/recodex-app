@@ -1,18 +1,17 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
-import 'package:speech_to_text/speech_to_text.dart' as stt;
 
-import '../components/chat_components.dart';
-import '../components/liquid_background.dart';
-import '../components/liquid_glass.dart';
-import '../components/menu_drawer.dart';
-import '../components/status_chips.dart';
-import '../controllers/bridge_controller.dart';
-import '../controllers/theme_controller.dart';
-import '../models/bridge_models.dart';
-import '../theme/recodex_theme.dart';
-import 'pairing_page.dart';
-import 'settings_page.dart';
+import '../../components/chat_components.dart';
+import '../../components/liquid_background.dart';
+import '../../components/liquid_glass.dart';
+import '../../components/menu_drawer.dart';
+import '../../components/status_chips.dart';
+import '../../controllers/bridge_controller.dart';
+import '../../controllers/theme_controller.dart';
+import '../../models/bridge_models.dart';
+import '../../routes/app_pages.dart';
+import '../../theme/recodex_theme.dart';
 
 class MainPage extends StatefulWidget {
   const MainPage({super.key});
@@ -28,9 +27,7 @@ class _MainPageState extends State<MainPage> {
   final TextEditingController _promptController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _timelineBottomKey = GlobalKey();
-  final stt.SpeechToText _speech = stt.SpeechToText();
   double _headerBackgroundProgress = 0;
-  bool _listening = false;
   String _lastAutoScrollSignature = '';
 
   @override
@@ -52,29 +49,42 @@ class _MainPageState extends State<MainPage> {
   Widget build(BuildContext context) {
     return Obx(() {
       Get.find<ThemeController>().fontScale.value;
-      _scheduleScrollToLatest(_timelineSignature);
+      if (controller.events.isNotEmpty ||
+          controller.currentSessionId.value != null) {
+        _scheduleScrollToLatest(_timelineSignature);
+      }
+      final topInset = MediaQuery.paddingOf(context).top;
+      final bottomInset = MediaQuery.paddingOf(context).bottom;
+      final isDark = Theme.of(context).brightness == Brightness.dark;
       return LiquidBackground(
-        child: Scaffold(
-          backgroundColor: Colors.transparent,
-          drawer: RemodexDrawer(
-            connected: controller.connected.value,
-            workspaces: controller.workspaces,
-            selectedWorkspace: controller.selectedWorkspace.value,
-            onSelectWorkspace: (workspace) {
-              controller.selectWorkspace(workspace);
-              Navigator.of(context).pop();
-            },
-            onPairing: () => _openPage(const PairingPage()),
-            onSettings: () => _openPage(const SettingsPage()),
+        child: AnnotatedRegion<SystemUiOverlayStyle>(
+          value: SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
+            statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
-          body: SafeArea(
-            child: Stack(
+          child: Scaffold(
+            backgroundColor: Colors.transparent,
+            drawer: RemodexDrawer(
+              connected: controller.connected.value,
+              workspaces: controller.workspaces,
+              selectedWorkspace: controller.selectedWorkspace.value,
+              onSelectWorkspace: (workspace) {
+                controller.selectWorkspace(workspace);
+                Navigator.of(context).pop();
+              },
+              onPairing: () => _openPage(Routes.pairing),
+              onSettings: () => _openPage(Routes.settings),
+            ),
+            body: Stack(
               children: [
                 CustomScrollView(
                   controller: _scrollController,
                   slivers: [
-                    const SliverToBoxAdapter(
-                      child: SizedBox(height: _headerReservedHeight),
+                    SliverToBoxAdapter(
+                      child: SizedBox(height: _headerReservedHeight + topInset),
                     ),
                     if (controller.lastError.value.isNotEmpty)
                       SliverToBoxAdapter(
@@ -105,7 +115,7 @@ class _MainPageState extends State<MainPage> {
                               connected: controller.connected.value,
                               connectionLabel: controller.connectionLabel.value,
                               workspaceCount: controller.workspaces.length,
-                              onPairing: () => _openPage(const PairingPage()),
+                              onPairing: () => _openPage(Routes.pairing),
                             );
                           }
                           final entry = _timelineEntries[index];
@@ -130,19 +140,21 @@ class _MainPageState extends State<MainPage> {
                   right: 0,
                   top: 0,
                   child: _HomeHeader(
-                    path: _workspaceName,
+                    title: _workspaceTitle,
+                    subtitle: _workspaceSubtitle,
                     added: _changedFilesAdded,
                     removed: _changedFilesRemoved,
                     backgroundProgress: _headerBackgroundProgress,
+                    topPadding: topInset,
                     onRefreshGit: controller.canUseWorkspace
                         ? () => controller.gitStatus(includeDiff: true)
                         : null,
                   ),
                 ),
                 Positioned(
-                  left: 36,
-                  right: 36,
-                  bottom: 20,
+                  left: 20,
+                  right: 20,
+                  bottom: 20 + bottomInset,
                   child: ComposerBar(
                     controller: _promptController,
                     enabled: controller.canUseWorkspace,
@@ -151,7 +163,6 @@ class _MainPageState extends State<MainPage> {
                     onModelChanged: controller.setComposerModel,
                     onReasoningChanged: controller.setReasoningEffort,
                     onVoicePressed: _toggleVoiceInput,
-                    listening: _listening,
                   ),
                 ),
               ],
@@ -187,11 +198,22 @@ class _MainPageState extends State<MainPage> {
     return entries;
   }
 
-  String get _workspaceName {
+  String get _workspaceTitle {
     final workspace = controller.selectedWorkspace.value;
-    if (workspace == null) return '未选择工作区';
-    final source = workspace.path.isEmpty ? workspace.name : workspace.path;
-    return _lastPathSegment(source);
+    if (workspace == null) return 'Recodex';
+    final source = workspace.name.trim().isEmpty
+        ? workspace.path
+        : workspace.name;
+    final title = _lastPathSegment(source);
+    return title.isEmpty ? 'Recodex' : title;
+  }
+
+  String get _workspaceSubtitle {
+    final workspace = controller.selectedWorkspace.value;
+    if (workspace == null) return '';
+    final path = workspace.path.trim();
+    if (path.isEmpty || path == workspace.name.trim()) return '';
+    return path;
   }
 
   int get _changedFilesAdded =>
@@ -262,36 +284,7 @@ class _MainPageState extends State<MainPage> {
   }
 
   Future<void> _toggleVoiceInput() async {
-    if (_listening) {
-      await _speech.stop();
-      if (mounted) setState(() => _listening = false);
-      return;
-    }
-    final available = await _speech.initialize(
-      onStatus: (status) {
-        if ((status == 'done' || status == 'notListening') && mounted) {
-          setState(() => _listening = false);
-        }
-      },
-      onError: (error) {
-        controller.lastError.value = error.errorMsg;
-        if (mounted) setState(() => _listening = false);
-      },
-    );
-    if (!available) {
-      controller.lastError.value = '当前设备不可用语音输入或麦克风权限未开启。';
-      return;
-    }
-    setState(() => _listening = true);
-    await _speech.listen(
-      localeId: 'zh_CN',
-      onResult: (result) {
-        _promptController.text = result.recognizedWords;
-        _promptController.selection = TextSelection.fromPosition(
-          TextPosition(offset: _promptController.text.length),
-        );
-      },
-    );
+    controller.lastError.value = '语音输入暂未启用。';
   }
 
   Future<void> _confirmUndoChanges() async {
@@ -316,11 +309,11 @@ class _MainPageState extends State<MainPage> {
     controller.gitUndo(confirm: true);
   }
 
-  void _openPage(Widget page) {
+  void _openPage(String route) {
     if (Scaffold.maybeOf(context)?.isDrawerOpen ?? false) {
       Navigator.of(context).pop();
     }
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+    Get.toNamed(route);
   }
 }
 
@@ -352,17 +345,21 @@ String _lastPathSegment(String value) {
 
 class _HomeHeader extends StatelessWidget {
   const _HomeHeader({
-    required this.path,
+    required this.title,
+    required this.subtitle,
     required this.added,
     required this.removed,
     required this.backgroundProgress,
+    required this.topPadding,
     required this.onRefreshGit,
   });
 
-  final String path;
+  final String title;
+  final String subtitle;
   final int added;
   final int removed;
   final double backgroundProgress;
+  final double topPadding;
   final VoidCallback? onRefreshGit;
 
   @override
@@ -391,7 +388,7 @@ class _HomeHeader extends StatelessWidget {
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(36, 32, 24, 20),
+        padding: EdgeInsets.fromLTRB(36, topPadding + 12, 24, 20),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -402,30 +399,34 @@ class _HomeHeader extends StatelessWidget {
                 onPressed: () => Scaffold.of(context).openDrawer(),
               ),
             ),
-            const SizedBox(width: 18),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Text(
-                    'Remodex',
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: Theme.of(
                       context,
-                    ).textTheme.headlineMedium?.copyWith(fontSize: 34),
+                    ).textTheme.headlineMedium?.copyWith(fontSize: 28),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    path,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: colors.textMuted,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
-                      height: 1.08,
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: colors.textMuted,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        height: 1.08,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),

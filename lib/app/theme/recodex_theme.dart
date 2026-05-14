@@ -102,10 +102,7 @@ class RecodexThemeColors extends ThemeExtension<RecodexThemeColors> {
   }
 
   @override
-  RecodexThemeColors lerp(
-    ThemeExtension<RecodexThemeColors>? other,
-    double t,
-  ) {
+  RecodexThemeColors lerp(ThemeExtension<RecodexThemeColors>? other, double t) {
     if (other is! RecodexThemeColors) return this;
     return RecodexThemeColors(
       backgroundGradient: List.generate(
@@ -356,7 +353,7 @@ class RecodexTheme {
             fontSize: 12,
             fontWeight: states.contains(WidgetState.selected)
                 ? FontWeight.w800
-            : FontWeight.w600,
+                : FontWeight.w600,
             color: colors.text,
           ),
         ),

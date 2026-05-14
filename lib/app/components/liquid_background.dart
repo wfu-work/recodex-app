@@ -24,18 +24,12 @@ class LiquidBackground extends StatelessWidget {
           Positioned(
             left: -84,
             top: 130,
-            child: _GlowBlob(
-              size: 220,
-              color: colors.primaryGlow,
-            ),
+            child: _GlowBlob(size: 220, color: colors.primaryGlow),
           ),
           Positioned(
             right: -110,
             bottom: 180,
-            child: _GlowBlob(
-              size: 260,
-              color: colors.secondaryGlow,
-            ),
+            child: _GlowBlob(size: 260, color: colors.secondaryGlow),
           ),
           child,
         ],
