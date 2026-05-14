@@ -5,14 +5,16 @@ import 'package:get/get.dart';
 
 import '../../components/chat_components.dart';
 import '../../components/liquid_background.dart';
-import '../../components/liquid_glass.dart';
 import '../../components/menu_drawer.dart';
-import '../../components/status_chips.dart';
 import '../../models/bridge_models.dart';
 import '../../routes/app_pages.dart';
-import '../../theme/recodex_theme.dart';
 import '../settings/theme_controller.dart';
 import 'bridge_controller.dart';
+import 'git_diff_view.dart';
+import 'widget/home_header.dart';
+import 'widget/inline_error.dart';
+import 'widget/main_helpers.dart';
+import 'widget/welcome_timeline.dart';
 
 class MainPage extends StatefulWidget {
   const MainPage({super.key});
@@ -102,7 +104,7 @@ class _MainPageState extends State<MainPage> {
                       ),
                       if (controller.lastError.value.isNotEmpty)
                         SliverToBoxAdapter(
-                          child: _InlineError(
+                          child: InlineError(
                             message: controller.lastError.value,
                             onDismiss: () => controller.lastError.value = '',
                           ),
@@ -114,6 +116,7 @@ class _MainPageState extends State<MainPage> {
                             child: GitChangeCard(
                               summary: _gitChangeSummary!,
                               onUndo: _confirmUndoChanges,
+                              onFileTap: _openGitDiff,
                             ),
                           ),
                         ),
@@ -125,7 +128,7 @@ class _MainPageState extends State<MainPage> {
                               const SizedBox(height: 26),
                           itemBuilder: (context, index) {
                             if (controller.events.isEmpty) {
-                              return _WelcomeTimeline(
+                              return WelcomeTimeline(
                                 connected: controller.connected.value,
                                 connectionLabel:
                                     controller.connectionLabel.value,
@@ -141,6 +144,7 @@ class _MainPageState extends State<MainPage> {
                               events: entry.events,
                               completed:
                                   controller.currentSessionId.value == null,
+                              onGitFileTap: _openGitDiff,
                             );
                           },
                         ),
@@ -155,7 +159,7 @@ class _MainPageState extends State<MainPage> {
                   left: 0,
                   right: 0,
                   top: 0,
-                  child: _HomeHeader(
+                  child: HomeHeader(
                     title: _workspaceTitle,
                     subtitle: _workspaceSubtitle,
                     added: _changedFilesAdded,
@@ -235,7 +239,7 @@ class _MainPageState extends State<MainPage> {
     final source = workspace.name.trim().isEmpty
         ? workspace.path
         : workspace.name;
-    final title = _lastPathSegment(source);
+    final title = lastPathSegment(source);
     return title.isEmpty ? 'Recodex' : title;
   }
 
@@ -248,10 +252,10 @@ class _MainPageState extends State<MainPage> {
   }
 
   int get _changedFilesAdded =>
-      _parseChangedFileCounts(controller.gitSnapshot.value).$1;
+      parseChangedFileCounts(controller.gitSnapshot.value).$1;
 
   int get _changedFilesRemoved =>
-      _parseChangedFileCounts(controller.gitSnapshot.value).$2;
+      parseChangedFileCounts(controller.gitSnapshot.value).$2;
 
   GitChangeSummary? get _gitChangeSummary {
     final snapshot = controller.gitSnapshot.value;
@@ -275,9 +279,9 @@ class _MainPageState extends State<MainPage> {
   bool _handleUserScroll(UserScrollNotification notification) {
     if (notification.depth != 0) return false;
     final shouldShow = switch (notification.direction) {
-      ScrollDirection.forward => true,
+      ScrollDirection.forward => false,
       ScrollDirection.reverse => false,
-      ScrollDirection.idle => _composerVisible,
+      ScrollDirection.idle => true,
     };
     if (shouldShow != _composerVisible) {
       setState(() => _composerVisible = shouldShow);
@@ -359,6 +363,16 @@ class _MainPageState extends State<MainPage> {
     }
     Get.toNamed(route);
   }
+
+  void _openGitDiff(GitFileChange file) {
+    Get.toNamed(
+      Routes.gitDiff,
+      arguments: GitDiffPageArgs(
+        snapshot: controller.gitSnapshot.value,
+        selectedPath: file.path,
+      ),
+    );
+  }
 }
 
 class _TimelineEntry {
@@ -374,232 +388,4 @@ class _TimelineEntry {
 
   final List<SessionEvent> events;
   final SessionEvent? userEvent;
-}
-
-String _lastPathSegment(String value) {
-  final trimmed = value.trim();
-  if (trimmed.isEmpty) return trimmed;
-  final normalized = trimmed.replaceAll('\\', '/');
-  final parts = normalized
-      .split('/')
-      .where((part) => part.trim().isNotEmpty)
-      .toList();
-  return parts.isEmpty ? trimmed : parts.last;
-}
-
-class _HomeHeader extends StatelessWidget {
-  const _HomeHeader({
-    required this.title,
-    required this.subtitle,
-    required this.added,
-    required this.removed,
-    required this.backgroundProgress,
-    required this.topPadding,
-    required this.onRefreshGit,
-  });
-
-  final String title;
-  final String subtitle;
-  final int added;
-  final int removed;
-  final double backgroundProgress;
-  final double topPadding;
-  final VoidCallback? onRefreshGit;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.headerColor.withValues(
-          alpha: 0.18 + backgroundProgress * 0.78,
-        ),
-        border: Border(
-          bottom: BorderSide(
-            color: colors.headerBorder.withValues(
-              alpha: backgroundProgress * 0.52,
-            ),
-          ),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: colors.headerShadow.withValues(
-              alpha: backgroundProgress * 0.11,
-            ),
-            offset: const Offset(0, 10),
-            blurRadius: 24,
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(36, topPadding + 12, 24, 20),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Builder(
-              builder: (context) => LiquidIconButton(
-                icon: Icons.menu,
-                tooltip: '菜单',
-                onPressed: () => Scaffold.of(context).openDrawer(),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.headlineMedium?.copyWith(fontSize: 28),
-                  ),
-                  if (subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: colors.textMuted,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        height: 1.08,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            GestureDetector(
-              onTap: onRefreshGit,
-              child: DiffChip(added: added, removed: removed),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-(int, int) _parseChangedFileCounts(GitSnapshot? snapshot) {
-  if (snapshot == null) return (0, 0);
-  var addedFiles = 0;
-  var removedFiles = 0;
-  final seenAdded = <String>{};
-  final seenRemoved = <String>{};
-
-  for (final line in snapshot.numstat.split('\n')) {
-    final parts = line.split('\t');
-    if (parts.length < 3) continue;
-    final path = parts.sublist(2).join('\t').trim();
-    if (path.isEmpty) continue;
-    final added = int.tryParse(parts[0]) ?? 0;
-    final removed = int.tryParse(parts[1]) ?? 0;
-    if (added > 0 && seenAdded.add(path)) addedFiles += 1;
-    if (removed > 0 && seenRemoved.add(path)) removedFiles += 1;
-  }
-
-  if (addedFiles != 0 || removedFiles != 0) return (addedFiles, removedFiles);
-
-  for (final line in snapshot.status.split('\n')) {
-    if (line.length < 3) continue;
-    final code = line.substring(0, 2);
-    final path = line.substring(3).trim();
-    if (path.isEmpty) continue;
-    final hasAddedChange =
-        code.contains('A') || code.contains('M') || code.contains('?');
-    final hasRemovedChange = code.contains('D');
-    if (hasAddedChange && seenAdded.add(path)) addedFiles += 1;
-    if (hasRemovedChange && seenRemoved.add(path)) removedFiles += 1;
-  }
-
-  return (addedFiles, removedFiles);
-}
-
-class _WelcomeTimeline extends StatelessWidget {
-  const _WelcomeTimeline({
-    required this.connected,
-    required this.connectionLabel,
-    required this.workspaceCount,
-    required this.onPairing,
-  });
-
-  final bool connected;
-  final String connectionLabel;
-  final int workspaceCount;
-  final VoidCallback onPairing;
-
-  @override
-  Widget build(BuildContext context) {
-    final status = connected
-        ? '已连接'
-        : connectionLabel == 'reconnecting'
-        ? '重连中'
-        : '待命';
-    final title = connected
-        ? 'Bridge 已连接，已加载 $workspaceCount 个工作区'
-        : connectionLabel == 'connecting' || connectionLabel == 'auth'
-        ? '正在连接本地 Bridge'
-        : connectionLabel == 'reconnecting'
-        ? '正在重新连接本地 Bridge'
-        : '等待本地 Bridge 连接';
-    final icon = connected
-        ? Icons.check_circle_outline
-        : connectionLabel == 'connecting' ||
-              connectionLabel == 'auth' ||
-              connectionLabel == 'reconnecting'
-        ? Icons.sync
-        : Icons.radio_button_unchecked;
-
-    return Column(
-      children: [
-        AssistantBubble(
-          event: SessionEvent(
-            kind: 'message',
-            text: '我已准备好在当前工作区执行任务。你可以直接描述要改的功能、要排查的问题，或让我先检查项目和 Git 状态。',
-          ),
-        ),
-        const SizedBox(height: 26),
-        ToolCallRow(
-          title: title,
-          status: status,
-          icon: icon,
-          onTap: connected ? null : onPairing,
-        ),
-      ],
-    );
-  }
-}
-
-class _InlineError extends StatelessWidget {
-  const _InlineError({required this.message, required this.onDismiss});
-
-  final String message;
-  final VoidCallback onDismiss;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(36, 8, 36, 0),
-      child: LiquidGlass(
-        radius: 24,
-        opacity: 0.78,
-        padding: const EdgeInsets.fromLTRB(18, 12, 8, 12),
-        child: Row(
-          children: [
-            Icon(Icons.warning_amber_rounded, color: colors.error),
-            const SizedBox(width: 10),
-            Expanded(child: Text(message)),
-            IconButton(onPressed: onDismiss, icon: const Icon(Icons.close)),
-          ],
-        ),
-      ),
-    );
-  }
 }

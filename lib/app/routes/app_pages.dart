@@ -1,6 +1,7 @@
 import 'package:get/get.dart';
 
 import '../pages/about/about_view.dart';
+import '../pages/main/git_diff_view.dart';
 import '../pages/main/main_view.dart';
 import '../pages/pairing/pairing_view.dart';
 import '../pages/service/service_view.dart';
@@ -37,6 +38,11 @@ class AppPages {
     GetPage(
       name: _Paths.about,
       page: () => const AboutPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
+      name: _Paths.gitDiff,
+      page: () => const GitDiffPage(),
       preventDuplicates: true,
     ),
   ];

@@ -99,11 +99,13 @@ class AssistantAnswerBlock extends StatelessWidget {
   const AssistantAnswerBlock({
     required this.events,
     required this.completed,
+    this.onGitFileTap,
     super.key,
   });
 
   final List<SessionEvent> events;
   final bool completed;
+  final ValueChanged<GitFileChange>? onGitFileTap;
 
   @override
   Widget build(BuildContext context) {
@@ -160,7 +162,9 @@ class AssistantAnswerBlock extends StatelessWidget {
       final gitSummary = GitChangeSummary.tryParse(event.text);
       if (gitSummary != null) {
         flushText();
-        children.add(_GitChangePanel(summary: gitSummary));
+        children.add(
+          _GitChangePanel(summary: gitSummary, onFileTap: onGitFileTap),
+        );
         continue;
       }
       final text = _cleanEventText(event);
@@ -543,10 +547,16 @@ class ToolCallRow extends StatelessWidget {
 }
 
 class GitChangeCard extends StatelessWidget {
-  const GitChangeCard({required this.summary, this.onUndo, super.key});
+  const GitChangeCard({
+    required this.summary,
+    this.onUndo,
+    this.onFileTap,
+    super.key,
+  });
 
   final GitChangeSummary summary;
   final VoidCallback? onUndo;
+  final ValueChanged<GitFileChange>? onFileTap;
 
   @override
   Widget build(BuildContext context) {
@@ -555,17 +565,22 @@ class GitChangeCard extends StatelessWidget {
       child: FractionallySizedBox(
         widthFactor: 0.9,
         alignment: Alignment.centerLeft,
-        child: _GitChangePanel(summary: summary, onUndo: onUndo),
+        child: _GitChangePanel(
+          summary: summary,
+          onUndo: onUndo,
+          onFileTap: onFileTap,
+        ),
       ),
     );
   }
 }
 
 class _GitChangePanel extends StatelessWidget {
-  const _GitChangePanel({required this.summary, this.onUndo});
+  const _GitChangePanel({required this.summary, this.onUndo, this.onFileTap});
 
   final GitChangeSummary summary;
   final VoidCallback? onUndo;
+  final ValueChanged<GitFileChange>? onFileTap;
 
   @override
   Widget build(BuildContext context) {
@@ -627,7 +642,12 @@ class _GitChangePanel extends StatelessWidget {
             ),
           ),
           Divider(height: 1, color: colors.textMuted.withValues(alpha: 0.16)),
-          ...summary.files.map((file) => _GitFileRow(file: file)),
+          ...summary.files.map(
+            (file) => _GitFileRow(
+              file: file,
+              onTap: onFileTap == null ? null : () => onFileTap!(file),
+            ),
+          ),
         ],
       ),
     );
@@ -734,35 +754,147 @@ class GitFileChange {
 }
 
 class _GitFileRow extends StatelessWidget {
-  const _GitFileRow({required this.file});
+  const _GitFileRow({required this.file, this.onTap});
 
   final GitFileChange file;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 12, 18, 12),
+    final fileName = _baseName(file.path);
+    final directory = _directoryName(file.path);
+    final content = Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(Icons.insert_drive_file_outlined, size: 18, color: colors.icon),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              _baseName(file.path),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: colors.text,
-                fontSize: _scaledFontSize(14, fontScale),
-                fontWeight: FontWeight.w800,
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: colors.icon.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: colors.icon.withValues(alpha: 0.16)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Icon(
+                Icons.insert_drive_file_outlined,
+                size: 18,
+                color: colors.icon,
               ),
             ),
           ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  fileName.isEmpty ? file.path : fileName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: _scaledFontSize(14.5, fontScale),
+                    fontWeight: FontWeight.w900,
+                    height: 1.12,
+                  ),
+                ),
+                if (directory.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    directory,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.textMuted,
+                      fontSize: _scaledFontSize(11, fontScale),
+                      fontWeight: FontWeight.w700,
+                      height: 1.08,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
           const SizedBox(width: 10),
-          _DeltaText(added: file.added, removed: file.removed),
+          _GitLineCountBadges(added: file.added, removed: file.removed),
+          if (onTap != null) ...[
+            const SizedBox(width: 6),
+            Icon(Icons.chevron_right, size: 18, color: colors.textMuted),
+          ],
         ],
+      ),
+    );
+    if (onTap == null) return content;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(onTap: onTap, child: content),
+    );
+  }
+}
+
+class _GitLineCountBadges extends StatelessWidget {
+  const _GitLineCountBadges({required this.added, required this.removed});
+
+  final int added;
+  final int removed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final fontScale = Get.find<ThemeController>().fontScale.value;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _GitLineBadge(
+          label: '+$added',
+          color: colors.success,
+          fontScale: fontScale,
+        ),
+        const SizedBox(width: 5),
+        _GitLineBadge(
+          label: '-$removed',
+          color: colors.error,
+          fontScale: fontScale,
+        ),
+      ],
+    );
+  }
+}
+
+class _GitLineBadge extends StatelessWidget {
+  const _GitLineBadge({
+    required this.label,
+    required this.color,
+    required this.fontScale,
+  });
+
+  final String label;
+  final Color color;
+  final double fontScale;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.20)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+        child: Text(
+          label,
+          maxLines: 1,
+          style: TextStyle(
+            color: color,
+            fontSize: _scaledFontSize(11.5, fontScale),
+            fontWeight: FontWeight.w900,
+            height: 1,
+          ),
+        ),
       ),
     );
   }
@@ -824,33 +956,66 @@ class ComposerBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         _ComposerGlassPanel(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-          radius: 30,
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+          radius: 32,
           child: Column(
             children: [
-              TextField(
-                controller: controller,
-                enabled: enabled,
-                minLines: 1,
-                maxLines: 4,
-                style: const TextStyle(
-                  color: Color(0xff303132),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(23),
+                  border: Border.all(
+                    color: colors.glassBorder.withValues(
+                      alpha: isDark ? 0.46 : 0.96,
+                    ),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: colors.glassHighlight.withValues(
+                        alpha: isDark ? 0.04 : 0.62,
+                      ),
+                      offset: const Offset(-3, -3),
+                      blurRadius: 10,
+                    ),
+                    BoxShadow(
+                      color: colors.headerShadow.withValues(
+                        alpha: isDark ? 0.28 : 0.08,
+                      ),
+                      offset: const Offset(0, 5),
+                      blurRadius: 14,
+                    ),
+                  ],
                 ),
-                decoration: const InputDecoration(
-                  hintText: 'Ask anything... @files, \$skills, /commands',
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  filled: false,
-                  contentPadding: EdgeInsets.fromLTRB(10, 2, 10, 8),
+                child: TextField(
+                  controller: controller,
+                  enabled: enabled,
+                  minLines: 1,
+                  maxLines: 4,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'Ask anything... @files, \$skills, /commands',
+                    hintStyle: TextStyle(
+                      color: colors.textMuted.withValues(alpha: 0.72),
+                      fontWeight: FontWeight.w700,
+                    ),
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    filled: false,
+                    contentPadding: const EdgeInsets.fromLTRB(14, 9, 14, 12),
+                  ),
                 ),
               ),
+              const SizedBox(height: 8),
               Row(
                 children: [
                   _ComposerIconButton(
@@ -990,45 +1155,75 @@ class _ComposerGlassPanel extends StatelessWidget {
     final colors = context.recodexColors;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final shape = BorderRadius.circular(radius);
-    final baseAlpha = isDark ? 0.58 : 0.48;
-    return ClipRRect(
-      borderRadius: shape,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 54, sigmaY: 54),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: shape,
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                colors.glassHighlight.withValues(alpha: isDark ? 0.20 : 0.72),
-                colors.glassColor.withValues(alpha: baseAlpha),
-                colors.surfaceOverlay.withValues(alpha: isDark ? 0.24 : 0.36),
-              ],
-              stops: const [0, 0.46, 1],
-            ),
-            border: Border.all(
-              color: colors.glassBorder.withValues(alpha: isDark ? 0.58 : 0.86),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: colors.headerShadow.withValues(
-                  alpha: isDark ? 0.42 : 0.18,
-                ),
-                offset: const Offset(0, 18),
-                blurRadius: 34,
-              ),
-              BoxShadow(
-                color: colors.glassHighlight.withValues(
-                  alpha: isDark ? 0.08 : 0.54,
-                ),
-                offset: const Offset(-5, -5),
-                blurRadius: 18,
-              ),
-            ],
+    final baseAlpha = isDark ? 0.70 : 0.66;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: shape,
+        boxShadow: [
+          BoxShadow(
+            color: colors.headerShadow.withValues(alpha: isDark ? 0.58 : 0.24),
+            offset: const Offset(0, 24),
+            blurRadius: 42,
           ),
-          child: Padding(padding: padding, child: child),
+          BoxShadow(
+            color: colors.icon.withValues(alpha: isDark ? 0.16 : 0.10),
+            offset: const Offset(0, 9),
+            blurRadius: 28,
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: shape,
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 72, sigmaY: 72),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: shape,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  colors.glassHighlight.withValues(alpha: isDark ? 0.28 : 0.94),
+                  colors.glassColor.withValues(alpha: baseAlpha),
+                  colors.surfaceOverlay.withValues(alpha: isDark ? 0.44 : 0.70),
+                  colors.icon.withValues(alpha: isDark ? 0.12 : 0.08),
+                ],
+                stops: const [0, 0.36, 0.78, 1],
+              ),
+              border: Border.all(
+                color: colors.glassBorder.withValues(alpha: isDark ? 0.72 : 1),
+                width: 1.2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: colors.glassHighlight.withValues(
+                    alpha: isDark ? 0.10 : 0.74,
+                  ),
+                  offset: const Offset(-7, -7),
+                  blurRadius: 22,
+                ),
+              ],
+            ),
+            child: Stack(
+              children: [
+                Positioned(
+                  left: 14,
+                  right: 14,
+                  top: 1,
+                  height: 1,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colors.glassHighlight.withValues(
+                        alpha: isDark ? 0.18 : 0.92,
+                      ),
+                      borderRadius: BorderRadius.circular(1),
+                    ),
+                  ),
+                ),
+                Padding(padding: padding, child: child),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1339,6 +1534,13 @@ String _baseName(String path) {
   final normalized = path.replaceAll('\\', '/');
   final parts = normalized.split('/').where((part) => part.isNotEmpty).toList();
   return parts.isEmpty ? path : parts.last;
+}
+
+String _directoryName(String path) {
+  final normalized = path.replaceAll('\\', '/');
+  final parts = normalized.split('/').where((part) => part.isNotEmpty).toList();
+  if (parts.length <= 1) return '';
+  return parts.take(parts.length - 1).join('/');
 }
 
 bool _isToolEvent(String kind) {

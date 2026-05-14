@@ -6,6 +6,7 @@ abstract class Routes {
   static const settings = _Paths.settings;
   static const service = _Paths.service;
   static const about = _Paths.about;
+  static const gitDiff = _Paths.gitDiff;
 
   Routes._();
 }
@@ -16,4 +17,5 @@ abstract class _Paths {
   static const settings = '/settings';
   static const service = '/service';
   static const about = '/about';
+  static const gitDiff = '/git-diff';
 }

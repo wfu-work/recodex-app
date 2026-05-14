@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 
 import '../theme/recodex_theme.dart';
@@ -49,21 +51,72 @@ class _LiquidBackButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Center(
       child: SizedBox.square(
-        dimension: 36,
+        dimension: 38,
         child: DecoratedBox(
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: colors.glassColor.withValues(alpha: 0.72),
-            border: Border.all(color: colors.glassBorder),
+            boxShadow: [
+              BoxShadow(
+                color: colors.headerShadow.withValues(
+                  alpha: isDark ? 0.42 : 0.16,
+                ),
+                offset: const Offset(0, 10),
+                blurRadius: 22,
+              ),
+              BoxShadow(
+                color: colors.glassHighlight.withValues(
+                  alpha: isDark ? 0.08 : 0.54,
+                ),
+                offset: const Offset(-4, -4),
+                blurRadius: 12,
+              ),
+            ],
           ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: onPressed,
-              child: Icon(Icons.arrow_back, color: colors.icon, size: 24),
+          child: ClipOval(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 34, sigmaY: 34),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      colors.glassHighlight.withValues(
+                        alpha: isDark ? 0.22 : 0.92,
+                      ),
+                      colors.glassColor.withValues(alpha: isDark ? 0.70 : 0.66),
+                      colors.surfaceOverlay.withValues(
+                        alpha: isDark ? 0.38 : 0.58,
+                      ),
+                    ],
+                  ),
+                  border: Border.all(
+                    color: colors.glassBorder.withValues(
+                      alpha: isDark ? 0.72 : 1,
+                    ),
+                    width: 1.15,
+                  ),
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: onPressed,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 1),
+                      child: Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: colors.icon,
+                        size: 19,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         ),
