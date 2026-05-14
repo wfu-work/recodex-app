@@ -27,22 +27,35 @@ class HomeHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final backgroundAlpha = 0.28 + backgroundProgress * 0.46;
+    final tintAlpha = 0.30 + backgroundProgress * 0.24;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: colors.headerColor.withValues(
-          alpha: 0.18 + backgroundProgress * 0.78,
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: isDark
+              ? [
+                  colors.headerColor.withValues(alpha: backgroundAlpha + 0.10),
+                  colors.surfaceOverlay.withValues(alpha: tintAlpha),
+                ]
+              : [
+                  const Color(0xffe8f1ff).withValues(alpha: tintAlpha),
+                  colors.headerColor.withValues(alpha: backgroundAlpha),
+                ],
         ),
         border: Border(
           bottom: BorderSide(
             color: colors.headerBorder.withValues(
-              alpha: backgroundProgress * 0.52,
+              alpha: 0.12 + backgroundProgress * 0.42,
             ),
           ),
         ),
         boxShadow: [
           BoxShadow(
             color: colors.headerShadow.withValues(
-              alpha: backgroundProgress * 0.11,
+              alpha: (isDark ? 0.18 : 0.07) + backgroundProgress * 0.09,
             ),
             offset: const Offset(0, 10),
             blurRadius: 24,

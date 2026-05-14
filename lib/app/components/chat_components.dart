@@ -117,6 +117,7 @@ class AssistantAnswerBlock extends StatelessWidget {
     final textBuffer = StringBuffer();
     final children = <Widget>[];
     var hasTerminalEvent = false;
+    SessionEvent? latestLiveEvent;
 
     void flushText() {
       final text = textBuffer.toString().trim();
@@ -144,7 +145,7 @@ class AssistantAnswerBlock extends StatelessWidget {
       }
       if (event.kind == 'running') {
         flushText();
-        children.add(const _LiveActivityRow(text: '正在思考...'));
+        latestLiveEvent = event;
         continue;
       }
       if (event.kind == 'interrupted') {
@@ -161,15 +162,7 @@ class AssistantAnswerBlock extends StatelessWidget {
       }
       if (_isToolEvent(event.kind)) {
         flushText();
-        final command = _extractCommand(event.text);
-        children.add(
-          _LiveActivityRow(
-            text: command == null
-                ? '正在运行工具'
-                : '正在运行 ${_formatCommand(command)}',
-            detail: '正在思考',
-          ),
-        );
+        latestLiveEvent = event;
         continue;
       }
       final gitSummary = GitChangeSummary.tryParse(event.text);
@@ -193,6 +186,9 @@ class AssistantAnswerBlock extends StatelessWidget {
       textBuffer.write(text);
     }
     flushText();
+    if (!completed && !hasTerminalEvent && latestLiveEvent != null) {
+      children.add(_LiveActivityRow.fromEvent(latestLiveEvent));
+    }
 
     final isDone = completed || hasTerminalEvent;
     if (children.isEmpty) {
@@ -261,6 +257,18 @@ class AssistantAnswerBlock extends StatelessWidget {
 class _LiveActivityRow extends StatelessWidget {
   const _LiveActivityRow({required this.text, this.detail});
 
+  factory _LiveActivityRow.fromEvent(SessionEvent event) {
+    if (_isToolEvent(event.kind)) {
+      final command = _extractCommand(event.text);
+      return _LiveActivityRow(
+        text: command == null ? '正在运行工具' : '正在运行 ${_formatCommand(command)}',
+        detail: '正在思考',
+      );
+    }
+    final text = event.text.trim().isEmpty ? '正在思考...' : event.text.trim();
+    return _LiveActivityRow(text: text);
+  }
+
   final String text;
   final String? detail;
 
@@ -268,16 +276,15 @@ class _LiveActivityRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
+    final activeColor = Theme.of(context).colorScheme.primary;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.16),
-        ),
+        color: colors.surfaceOverlay.withValues(alpha: 0.42),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: colors.glassBorder.withValues(alpha: 0.62)),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -286,7 +293,7 @@ class _LiveActivityRow extends StatelessWidget {
                 Icon(
                   Icons.terminal,
                   size: 17,
-                  color: colors.textMuted.withValues(alpha: 0.86),
+                  color: activeColor.withValues(alpha: 0.82),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -295,9 +302,9 @@ class _LiveActivityRow extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: colors.text,
+                      color: colors.text.withValues(alpha: 0.92),
                       fontSize: _scaledFontSize(15, fontScale),
-                      fontWeight: FontWeight.w900,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
@@ -311,8 +318,8 @@ class _LiveActivityRow extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   color: colors.textMuted,
-                  fontSize: _scaledFontSize(15, fontScale),
-                  fontWeight: FontWeight.w800,
+                  fontSize: _scaledFontSize(14, fontScale),
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ],

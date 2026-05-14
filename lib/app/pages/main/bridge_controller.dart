@@ -451,7 +451,7 @@ class BridgeController extends GetxController {
   }
 
   void _refreshLiveTimeline() {
-    if (!canUseWorkspace) return;
+    if (!connected.value) return;
     _send('session.list', {});
     if (_requestedEventsSessionId != null) {
       _send('session.events', {'sessionId': _requestedEventsSessionId});
@@ -460,22 +460,17 @@ class BridgeController extends GetxController {
 
   void _loadLatestSessionEventsForSelectedWorkspace({bool force = false}) {
     if (!connected.value) return;
-    final workspace = selectedWorkspace.value;
-    if (workspace == null) return;
     if (_pendingSessionStart) return;
-
-    final candidates = sessions.where(
-      (session) =>
-          session.workspace == workspace.path ||
-          session.workspace == workspace.name,
-    );
-    if (candidates.isEmpty) {
+    if (sessions.isEmpty) {
       _requestedEventsSessionId = null;
       _requestedEventsPrompt = null;
       currentSessionId.value = null;
       timelineSessionRunning.value = false;
       return;
     }
+
+    final workspace = selectedWorkspace.value;
+    final candidates = _timelineSessionCandidates(workspace);
 
     final runningCandidates = candidates.where(
       (session) => session.status == 'running',
@@ -504,6 +499,21 @@ class BridgeController extends GetxController {
     _requestedEventsSessionId = latest.id;
     _requestedEventsPrompt = latest.prompt;
     _send('session.events', {'sessionId': latest.id});
+  }
+
+  List<SessionRecord> _timelineSessionCandidates(WorkspaceInfo? workspace) {
+    if (workspace == null) return List<SessionRecord>.of(sessions);
+
+    final workspaceMatches = sessions
+        .where(
+          (session) =>
+              session.workspace == workspace.path ||
+              session.workspace == workspace.name,
+        )
+        .toList();
+    if (workspaceMatches.isNotEmpty) return workspaceMatches;
+
+    return List<SessionRecord>.of(sessions);
   }
 
   bool _hasDuplicateUserEvent(SessionEvent event) {

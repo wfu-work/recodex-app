@@ -24,6 +24,7 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> {
   static const double _headerReservedHeight = 142;
+  static const double _composerReservedHeight = 286;
   static const Curve _composerDampedCurve = Cubic(0.18, 0.89, 0.32, 1.08);
 
   final BridgeController controller = Get.find();
@@ -156,7 +157,10 @@ class _MainPageState extends State<MainPage> {
                         ),
                       ),
                       SliverToBoxAdapter(
-                        child: SizedBox(key: _timelineBottomKey, height: 210),
+                        child: SizedBox(
+                          key: _timelineBottomKey,
+                          height: _composerReservedHeight + bottomInset,
+                        ),
                       ),
                     ],
                   ),
@@ -273,7 +277,11 @@ class _MainPageState extends State<MainPage> {
 
   String get _timelineSignature {
     final last = controller.events.isEmpty ? '' : controller.events.last.text;
-    return '${controller.events.length}:${controller.currentSessionId.value}:$last';
+    final workspace =
+        controller.selectedWorkspace.value?.path ??
+        controller.selectedWorkspace.value?.name ??
+        '';
+    return '$workspace:${controller.events.length}:${controller.currentSessionId.value}:$last';
   }
 
   void _updateHeaderBackground() {
@@ -313,21 +321,15 @@ class _MainPageState extends State<MainPage> {
       const Duration(milliseconds: 180),
       _scrollToLatestAfterLayout,
     );
+    Future<void>.delayed(
+      const Duration(milliseconds: 360),
+      _scrollToLatestAfterLayout,
+    );
   }
 
   void _scrollToLatestAfterLayout() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
-      final bottomContext = _timelineBottomKey.currentContext;
-      if (bottomContext != null) {
-        Scrollable.ensureVisible(
-          bottomContext,
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          alignment: 1,
-        );
-        return;
-      }
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
         duration: const Duration(milliseconds: 220),
