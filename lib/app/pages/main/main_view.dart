@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
@@ -92,8 +91,8 @@ class _MainPageState extends State<MainPage> {
             ),
             body: Stack(
               children: [
-                NotificationListener<UserScrollNotification>(
-                  onNotification: _handleUserScroll,
+                NotificationListener<ScrollNotification>(
+                  onNotification: _handleScrollNotification,
                   child: CustomScrollView(
                     controller: _scrollController,
                     slivers: [
@@ -174,7 +173,7 @@ class _MainPageState extends State<MainPage> {
                 Positioned(
                   left: 20,
                   right: 20,
-                  bottom: 2 + bottomInset,
+                  bottom: 18 + bottomInset,
                   child: IgnorePointer(
                     ignoring: !_composerVisible,
                     child: AnimatedSlide(
@@ -276,17 +275,23 @@ class _MainPageState extends State<MainPage> {
     setState(() => _headerBackgroundProgress = next);
   }
 
-  bool _handleUserScroll(UserScrollNotification notification) {
+  bool _handleScrollNotification(ScrollNotification notification) {
     if (notification.depth != 0) return false;
-    final shouldShow = switch (notification.direction) {
-      ScrollDirection.forward => false,
-      ScrollDirection.reverse => false,
-      ScrollDirection.idle => true,
-    };
-    if (shouldShow != _composerVisible) {
-      setState(() => _composerVisible = shouldShow);
+    if (notification is ScrollStartNotification ||
+        notification is ScrollUpdateNotification ||
+        notification is OverscrollNotification) {
+      _setComposerVisible(false);
+      return false;
+    }
+    if (notification is ScrollEndNotification) {
+      _setComposerVisible(true);
     }
     return false;
+  }
+
+  void _setComposerVisible(bool visible) {
+    if (visible == _composerVisible || !mounted) return;
+    setState(() => _composerVisible = visible);
   }
 
   void _scheduleScrollToLatest(String signature) {
