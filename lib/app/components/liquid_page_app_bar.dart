@@ -107,11 +107,11 @@ class _LiquidBackButton extends StatelessWidget {
                     customBorder: const CircleBorder(),
                     onTap: onPressed,
                     child: Padding(
-                      padding: const EdgeInsets.only(left: 1),
+                      padding: const EdgeInsets.only(left: 0),
                       child: Icon(
                         Icons.arrow_back_ios_new_rounded,
                         color: colors.icon,
-                        size: 19,
+                        size: 22,
                       ),
                     ),
                   ),

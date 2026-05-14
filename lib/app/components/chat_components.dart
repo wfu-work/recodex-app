@@ -99,13 +99,17 @@ class AssistantAnswerBlock extends StatelessWidget {
   const AssistantAnswerBlock({
     required this.events,
     required this.completed,
+    this.gitChangeSummary,
     this.onGitFileTap,
+    this.onUndoGitChanges,
     super.key,
   });
 
   final List<SessionEvent> events;
   final bool completed;
+  final GitChangeSummary? gitChangeSummary;
   final ValueChanged<GitFileChange>? onGitFileTap;
+  final VoidCallback? onUndoGitChanges;
 
   @override
   Widget build(BuildContext context) {
@@ -120,7 +124,13 @@ class AssistantAnswerBlock extends StatelessWidget {
       if (children.isNotEmpty) {
         children.add(const SizedBox(height: 18));
       }
-      children.add(_AnswerText(text: text));
+      children.add(
+        _AnswerText(
+          text: text,
+          gitChangeSummary: gitChangeSummary,
+          onFileTap: onGitFileTap,
+        ),
+      );
       textBuffer.clear();
     }
 
@@ -131,9 +141,7 @@ class AssistantAnswerBlock extends StatelessWidget {
       }
       if (event.kind == 'running') {
         flushText();
-        children.add(
-          _LiveActivityRow(text: event.text.isEmpty ? '正在执行任务...' : event.text),
-        );
+        children.add(const _LiveActivityRow(text: '正在思考...'));
         continue;
       }
       if (event.kind == 'interrupted') {
@@ -163,7 +171,11 @@ class AssistantAnswerBlock extends StatelessWidget {
       if (gitSummary != null) {
         flushText();
         children.add(
-          _GitChangePanel(summary: gitSummary, onFileTap: onGitFileTap),
+          _GitChangePanel(
+            summary: gitSummary,
+            onUndo: onUndoGitChanges,
+            onFileTap: onGitFileTap,
+          ),
         );
         continue;
       }
@@ -177,13 +189,20 @@ class AssistantAnswerBlock extends StatelessWidget {
     }
     flushText();
 
+    final isDone = completed || hasTerminalEvent;
     if (children.isEmpty) {
       children.add(
-        _AnswerText(text: completed || hasTerminalEvent ? '完成。' : '暂无输出'),
+        isDone
+            ? _AnswerText(
+                text: '完成。',
+                gitChangeSummary: gitChangeSummary,
+                onFileTap: onGitFileTap,
+              )
+            : const _LiveActivityRow(text: '正在思考...'),
       );
     }
-    final isDone = completed || hasTerminalEvent;
     final elapsed = _elapsedLabel(events);
+    final activeColor = Theme.of(context).colorScheme.primary;
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -192,9 +211,25 @@ class AssistantAnswerBlock extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: colors.assistantBubble,
+            color: isDone
+                ? colors.assistantBubble
+                : activeColor.withValues(alpha: 0.10),
             borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: colors.glassBorder),
+            border: Border.all(
+              color: isDone
+                  ? colors.glassBorder
+                  : activeColor.withValues(alpha: 0.48),
+              width: isDone ? 1 : 1.4,
+            ),
+            boxShadow: isDone
+                ? null
+                : [
+                    BoxShadow(
+                      color: activeColor.withValues(alpha: 0.22),
+                      offset: const Offset(0, 16),
+                      blurRadius: 34,
+                    ),
+                  ],
           ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
@@ -269,74 +304,132 @@ class _AnswerStatusHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
+    final activeColor = Theme.of(context).colorScheme.primary;
+    final label = done
+        ? elapsed == null
+              ? '已处理'
+              : '已处理 $elapsed'
+        : elapsed == null
+        ? '正在思考...'
+        : '正在思考... $elapsed';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              done
-                  ? elapsed == null
-                        ? '已处理'
-                        : '已处理 $elapsed'
-                  : elapsed == null
-                  ? '处理中'
-                  : '处理中 $elapsed',
-              style: TextStyle(
-                color: colors.textMuted,
-                fontSize: _scaledFontSize(14, fontScale),
-                fontWeight: FontWeight.w900,
+        if (done)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: colors.textMuted,
+                  fontSize: _scaledFontSize(14, fontScale),
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(width: 6),
+              Icon(Icons.chevron_right, color: colors.textMuted, size: 19),
+            ],
+          )
+        else
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: activeColor.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: activeColor.withValues(alpha: 0.28)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(10, 7, 12, 7),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox.square(
+                    dimension: 13,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(activeColor),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: activeColor,
+                      fontSize: _scaledFontSize(14, fontScale),
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(width: 6),
-            Icon(
-              done ? Icons.chevron_right : Icons.more_horiz,
-              color: colors.textMuted,
-              size: 19,
-            ),
-          ],
-        ),
+          ),
         const SizedBox(height: 12),
-        Divider(height: 1, color: colors.textMuted.withValues(alpha: 0.16)),
+        Divider(
+          height: 1,
+          color: (done ? colors.textMuted : activeColor).withValues(
+            alpha: 0.16,
+          ),
+        ),
       ],
     );
   }
 }
 
 class _AnswerText extends StatelessWidget {
-  const _AnswerText({required this.text});
+  const _AnswerText({
+    required this.text,
+    this.gitChangeSummary,
+    this.onFileTap,
+  });
 
   final String text;
+  final GitChangeSummary? gitChangeSummary;
+  final ValueChanged<GitFileChange>? onFileTap;
 
   @override
   Widget build(BuildContext context) {
     final lines = text.split('\n');
     final widgets = <Widget>[];
     var inModifiedFiles = false;
+    final modifiedFiles = <_ModifiedFileReference>[];
+
+    void flushModifiedFiles() {
+      if (modifiedFiles.isEmpty) return;
+      widgets.add(
+        _ModifiedFilesBlock(
+          files: List<_ModifiedFileReference>.of(modifiedFiles),
+          onFileTap: onFileTap,
+        ),
+      );
+      modifiedFiles.clear();
+    }
 
     for (final rawLine in lines) {
       final line = rawLine.trimRight();
       if (line.trim().isEmpty) {
+        flushModifiedFiles();
+        inModifiedFiles = false;
         widgets.add(const SizedBox(height: 12));
         continue;
       }
 
       if (_isModifiedFilesHeader(line)) {
+        flushModifiedFiles();
         inModifiedFiles = true;
-        widgets.add(_AnswerLine(text: line));
-        widgets.add(const SizedBox(height: 8));
         continue;
       }
 
       final file = inModifiedFiles ? _extractFileReference(line) : null;
       if (file != null) {
-        widgets.add(_ModifiedFileLine(file: file));
+        modifiedFiles.add(_withGitDelta(file, gitChangeSummary));
         continue;
       }
 
+      flushModifiedFiles();
+      inModifiedFiles = false;
       widgets.add(_AnswerLine(text: line));
     }
+    flushModifiedFiles();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -385,35 +478,160 @@ class _AnswerLine extends StatelessWidget {
   }
 }
 
-class _ModifiedFileLine extends StatelessWidget {
-  const _ModifiedFileLine({required this.file});
+class _ModifiedFileReference {
+  const _ModifiedFileReference({required this.path, this.added, this.removed});
 
-  final String file;
+  final String path;
+  final int? added;
+  final int? removed;
+
+  GitFileChange toGitFileChange() {
+    return GitFileChange(path: path, added: added ?? 0, removed: removed ?? 0);
+  }
+}
+
+class _ModifiedFilesBlock extends StatelessWidget {
+  const _ModifiedFilesBlock({required this.files, this.onFileTap});
+
+  final List<_ModifiedFileReference> files;
+  final ValueChanged<GitFileChange>? onFileTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final added = files.fold<int>(0, (sum, file) => sum + (file.added ?? 0));
+    final removed = files.fold<int>(
+      0,
+      (sum, file) => sum + (file.removed ?? 0),
+    );
+    final hasDelta = files.any(
+      (file) => file.added != null || file.removed != null,
+    );
+    final rowDivider = colors.textMuted.withValues(alpha: isDark ? 0.14 : 0.12);
+
     return Padding(
-      padding: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: isDark
+              ? const Color(0xff17181c).withValues(alpha: 0.86)
+              : colors.assistantBubble.withValues(alpha: 0.78),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: colors.glassBorder.withValues(alpha: 0.92)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 13, 16, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(text: '${files.length} 个文件'),
+                          if (hasDelta) ...[
+                            const TextSpan(text: '  '),
+                            TextSpan(
+                              text: '+$added',
+                              style: TextStyle(color: colors.success),
+                            ),
+                            const TextSpan(text: ' '),
+                            TextSpan(
+                              text: '-$removed',
+                              style: TextStyle(color: colors.error),
+                            ),
+                          ],
+                        ],
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colors.textMuted,
+                        fontSize: _scaledFontSize(16, fontScale),
+                        fontWeight: FontWeight.w900,
+                        height: 1.15,
+                      ),
+                    ),
+                  ),
+                  Icon(Icons.expand_more, size: 22, color: colors.textMuted),
+                ],
+              ),
+            ),
+            Divider(height: 1, color: rowDivider),
+            for (var index = 0; index < files.length; index++) ...[
+              _ModifiedFileBlockRow(
+                file: files[index],
+                onTap: onFileTap == null
+                    ? null
+                    : () => onFileTap!(files[index].toGitFileChange()),
+              ),
+              if (index != files.length - 1)
+                Divider(height: 1, color: rowDivider),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ModifiedFileBlockRow extends StatelessWidget {
+  const _ModifiedFileBlockRow({required this.file, this.onTap});
+
+  final _ModifiedFileReference file;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final fontScale = Get.find<ThemeController>().fontScale.value;
+    final hasDelta = file.added != null || file.removed != null;
+    final content = Padding(
+      padding: const EdgeInsets.fromLTRB(24, 14, 16, 14),
       child: Row(
         children: [
-          Icon(Icons.insert_drive_file_outlined, size: 18, color: colors.icon),
-          const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              _baseName(file),
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(text: _baseName(file.path)),
+                  if (hasDelta) ...[
+                    const TextSpan(text: '  '),
+                    TextSpan(
+                      text: '+${file.added ?? 0}',
+                      style: TextStyle(color: colors.success),
+                    ),
+                    const TextSpan(text: ' '),
+                    TextSpan(
+                      text: '-${file.removed ?? 0}',
+                      style: TextStyle(color: colors.error),
+                    ),
+                  ],
+                ],
+              ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: colors.icon,
-                fontSize: _scaledFontSize(16, fontScale),
+                color: colors.text,
+                fontSize: _scaledFontSize(15.5, fontScale),
                 fontWeight: FontWeight.w900,
+                height: 1.12,
               ),
             ),
           ),
+          const SizedBox(width: 10),
+          Icon(Icons.expand_more, size: 22, color: colors.textMuted),
         ],
       ),
+    );
+    if (onTap == null) return content;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(onTap: onTap, child: content),
     );
   }
 }
@@ -586,16 +804,29 @@ class _GitChangePanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final panelColor = isDark
+        ? const Color(0xff17181c).withValues(alpha: 0.86)
+        : colors.assistantBubble.withValues(alpha: 0.78);
+    final rowDivider = colors.textMuted.withValues(alpha: isDark ? 0.14 : 0.12);
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: colors.userBubble.withValues(alpha: 0.42),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.glassBorder),
+        color: panelColor,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: colors.glassBorder.withValues(alpha: 0.92)),
+        boxShadow: [
+          BoxShadow(
+            color: colors.headerShadow.withValues(alpha: isDark ? 0.26 : 0.10),
+            offset: const Offset(0, 14),
+            blurRadius: 30,
+          ),
+        ],
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 14, 12, 12),
+            padding: const EdgeInsets.fromLTRB(18, 12, 12, 12),
             child: Row(
               children: [
                 Expanded(
@@ -609,7 +840,7 @@ class _GitChangePanel extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: colors.textMuted,
-                            fontSize: _scaledFontSize(18, fontScale),
+                            fontSize: _scaledFontSize(16.5, fontScale),
                             fontWeight: FontWeight.w900,
                           ),
                         ),
@@ -631,23 +862,27 @@ class _GitChangePanel extends StatelessWidget {
                 _GitActionButton(
                   icon: Icons.north_east,
                   tooltip: '审核',
-                  onPressed: null,
+                  onPressed: summary.files.isEmpty ? null : () {},
                 ),
                 _GitActionButton(
                   icon: Icons.open_in_full,
                   tooltip: '展开',
-                  onPressed: null,
+                  onPressed: summary.files.isEmpty ? null : () {},
                 ),
               ],
             ),
           ),
-          Divider(height: 1, color: colors.textMuted.withValues(alpha: 0.16)),
-          ...summary.files.map(
-            (file) => _GitFileRow(
-              file: file,
-              onTap: onFileTap == null ? null : () => onFileTap!(file),
+          Divider(height: 1, color: rowDivider),
+          for (var index = 0; index < summary.files.length; index++) ...[
+            _GitFileRow(
+              file: summary.files[index],
+              onTap: onFileTap == null
+                  ? null
+                  : () => onFileTap!(summary.files[index]),
             ),
-          ),
+            if (index != summary.files.length - 1)
+              Divider(height: 1, color: rowDivider),
+          ],
         ],
       ),
     );
@@ -764,66 +999,40 @@ class _GitFileRow extends StatelessWidget {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
     final fileName = _baseName(file.path);
-    final directory = _directoryName(file.path);
     final content = Padding(
-      padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+      padding: const EdgeInsets.fromLTRB(24, 14, 16, 14),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: colors.icon.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: colors.icon.withValues(alpha: 0.16)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Icon(
-                Icons.insert_drive_file_outlined,
-                size: 18,
-                color: colors.icon,
+          Expanded(
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(text: fileName.isEmpty ? file.path : fileName),
+                  const TextSpan(text: '  '),
+                  TextSpan(
+                    text: '+${file.added}',
+                    style: TextStyle(color: colors.success),
+                  ),
+                  const TextSpan(text: ' '),
+                  TextSpan(
+                    text: '-${file.removed}',
+                    style: TextStyle(color: colors.error),
+                  ),
+                ],
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: colors.text,
+                fontSize: _scaledFontSize(15.5, fontScale),
+                fontWeight: FontWeight.w900,
+                height: 1.12,
               ),
             ),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  fileName.isEmpty ? file.path : fileName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: colors.text,
-                    fontSize: _scaledFontSize(14.5, fontScale),
-                    fontWeight: FontWeight.w900,
-                    height: 1.12,
-                  ),
-                ),
-                if (directory.isNotEmpty) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    directory,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: colors.textMuted,
-                      fontSize: _scaledFontSize(11, fontScale),
-                      fontWeight: FontWeight.w700,
-                      height: 1.08,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
           const SizedBox(width: 10),
-          _GitLineCountBadges(added: file.added, removed: file.removed),
-          if (onTap != null) ...[
-            const SizedBox(width: 6),
-            Icon(Icons.chevron_right, size: 18, color: colors.textMuted),
-          ],
+          Icon(Icons.expand_more, size: 22, color: colors.textMuted),
         ],
       ),
     );
@@ -831,71 +1040,6 @@ class _GitFileRow extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(onTap: onTap, child: content),
-    );
-  }
-}
-
-class _GitLineCountBadges extends StatelessWidget {
-  const _GitLineCountBadges({required this.added, required this.removed});
-
-  final int added;
-  final int removed;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final fontScale = Get.find<ThemeController>().fontScale.value;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _GitLineBadge(
-          label: '+$added',
-          color: colors.success,
-          fontScale: fontScale,
-        ),
-        const SizedBox(width: 5),
-        _GitLineBadge(
-          label: '-$removed',
-          color: colors.error,
-          fontScale: fontScale,
-        ),
-      ],
-    );
-  }
-}
-
-class _GitLineBadge extends StatelessWidget {
-  const _GitLineBadge({
-    required this.label,
-    required this.color,
-    required this.fontScale,
-  });
-
-  final String label;
-  final Color color;
-  final double fontScale;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.20)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
-        child: Text(
-          label,
-          maxLines: 1,
-          style: TextStyle(
-            color: color,
-            fontSize: _scaledFontSize(11.5, fontScale),
-            fontWeight: FontWeight.w900,
-            height: 1,
-          ),
-        ),
-      ),
     );
   }
 }
@@ -1155,7 +1299,7 @@ class _ComposerGlassPanel extends StatelessWidget {
     final colors = context.recodexColors;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final shape = BorderRadius.circular(radius);
-    final baseAlpha = isDark ? 0.70 : 0.66;
+    final baseAlpha = isDark ? 0.70 : 0.76;
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: shape,
@@ -1179,17 +1323,7 @@ class _ComposerGlassPanel extends StatelessWidget {
           child: DecoratedBox(
             decoration: BoxDecoration(
               borderRadius: shape,
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  colors.glassHighlight.withValues(alpha: isDark ? 0.28 : 0.94),
-                  colors.glassColor.withValues(alpha: baseAlpha),
-                  colors.surfaceOverlay.withValues(alpha: isDark ? 0.44 : 0.70),
-                  colors.icon.withValues(alpha: isDark ? 0.12 : 0.08),
-                ],
-                stops: const [0, 0.36, 0.78, 1],
-              ),
+              color: colors.glassColor.withValues(alpha: baseAlpha),
               border: Border.all(
                 color: colors.glassBorder.withValues(alpha: isDark ? 0.72 : 1),
                 width: 1.2,
@@ -1517,30 +1651,59 @@ bool _isModifiedFilesHeader(String line) {
       text == '修改的文件：';
 }
 
-String? _extractFileReference(String line) {
+_ModifiedFileReference? _extractFileReference(String line) {
   final trimmed = line.trim();
   final content = (trimmed.startsWith('- ') || trimmed.startsWith('• '))
       ? trimmed.substring(2).trim()
       : trimmed;
+  final added = int.tryParse(
+    RegExp(r'\+(\d+)').firstMatch(content)?.group(1) ?? '',
+  );
+  final removed = int.tryParse(
+    RegExp(r'-(\d+)').firstMatch(content)?.group(1) ?? '',
+  );
   final markdown = RegExp(r'^\[([^\]]+)\]\(([^)]+)\)').firstMatch(content);
   if (markdown != null) {
-    return markdown.group(1) ?? markdown.group(2);
+    final path = markdown.group(1) ?? markdown.group(2) ?? '';
+    if (path.trim().isEmpty) return null;
+    return _ModifiedFileReference(path: path, added: added, removed: removed);
   }
   final path = RegExp(r'([^\s`]+\.dart)\b').firstMatch(content);
-  return path?.group(1);
+  final value = path?.group(1);
+  if (value == null || value.trim().isEmpty) return null;
+  return _ModifiedFileReference(path: value, added: added, removed: removed);
+}
+
+_ModifiedFileReference _withGitDelta(
+  _ModifiedFileReference file,
+  GitChangeSummary? summary,
+) {
+  if (file.added != null && file.removed != null) return file;
+  if (summary == null) return file;
+  final normalizedPath = _normalizePath(file.path);
+  final normalizedName = _baseName(normalizedPath);
+  for (final change in summary.files) {
+    final changePath = _normalizePath(change.path);
+    if (changePath == normalizedPath ||
+        _baseName(changePath) == normalizedName) {
+      return _ModifiedFileReference(
+        path: file.path,
+        added: file.added ?? change.added,
+        removed: file.removed ?? change.removed,
+      );
+    }
+  }
+  return file;
 }
 
 String _baseName(String path) {
-  final normalized = path.replaceAll('\\', '/');
+  final normalized = _normalizePath(path);
   final parts = normalized.split('/').where((part) => part.isNotEmpty).toList();
   return parts.isEmpty ? path : parts.last;
 }
 
-String _directoryName(String path) {
-  final normalized = path.replaceAll('\\', '/');
-  final parts = normalized.split('/').where((part) => part.isNotEmpty).toList();
-  if (parts.length <= 1) return '';
-  return parts.take(parts.length - 1).join('/');
+String _normalizePath(String path) {
+  return path.replaceAll('\\', '/').trim();
 }
 
 bool _isToolEvent(String kind) {

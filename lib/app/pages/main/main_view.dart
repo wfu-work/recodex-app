@@ -38,6 +38,7 @@ class _MainPageState extends State<MainPage> {
   void initState() {
     super.initState();
     _scrollController.addListener(_updateHeaderBackground);
+    controller.startLiveTimelineRefresh();
   }
 
   @override
@@ -45,6 +46,7 @@ class _MainPageState extends State<MainPage> {
     _scrollController
       ..removeListener(_updateHeaderBackground)
       ..dispose();
+    controller.stopLiveTimelineRefresh();
     _promptController.dispose();
     super.dispose();
   }
@@ -139,11 +141,16 @@ class _MainPageState extends State<MainPage> {
                             if (entry.userEvent != null) {
                               return AssistantBubble(event: entry.userEvent!);
                             }
+                            final isLatestEntry =
+                                index == _timelineEntries.length - 1;
                             return AssistantAnswerBlock(
                               events: entry.events,
                               completed:
-                                  controller.currentSessionId.value == null,
+                                  !isLatestEntry ||
+                                  !controller.timelineSessionRunning.value,
+                              gitChangeSummary: _gitChangeSummary,
                               onGitFileTap: _openGitDiff,
+                              onUndoGitChanges: _confirmUndoChanges,
                             );
                           },
                         ),
@@ -370,6 +377,7 @@ class _MainPageState extends State<MainPage> {
   }
 
   void _openGitDiff(GitFileChange file) {
+    controller.gitStatus(includeDiff: true);
     Get.toNamed(
       Routes.gitDiff,
       arguments: GitDiffPageArgs(

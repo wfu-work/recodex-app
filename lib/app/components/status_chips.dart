@@ -12,7 +12,7 @@ class DiffChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
       decoration: BoxDecoration(
         color: colors.surfaceOverlay,
         borderRadius: BorderRadius.circular(999),
@@ -32,7 +32,7 @@ class DiffChip extends StatelessWidget {
             ),
           ],
         ),
-        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
       ),
     );
   }

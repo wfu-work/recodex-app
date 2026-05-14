@@ -29,10 +29,12 @@ class BridgeController extends GetxController {
   final gitSnapshot = Rxn<GitSnapshot>();
   final composerContext = ComposerContext.fallback.obs;
   final currentSessionId = RxnString();
+  final timelineSessionRunning = false.obs;
 
   WebSocket? _socket;
   StreamSubscription<dynamic>? _socketSubscription;
   Timer? _reconnectTimer;
+  Timer? _liveTimelineTimer;
   int _messageSeq = 0;
   bool _manualDisconnect = false;
   String? _requestedEventsSessionId;
@@ -52,6 +54,7 @@ class BridgeController extends GetxController {
 
   @override
   void onClose() {
+    stopLiveTimelineRefresh();
     unawaited(disconnect(silent: true));
     super.onClose();
   }
@@ -127,6 +130,7 @@ class BridgeController extends GetxController {
     unawaited(_storeSelectedWorkspace(workspace));
     gitSnapshot.value = null;
     currentSessionId.value = null;
+    timelineSessionRunning.value = false;
     _requestedEventsSessionId = null;
     _requestedEventsPrompt = null;
     events.clear();
@@ -142,6 +146,7 @@ class BridgeController extends GetxController {
     if (trimmedPrompt.isEmpty) return;
     events.add(SessionEvent(kind: 'user', text: trimmedPrompt));
     currentSessionId.value = null;
+    timelineSessionRunning.value = true;
     _send('session.start', {
       'workspace': workspace.name,
       'prompt': trimmedPrompt,
@@ -239,6 +244,21 @@ class BridgeController extends GetxController {
     _send('context.get', {'workspace': workspace?.name ?? ''});
   }
 
+  void startLiveTimelineRefresh() {
+    _liveTimelineTimer?.cancel();
+    _refreshLiveTimeline();
+    _liveTimelineTimer = Timer.periodic(const Duration(milliseconds: 1200), (
+      _,
+    ) {
+      _refreshLiveTimeline();
+    });
+  }
+
+  void stopLiveTimelineRefresh() {
+    _liveTimelineTimer?.cancel();
+    _liveTimelineTimer = null;
+  }
+
   void revokeDevice(String id) {
     _send('device.revoke', {'deviceId': id});
   }
@@ -296,7 +316,9 @@ class BridgeController extends GetxController {
               (item) => SessionRecord.fromJson(item.cast<String, dynamic>()),
             ),
           );
-          _loadLatestSessionEventsForSelectedWorkspace();
+          _loadLatestSessionEventsForSelectedWorkspace(
+            force: _liveTimelineTimer != null,
+          );
         case 'device.list.result':
           devices.assignAll(
             ((map['devices'] as List?) ?? const []).whereType<Map>().map(
@@ -308,6 +330,7 @@ class BridgeController extends GetxController {
         case 'session.created':
           final record = SessionRecord.fromJson(map);
           currentSessionId.value = record.id;
+          timelineSessionRunning.value = true;
           sessions.insert(0, record);
           events.add(
             const SessionEvent(kind: 'running', text: '正在启动 Codex 任务...'),
@@ -320,6 +343,7 @@ class BridgeController extends GetxController {
         case 'session.done':
           events.add(SessionEvent.fromJson(map));
           currentSessionId.value = null;
+          timelineSessionRunning.value = false;
           _send('session.list', {});
           gitStatus(includeDiff: true);
         case 'session.events.result':
@@ -350,8 +374,10 @@ class BridgeController extends GetxController {
           lastError.value = message;
           events.add(SessionEvent(kind: 'error', text: message));
           currentSessionId.value = null;
+          timelineSessionRunning.value = false;
         case 'session.interrupted':
           currentSessionId.value = null;
+          timelineSessionRunning.value = false;
           events.add(
             const SessionEvent(
               kind: 'interrupted',
@@ -412,8 +438,16 @@ class BridgeController extends GetxController {
     );
   }
 
-  void _loadLatestSessionEventsForSelectedWorkspace() {
-    if (!connected.value || currentSessionId.value != null) return;
+  void _refreshLiveTimeline() {
+    if (!canUseWorkspace) return;
+    _send('session.list', {});
+    if (_requestedEventsSessionId != null) {
+      _send('session.events', {'sessionId': _requestedEventsSessionId});
+    }
+  }
+
+  void _loadLatestSessionEventsForSelectedWorkspace({bool force = false}) {
+    if (!connected.value) return;
     final workspace = selectedWorkspace.value;
     if (workspace == null) return;
 
@@ -425,14 +459,27 @@ class BridgeController extends GetxController {
     if (candidates.isEmpty) {
       _requestedEventsSessionId = null;
       _requestedEventsPrompt = null;
+      currentSessionId.value = null;
+      timelineSessionRunning.value = false;
       return;
     }
 
-    final latest = candidates.reduce(
+    final runningCandidates = candidates.where(
+      (session) => session.status == 'running',
+    );
+    final timelineCandidates = runningCandidates.isEmpty
+        ? candidates
+        : runningCandidates;
+    final latest = timelineCandidates.reduce(
       (current, next) =>
           next.updatedAtDate.isAfter(current.updatedAtDate) ? next : current,
     );
-    if (_requestedEventsSessionId == latest.id && events.isNotEmpty) return;
+    currentSessionId.value = latest.status == 'running' ? latest.id : null;
+    timelineSessionRunning.value = latest.status == 'running';
+
+    if (!force && _requestedEventsSessionId == latest.id && events.isNotEmpty) {
+      return;
+    }
 
     _requestedEventsSessionId = latest.id;
     _requestedEventsPrompt = latest.prompt;
