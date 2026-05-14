@@ -157,6 +157,47 @@ class _PairingPageState extends State<PairingPage> {
                                       value: serviceContext.model,
                                       icon: Icons.memory_outlined,
                                     ),
+                                    _ServiceInfoItem(
+                                      label: '今日用量',
+                                      value: _formatTokenCount(
+                                        serviceContext.usage.todayTokens,
+                                      ),
+                                      icon: Icons.today_outlined,
+                                    ),
+                                    _ServiceInfoItem(
+                                      label: '本月用量',
+                                      value: _formatTokenCount(
+                                        serviceContext.usage.monthTokens,
+                                      ),
+                                      icon: Icons.calendar_month_outlined,
+                                    ),
+                                    _ServiceInfoItem(
+                                      label: '估算费用',
+                                      value: serviceContext.usage.rateConfigured
+                                          ? _formatCost(
+                                              serviceContext.usage.monthCost,
+                                            )
+                                          : '未配置费率',
+                                      icon: Icons.payments_outlined,
+                                    ),
+                                    _ServiceInfoItem(
+                                      label: '最近更新',
+                                      value: _formatUsageTime(
+                                        serviceContext.usage.lastUpdated,
+                                      ),
+                                      icon: Icons.update,
+                                    ),
+                                    _ServiceInfoItem(
+                                      label: '用量读取',
+                                      value: serviceContext.usage.canReadUsage
+                                          ? '可读取'
+                                          : '不可读取',
+                                      icon: serviceContext.usage.canReadUsage
+                                          ? Icons.check_circle_outline
+                                          : Icons.error_outline,
+                                      positive:
+                                          serviceContext.usage.canReadUsage,
+                                    ),
                                   ],
                                 ),
                               ],
@@ -703,4 +744,23 @@ class _ServiceInfoTile extends StatelessWidget {
       ),
     );
   }
+}
+
+String _formatTokenCount(int value) {
+  if (value >= 1000000) {
+    return '${(value / 1000000).toStringAsFixed(2)}M tokens';
+  }
+  if (value >= 1000) return '${(value / 1000).toStringAsFixed(1)}K tokens';
+  return '$value tokens';
+}
+
+String _formatCost(double value) {
+  return '\$${value.toStringAsFixed(4)}';
+}
+
+String _formatUsageTime(DateTime? value) {
+  if (value == null) return '暂无记录';
+  final local = value.toLocal();
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${local.month}/${local.day} ${two(local.hour)}:${two(local.minute)}';
 }

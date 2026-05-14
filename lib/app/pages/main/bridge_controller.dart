@@ -37,6 +37,7 @@ class BridgeController extends GetxController {
   Timer? _liveTimelineTimer;
   int _messageSeq = 0;
   bool _manualDisconnect = false;
+  bool _pendingSessionStart = false;
   String? _requestedEventsSessionId;
   String? _requestedEventsPrompt;
   String? _storedWorkspaceName;
@@ -147,6 +148,7 @@ class BridgeController extends GetxController {
     events.add(SessionEvent(kind: 'user', text: trimmedPrompt));
     currentSessionId.value = null;
     timelineSessionRunning.value = true;
+    _pendingSessionStart = true;
     _send('session.start', {
       'workspace': workspace.name,
       'prompt': trimmedPrompt,
@@ -247,9 +249,7 @@ class BridgeController extends GetxController {
   void startLiveTimelineRefresh() {
     _liveTimelineTimer?.cancel();
     _refreshLiveTimeline();
-    _liveTimelineTimer = Timer.periodic(const Duration(milliseconds: 1200), (
-      _,
-    ) {
+    _liveTimelineTimer = Timer.periodic(const Duration(milliseconds: 600), (_) {
       _refreshLiveTimeline();
     });
   }
@@ -329,8 +329,11 @@ class BridgeController extends GetxController {
           composerContext.value = ComposerContext.fromJson(map);
         case 'session.created':
           final record = SessionRecord.fromJson(map);
+          _pendingSessionStart = false;
           currentSessionId.value = record.id;
           timelineSessionRunning.value = true;
+          _requestedEventsSessionId = record.id;
+          _requestedEventsPrompt = record.prompt;
           sessions.insert(0, record);
           events.add(
             const SessionEvent(kind: 'running', text: '正在启动 Codex 任务...'),
@@ -338,25 +341,32 @@ class BridgeController extends GetxController {
         case 'session.event':
           final event = SessionEvent.fromJson(map);
           if (!_hasDuplicateUserEvent(event)) {
-            events.add(event);
+            _appendSessionEvent(event);
           }
         case 'session.done':
           events.add(SessionEvent.fromJson(map));
           currentSessionId.value = null;
           timelineSessionRunning.value = false;
+          _pendingSessionStart = false;
           _send('session.list', {});
           gitStatus(includeDiff: true);
         case 'session.events.result':
           final sessionId = map['sessionId'] as String? ?? '';
           if (sessionId != _requestedEventsSessionId) break;
-          events.assignAll(
-            _withPromptEvent(
-              ((map['events'] as List?) ?? const []).whereType<Map>().map(
-                (item) => SessionEvent.fromJson(item.cast<String, dynamic>()),
-              ),
-              _requestedEventsPrompt,
+          final loadedEvents = _withPromptEvent(
+            ((map['events'] as List?) ?? const []).whereType<Map>().map(
+              (item) => SessionEvent.fromJson(item.cast<String, dynamic>()),
             ),
+            _requestedEventsPrompt,
           );
+          events.assignAll(_mergeLiveEvents(loadedEvents));
+          if (_hasTerminalEvent(loadedEvents)) {
+            currentSessionId.value = null;
+            timelineSessionRunning.value = false;
+            _pendingSessionStart = false;
+          } else if (sessionId == currentSessionId.value) {
+            timelineSessionRunning.value = true;
+          }
         case 'session.error':
           final message =
               map['message'] as String? ??
@@ -375,9 +385,11 @@ class BridgeController extends GetxController {
           events.add(SessionEvent(kind: 'error', text: message));
           currentSessionId.value = null;
           timelineSessionRunning.value = false;
+          _pendingSessionStart = false;
         case 'session.interrupted':
           currentSessionId.value = null;
           timelineSessionRunning.value = false;
+          _pendingSessionStart = false;
           events.add(
             const SessionEvent(
               kind: 'interrupted',
@@ -450,6 +462,7 @@ class BridgeController extends GetxController {
     if (!connected.value) return;
     final workspace = selectedWorkspace.value;
     if (workspace == null) return;
+    if (_pendingSessionStart) return;
 
     final candidates = sessions.where(
       (session) =>
@@ -474,8 +487,15 @@ class BridgeController extends GetxController {
       (current, next) =>
           next.updatedAtDate.isAfter(current.updatedAtDate) ? next : current,
     );
-    currentSessionId.value = latest.status == 'running' ? latest.id : null;
-    timelineSessionRunning.value = latest.status == 'running';
+    final requestedRunning =
+        _requestedEventsSessionId == latest.id && timelineSessionRunning.value;
+    if (latest.status == 'running') {
+      currentSessionId.value = latest.id;
+      timelineSessionRunning.value = true;
+    } else if (!requestedRunning) {
+      currentSessionId.value = null;
+      timelineSessionRunning.value = false;
+    }
 
     if (!force && _requestedEventsSessionId == latest.id && events.isNotEmpty) {
       return;
@@ -493,6 +513,52 @@ class BridgeController extends GetxController {
               existing.kind == 'user' &&
               existing.text.trim() == event.text.trim(),
         );
+  }
+
+  void _appendSessionEvent(SessionEvent event) {
+    if (event.kind == 'running') {
+      final last = events.isEmpty ? null : events.last;
+      if (last?.kind == 'running') {
+        events[events.length - 1] = event;
+        return;
+      }
+    }
+    events.add(event);
+  }
+
+  List<SessionEvent> _mergeLiveEvents(List<SessionEvent> loadedEvents) {
+    if (!timelineSessionRunning.value || events.isEmpty) return loadedEvents;
+    final merged = List<SessionEvent>.of(loadedEvents);
+    for (final event in events) {
+      if (!_isLiveStatusEvent(event) || _containsSimilarEvent(merged, event)) {
+        continue;
+      }
+      merged.add(event);
+    }
+    return merged;
+  }
+
+  bool _isLiveStatusEvent(SessionEvent event) {
+    return event.kind == 'running' || event.kind == 'tool_call';
+  }
+
+  bool _containsSimilarEvent(List<SessionEvent> source, SessionEvent event) {
+    return source.any(
+      (candidate) =>
+          candidate.kind == event.kind &&
+          candidate.text.trim() == event.text.trim(),
+    );
+  }
+
+  bool _hasTerminalEvent(Iterable<SessionEvent> source) {
+    return source.any((event) {
+      final kind = event.kind.toLowerCase();
+      return kind == 'done' ||
+          kind == 'interrupted' ||
+          kind == 'error' ||
+          kind.contains('complete') ||
+          kind.contains('completed');
+    });
   }
 
   List<SessionEvent> _withPromptEvent(

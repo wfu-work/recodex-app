@@ -121,17 +121,46 @@ class SessionRecord {
 }
 
 class SessionEvent {
-  const SessionEvent({required this.kind, required this.text, this.time});
+  const SessionEvent({
+    required this.kind,
+    required this.text,
+    this.time,
+    this.usage,
+  });
 
   final String kind;
   final String text;
   final DateTime? time;
+  final TokenUsage? usage;
 
   factory SessionEvent.fromJson(Map<String, dynamic> json) {
     return SessionEvent(
       kind: json['kind'] as String? ?? 'event',
       text: json['text'] as String? ?? json['raw'] as String? ?? '',
       time: DateTime.tryParse(json['time'] as String? ?? ''),
+      usage: json['usage'] is Map
+          ? TokenUsage.fromJson((json['usage'] as Map).cast<String, dynamic>())
+          : null,
+    );
+  }
+}
+
+class TokenUsage {
+  const TokenUsage({
+    required this.inputTokens,
+    required this.outputTokens,
+    required this.totalTokens,
+  });
+
+  final int inputTokens;
+  final int outputTokens;
+  final int totalTokens;
+
+  factory TokenUsage.fromJson(Map<String, dynamic> json) {
+    return TokenUsage(
+      inputTokens: _jsonInt(json['inputTokens'] ?? json['input_tokens']),
+      outputTokens: _jsonInt(json['outputTokens'] ?? json['output_tokens']),
+      totalTokens: _jsonInt(json['totalTokens'] ?? json['total_tokens']),
     );
   }
 }
@@ -179,6 +208,7 @@ class ComposerContext {
     required this.codexBinary,
     required this.codexVersion,
     required this.apiKeyConfigured,
+    required this.usage,
   });
 
   final String transport;
@@ -193,6 +223,7 @@ class ComposerContext {
   final String codexBinary;
   final String codexVersion;
   final bool apiKeyConfigured;
+  final UsageOverview usage;
 
   ComposerContext copyWith({
     String? transport,
@@ -207,6 +238,7 @@ class ComposerContext {
     String? codexBinary,
     String? codexVersion,
     bool? apiKeyConfigured,
+    UsageOverview? usage,
   }) {
     return ComposerContext(
       transport: transport ?? this.transport,
@@ -222,6 +254,7 @@ class ComposerContext {
       codexBinary: codexBinary ?? this.codexBinary,
       codexVersion: codexVersion ?? this.codexVersion,
       apiKeyConfigured: apiKeyConfigured ?? this.apiKeyConfigured,
+      usage: usage ?? this.usage,
     );
   }
 
@@ -246,6 +279,11 @@ class ComposerContext {
       codexBinary: json['codexBinary'] as String? ?? 'codex',
       codexVersion: json['codexVersion'] as String? ?? '',
       apiKeyConfigured: json['apiKeyConfigured'] as bool? ?? false,
+      usage: json['usage'] is Map
+          ? UsageOverview.fromJson(
+              (json['usage'] as Map).cast<String, dynamic>(),
+            )
+          : UsageOverview.empty,
     );
   }
 
@@ -262,5 +300,60 @@ class ComposerContext {
     codexBinary: 'codex',
     codexVersion: '',
     apiKeyConfigured: false,
+    usage: UsageOverview.empty,
   );
+}
+
+class UsageOverview {
+  const UsageOverview({
+    required this.todayTokens,
+    required this.monthTokens,
+    required this.todayCost,
+    required this.monthCost,
+    required this.lastUpdated,
+    required this.canReadUsage,
+    required this.rateConfigured,
+  });
+
+  final int todayTokens;
+  final int monthTokens;
+  final double todayCost;
+  final double monthCost;
+  final DateTime? lastUpdated;
+  final bool canReadUsage;
+  final bool rateConfigured;
+
+  factory UsageOverview.fromJson(Map<String, dynamic> json) {
+    return UsageOverview(
+      todayTokens: _jsonInt(json['todayTokens']),
+      monthTokens: _jsonInt(json['monthTokens']),
+      todayCost: _jsonDouble(json['todayCost']),
+      monthCost: _jsonDouble(json['monthCost']),
+      lastUpdated: DateTime.tryParse(json['lastUpdated'] as String? ?? ''),
+      canReadUsage: json['canReadUsage'] as bool? ?? false,
+      rateConfigured: json['rateConfigured'] as bool? ?? false,
+    );
+  }
+
+  static const empty = UsageOverview(
+    todayTokens: 0,
+    monthTokens: 0,
+    todayCost: 0,
+    monthCost: 0,
+    lastUpdated: null,
+    canReadUsage: false,
+    rateConfigured: false,
+  );
+}
+
+int _jsonInt(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.round();
+  return int.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+double _jsonDouble(Object? value) {
+  if (value is double) return value;
+  if (value is num) return value.toDouble();
+  return double.tryParse(value?.toString() ?? '') ?? 0;
 }

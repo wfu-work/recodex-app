@@ -45,7 +45,7 @@ class AssistantBubble extends StatelessWidget {
                 fontSize: _scaledFontSize(16, fontScale),
                 height: 1.62,
                 color: isError ? colors.error : colors.text,
-                fontWeight: isUser ? FontWeight.w700 : FontWeight.w500,
+                fontWeight: isUser ? FontWeight.w500 : FontWeight.w500,
               ),
             ),
           ),
@@ -139,6 +139,9 @@ class AssistantAnswerBlock extends StatelessWidget {
         hasTerminalEvent = true;
         continue;
       }
+      if (event.kind == 'token_usage') {
+        continue;
+      }
       if (event.kind == 'running') {
         flushText();
         children.add(const _LiveActivityRow(text: '正在思考...'));
@@ -161,8 +164,10 @@ class AssistantAnswerBlock extends StatelessWidget {
         final command = _extractCommand(event.text);
         children.add(
           _LiveActivityRow(
-            text: command ?? _shortenText(event.text, fallback: '正在调用工具'),
-            detail: command ?? _shortenText(event.text, fallback: '工具调用'),
+            text: command == null
+                ? '正在运行工具'
+                : '正在运行 ${_formatCommand(command)}',
+            detail: '正在思考',
           ),
         );
         continue;
@@ -202,6 +207,7 @@ class AssistantAnswerBlock extends StatelessWidget {
       );
     }
     final elapsed = _elapsedLabel(events);
+    final usage = _latestUsage(events);
     final activeColor = Theme.of(context).colorScheme.primary;
 
     return Align(
@@ -236,7 +242,11 @@ class AssistantAnswerBlock extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _AnswerStatusHeader(done: isDone, elapsed: elapsed),
+                _AnswerStatusHeader(
+                  done: isDone,
+                  elapsed: elapsed,
+                  usage: usage,
+                ),
                 const SizedBox(height: 18),
                 ...children,
               ],
@@ -267,26 +277,45 @@ class _LiveActivityRow extends StatelessWidget {
         ),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-        child: Row(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox.square(
-              dimension: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
+            Row(
+              children: [
+                Icon(
+                  Icons.terminal,
+                  size: 17,
+                  color: colors.textMuted.withValues(alpha: 0.86),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.text,
+                      fontSize: _scaledFontSize(15, fontScale),
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                detail ?? text,
-                maxLines: 2,
+            if ((detail ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 18),
+              Text(
+                detail!,
+                maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: colors.text,
-                  fontSize: _scaledFontSize(14, fontScale),
+                  color: colors.textMuted,
+                  fontSize: _scaledFontSize(15, fontScale),
                   fontWeight: FontWeight.w800,
                 ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -295,10 +324,15 @@ class _LiveActivityRow extends StatelessWidget {
 }
 
 class _AnswerStatusHeader extends StatelessWidget {
-  const _AnswerStatusHeader({required this.done, required this.elapsed});
+  const _AnswerStatusHeader({
+    required this.done,
+    required this.elapsed,
+    required this.usage,
+  });
 
   final bool done;
   final String? elapsed;
+  final TokenUsage? usage;
 
   @override
   Widget build(BuildContext context) {
@@ -329,6 +363,10 @@ class _AnswerStatusHeader extends StatelessWidget {
               ),
               const SizedBox(width: 6),
               Icon(Icons.chevron_right, color: colors.textMuted, size: 19),
+              if (usage != null) ...[
+                const SizedBox(width: 10),
+                _TokenUsagePill(usage: usage!),
+              ],
             ],
           )
         else
@@ -371,6 +409,35 @@ class _AnswerStatusHeader extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _TokenUsagePill extends StatelessWidget {
+  const _TokenUsagePill({required this.usage});
+
+  final TokenUsage usage;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.surfaceOverlay.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: colors.glassBorder),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+        child: Text(
+          '${_formatCompactNumber(usage.totalTokens)} tokens',
+          style: TextStyle(
+            color: colors.textMuted,
+            fontSize: 12,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -449,28 +516,38 @@ class _AnswerLine extends StatelessWidget {
     final fontScale = Get.find<ThemeController>().fontScale.value;
     final trimmed = text.trimLeft();
     final isBullet = trimmed.startsWith('- ') || trimmed.startsWith('• ');
+    final isHeading =
+        !isBullet &&
+        trimmed.length <= 18 &&
+        !trimmed.contains(RegExp(r'[。.:：]'));
     final content = isBullet ? trimmed.substring(2).trimLeft() : text;
     final richText = Text.rich(
-      TextSpan(children: _inlineSpans(content)),
+      TextSpan(children: _inlineSpans(context, content)),
       style: TextStyle(
         color: colors.text,
-        fontSize: _scaledFontSize(16, fontScale),
-        height: 1.5,
-        fontWeight: FontWeight.w700,
+        fontSize: _scaledFontSize(isHeading ? 16.5 : 15.5, fontScale),
+        height: 1.62,
+        fontWeight: isHeading ? FontWeight.w600 : FontWeight.w300,
+        letterSpacing: 0,
       ),
     );
 
-    if (!isBullet) return richText;
+    if (!isBullet) {
+      return Padding(
+        padding: EdgeInsets.only(bottom: isHeading ? 8 : 6),
+        child: richText,
+      );
+    }
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.only(bottom: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.only(top: 9),
-            child: Icon(Icons.circle, size: 6, color: colors.textMuted),
+            padding: const EdgeInsets.only(top: 10),
+            child: Icon(Icons.circle, size: 5.5, color: colors.textMuted),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           Expanded(child: richText),
         ],
       ),
@@ -552,7 +629,7 @@ class _ModifiedFilesBlock extends StatelessWidget {
                       style: TextStyle(
                         color: colors.textMuted,
                         fontSize: _scaledFontSize(16, fontScale),
-                        fontWeight: FontWeight.w900,
+                        fontWeight: FontWeight.w600,
                         height: 1.15,
                       ),
                     ),
@@ -618,7 +695,7 @@ class _ModifiedFileBlockRow extends StatelessWidget {
               style: TextStyle(
                 color: colors.text,
                 fontSize: _scaledFontSize(15.5, fontScale),
-                fontWeight: FontWeight.w900,
+                fontWeight: FontWeight.w600,
                 height: 1.12,
               ),
             ),
@@ -667,7 +744,7 @@ class _InlineStatusRow extends StatelessWidget {
               style: TextStyle(
                 color: colors.textMuted,
                 fontSize: _scaledFontSize(14, fontScale),
-                fontWeight: FontWeight.w900,
+                fontWeight: FontWeight.w600,
               ),
             ),
             const SizedBox(width: 10),
@@ -679,7 +756,7 @@ class _InlineStatusRow extends StatelessWidget {
                 style: TextStyle(
                   color: colors.text,
                   fontSize: _scaledFontSize(14, fontScale),
-                  fontWeight: FontWeight.w800,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ),
@@ -728,7 +805,7 @@ class ToolCallRow extends StatelessWidget {
                 style: TextStyle(
                   color: colors.textMuted,
                   fontSize: _scaledFontSize(14, fontScale),
-                  fontWeight: FontWeight.w800,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ),
@@ -738,7 +815,7 @@ class ToolCallRow extends StatelessWidget {
               style: TextStyle(
                 color: colors.textMuted,
                 fontSize: _scaledFontSize(14, fontScale),
-                fontWeight: FontWeight.w800,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ],
@@ -841,7 +918,7 @@ class _GitChangePanel extends StatelessWidget {
                           style: TextStyle(
                             color: colors.textMuted,
                             fontSize: _scaledFontSize(16.5, fontScale),
-                            fontWeight: FontWeight.w900,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
@@ -1591,10 +1668,10 @@ class _ContextMenuItemView extends StatelessWidget {
 
 String _reasoningLabel(String value) {
   return switch (value) {
-    'low' => 'Low',
-    'medium' => 'Medium',
-    'high' => 'High',
-    'xhigh' => 'XHigh',
+    'low' => '低',
+    'medium' => '中',
+    'high' => '高',
+    'xhigh' => '极高',
     _ => value,
   };
 }
@@ -1603,9 +1680,13 @@ double _scaledFontSize(double baseSize, double fontScale) {
   return baseSize * fontScale;
 }
 
-List<InlineSpan> _inlineSpans(String text) {
+List<InlineSpan> _inlineSpans(BuildContext context, String text) {
+  final colors = context.recodexColors;
+  final isDark = Theme.of(context).brightness == Brightness.dark;
   final spans = <InlineSpan>[];
-  final matches = RegExp(r'`([^`]+)`').allMatches(text).toList();
+  final matches = RegExp(
+    r'`([^`]+)`|((?:/|[A-Za-z]:\\)[^\s，。；、]+(?::\d+)?)',
+  ).allMatches(text).toList();
   var cursor = 0;
   for (final match in matches) {
     if (match.start > cursor) {
@@ -1615,19 +1696,29 @@ List<InlineSpan> _inlineSpans(String text) {
       WidgetSpan(
         alignment: PlaceholderAlignment.middle,
         child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 2),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
           decoration: BoxDecoration(
-            color: const Color(0xff202124).withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(10),
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.08)
+                : const Color(0xff1f2023).withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(7),
           ),
           child: Text(
-            match.group(1) ?? '',
-            style: const TextStyle(
-              color: Color(0xff303132),
-              fontFamily: 'monospace',
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
+            match.group(1) ?? match.group(2) ?? '',
+            style: TextStyle(
+              color: colors.text,
+              fontFamily: 'Menlo',
+              fontFamilyFallback: const [
+                'SF Mono',
+                'Monaco',
+                'Consolas',
+                'monospace',
+              ],
+              fontSize: 14.5,
+              height: 1.12,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0,
             ),
           ),
         ),
@@ -1710,8 +1801,11 @@ bool _isToolEvent(String kind) {
   final normalized = kind.toLowerCase();
   return normalized == 'tool' ||
       normalized.contains('exec') ||
-      normalized.contains('tool') ||
-      normalized.contains('command');
+      normalized.contains('function_call') ||
+      normalized.contains('shell') ||
+      normalized.contains('command') ||
+      normalized.contains('mcp_tool') ||
+      normalized.contains('tool');
 }
 
 bool _isDoneEvent(String kind) {
@@ -1743,6 +1837,23 @@ String? _elapsedLabel(List<SessionEvent> events) {
   final remainingMinutes = minutes % 60;
   if (hours == 0) return '${minutes}m ${remainingSeconds}s';
   return '${hours}h ${remainingMinutes}m';
+}
+
+TokenUsage? _latestUsage(List<SessionEvent> events) {
+  for (final event in events.reversed) {
+    if (event.usage != null) return event.usage;
+  }
+  return null;
+}
+
+String _formatCompactNumber(int value) {
+  if (value >= 1000000) {
+    return '${(value / 1000000).toStringAsFixed(1)}M';
+  }
+  if (value >= 1000) {
+    return '${(value / 1000).toStringAsFixed(1)}K';
+  }
+  return '$value';
 }
 
 String _cleanEventText(SessionEvent event) {
@@ -1789,6 +1900,14 @@ String? _extractCommand(String raw) {
     caseSensitive: false,
   ).firstMatch(text);
   return commandMatch?.group(1)?.trim();
+}
+
+String _formatCommand(String command) {
+  final trimmed = command.trim();
+  if (trimmed.isEmpty) return '工具';
+  final normalized = trimmed.replaceAll(RegExp(r'\s+'), ' ');
+  if (normalized.length <= 34) return normalized;
+  return '${normalized.substring(0, 34)}...';
 }
 
 String _shortenText(String text, {required String fallback}) {
