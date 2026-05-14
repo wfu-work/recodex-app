@@ -3,8 +3,8 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
-import '../controllers/theme_controller.dart';
 import '../models/bridge_models.dart';
+import '../pages/settings/theme_controller.dart';
 import '../theme/recodex_theme.dart';
 
 class AssistantBubble extends StatelessWidget {
@@ -954,7 +954,7 @@ class ComposerBar extends StatelessWidget {
                 warning: this.context.requireConfirmGitWrite,
                 trailing: Icons.keyboard_arrow_down,
               ),
-              const SizedBox(width: 48),
+              const SizedBox(width: 28),
               _ContextPill(
                 icon: Icons.account_tree_outlined,
                 label: this.context.branch.isEmpty

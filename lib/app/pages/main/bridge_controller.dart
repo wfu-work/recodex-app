@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
 
-import '../models/bridge_models.dart';
+import '../../models/bridge_models.dart';
 
 class BridgeController extends GetxController {
   static const _storage = FlutterSecureStorage();

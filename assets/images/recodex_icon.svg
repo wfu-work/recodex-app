@@ -20,7 +20,7 @@
   </defs>
 
   <rect width="1024" height="1024" rx="230" fill="url(#paper)"/>
-  <g filter="url(#bubbleShadow)" transform="translate(512 512) scale(1.12) translate(-512 -512)">
+  <g filter="url(#bubbleShadow)" transform="translate(512 512) scale(1.32) translate(-512 -512)">
     <rect x="230" y="222" width="592" height="562" rx="188" fill="url(#bubble)"/>
     <ellipse cx="526" cy="292" rx="226" ry="98" fill="#ffffff" fill-opacity=".2"/>
     <path d="M366 444 466 546 366 648" fill="none" stroke="#edf6ff" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>

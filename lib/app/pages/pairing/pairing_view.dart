@@ -4,8 +4,8 @@ import 'package:get/get.dart';
 import '../../components/liquid_background.dart';
 import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
-import '../../controllers/bridge_controller.dart';
 import '../../theme/recodex_theme.dart';
+import '../main/bridge_controller.dart';
 
 class PairingPage extends StatefulWidget {
   const PairingPage({super.key});

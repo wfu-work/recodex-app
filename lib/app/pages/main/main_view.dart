@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
@@ -7,11 +8,11 @@ import '../../components/liquid_background.dart';
 import '../../components/liquid_glass.dart';
 import '../../components/menu_drawer.dart';
 import '../../components/status_chips.dart';
-import '../../controllers/bridge_controller.dart';
-import '../../controllers/theme_controller.dart';
 import '../../models/bridge_models.dart';
 import '../../routes/app_pages.dart';
 import '../../theme/recodex_theme.dart';
+import '../settings/theme_controller.dart';
+import 'bridge_controller.dart';
 
 class MainPage extends StatefulWidget {
   const MainPage({super.key});
@@ -28,6 +29,7 @@ class _MainPageState extends State<MainPage> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _timelineBottomKey = GlobalKey();
   double _headerBackgroundProgress = 0;
+  bool _composerVisible = true;
   String _lastAutoScrollSignature = '';
 
   @override
@@ -53,8 +55,15 @@ class _MainPageState extends State<MainPage> {
           controller.currentSessionId.value != null) {
         _scheduleScrollToLatest(_timelineSignature);
       }
-      final topInset = MediaQuery.paddingOf(context).top;
-      final bottomInset = MediaQuery.paddingOf(context).bottom;
+      final mediaQuery = MediaQuery.of(context);
+      final topInset = mediaQuery.padding.top;
+      final bottomInset = mediaQuery.padding.bottom;
+      final composerSlideDuration = mediaQuery.disableAnimations
+          ? Duration.zero
+          : const Duration(milliseconds: 240);
+      final composerFadeDuration = mediaQuery.disableAnimations
+          ? Duration.zero
+          : const Duration(milliseconds: 180);
       final isDark = Theme.of(context).brightness == Brightness.dark;
       return LiquidBackground(
         child: AnnotatedRegion<SystemUiOverlayStyle>(
@@ -80,60 +89,66 @@ class _MainPageState extends State<MainPage> {
             ),
             body: Stack(
               children: [
-                CustomScrollView(
-                  controller: _scrollController,
-                  slivers: [
-                    SliverToBoxAdapter(
-                      child: SizedBox(height: _headerReservedHeight + topInset),
-                    ),
-                    if (controller.lastError.value.isNotEmpty)
+                NotificationListener<UserScrollNotification>(
+                  onNotification: _handleUserScroll,
+                  child: CustomScrollView(
+                    controller: _scrollController,
+                    slivers: [
                       SliverToBoxAdapter(
-                        child: _InlineError(
-                          message: controller.lastError.value,
-                          onDismiss: () => controller.lastError.value = '',
+                        child: SizedBox(
+                          height: _headerReservedHeight + topInset,
                         ),
                       ),
-                    if (_gitChangeSummary != null)
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(36, 26, 36, 0),
-                        sliver: SliverToBoxAdapter(
-                          child: GitChangeCard(
-                            summary: _gitChangeSummary!,
-                            onUndo: _confirmUndoChanges,
+                      if (controller.lastError.value.isNotEmpty)
+                        SliverToBoxAdapter(
+                          child: _InlineError(
+                            message: controller.lastError.value,
+                            onDismiss: () => controller.lastError.value = '',
                           ),
                         ),
-                      ),
-                    SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(36, 26, 36, 0),
-                      sliver: SliverList.separated(
-                        itemCount: _timelineCount,
-                        separatorBuilder: (context, index) =>
-                            const SizedBox(height: 26),
-                        itemBuilder: (context, index) {
-                          if (controller.events.isEmpty) {
-                            return _WelcomeTimeline(
-                              connected: controller.connected.value,
-                              connectionLabel: controller.connectionLabel.value,
-                              workspaceCount: controller.workspaces.length,
-                              onPairing: () => _openPage(Routes.pairing),
+                      if (_gitChangeSummary != null)
+                        SliverPadding(
+                          padding: const EdgeInsets.fromLTRB(36, 26, 36, 0),
+                          sliver: SliverToBoxAdapter(
+                            child: GitChangeCard(
+                              summary: _gitChangeSummary!,
+                              onUndo: _confirmUndoChanges,
+                            ),
+                          ),
+                        ),
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(36, 26, 36, 0),
+                        sliver: SliverList.separated(
+                          itemCount: _timelineCount,
+                          separatorBuilder: (context, index) =>
+                              const SizedBox(height: 26),
+                          itemBuilder: (context, index) {
+                            if (controller.events.isEmpty) {
+                              return _WelcomeTimeline(
+                                connected: controller.connected.value,
+                                connectionLabel:
+                                    controller.connectionLabel.value,
+                                workspaceCount: controller.workspaces.length,
+                                onPairing: () => _openPage(Routes.pairing),
+                              );
+                            }
+                            final entry = _timelineEntries[index];
+                            if (entry.userEvent != null) {
+                              return AssistantBubble(event: entry.userEvent!);
+                            }
+                            return AssistantAnswerBlock(
+                              events: entry.events,
+                              completed:
+                                  controller.currentSessionId.value == null,
                             );
-                          }
-                          final entry = _timelineEntries[index];
-                          if (entry.userEvent != null) {
-                            return AssistantBubble(event: entry.userEvent!);
-                          }
-                          return AssistantAnswerBlock(
-                            events: entry.events,
-                            completed:
-                                controller.currentSessionId.value == null,
-                          );
-                        },
+                          },
+                        ),
                       ),
-                    ),
-                    SliverToBoxAdapter(
-                      child: SizedBox(key: _timelineBottomKey, height: 210),
-                    ),
-                  ],
+                      SliverToBoxAdapter(
+                        child: SizedBox(key: _timelineBottomKey, height: 210),
+                      ),
+                    ],
+                  ),
                 ),
                 Positioned(
                   left: 0,
@@ -154,15 +169,30 @@ class _MainPageState extends State<MainPage> {
                 Positioned(
                   left: 20,
                   right: 20,
-                  bottom: 20 + bottomInset,
-                  child: ComposerBar(
-                    controller: _promptController,
-                    enabled: controller.canUseWorkspace,
-                    context: controller.composerContext.value,
-                    onSend: _sendPrompt,
-                    onModelChanged: controller.setComposerModel,
-                    onReasoningChanged: controller.setReasoningEffort,
-                    onVoicePressed: _toggleVoiceInput,
+                  bottom: 2 + bottomInset,
+                  child: IgnorePointer(
+                    ignoring: !_composerVisible,
+                    child: AnimatedSlide(
+                      offset: _composerVisible
+                          ? Offset.zero
+                          : const Offset(0, 1.28),
+                      duration: composerSlideDuration,
+                      curve: Curves.easeOutQuart,
+                      child: AnimatedOpacity(
+                        opacity: _composerVisible ? 1 : 0,
+                        duration: composerFadeDuration,
+                        curve: Curves.easeOutCubic,
+                        child: ComposerBar(
+                          controller: _promptController,
+                          enabled: controller.canUseWorkspace,
+                          context: controller.composerContext.value,
+                          onSend: _sendPrompt,
+                          onModelChanged: controller.setComposerModel,
+                          onReasoningChanged: controller.setReasoningEffort,
+                          onVoicePressed: _toggleVoiceInput,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -239,6 +269,19 @@ class _MainPageState extends State<MainPage> {
     final next = (_scrollController.offset / 72).clamp(0.0, 1.0);
     if ((next - _headerBackgroundProgress).abs() < 0.02) return;
     setState(() => _headerBackgroundProgress = next);
+  }
+
+  bool _handleUserScroll(UserScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    final shouldShow = switch (notification.direction) {
+      ScrollDirection.forward => true,
+      ScrollDirection.reverse => false,
+      ScrollDirection.idle => _composerVisible,
+    };
+    if (shouldShow != _composerVisible) {
+      setState(() => _composerVisible = shouldShow);
+    }
+    return false;
   }
 
   void _scheduleScrollToLatest(String signature) {
@@ -421,7 +464,7 @@ class _HomeHeader extends StatelessWidget {
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: colors.textMuted,
-                        fontSize: 15,
+                        fontSize: 13,
                         fontWeight: FontWeight.w800,
                         height: 1.08,
                       ),

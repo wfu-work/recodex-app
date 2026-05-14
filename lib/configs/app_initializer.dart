@@ -2,8 +2,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 
-import '../app/controllers/bridge_controller.dart';
-import '../app/controllers/theme_controller.dart';
+import '../app/pages/main/bridge_controller.dart';
+import '../app/pages/settings/theme_controller.dart';
 
 class AppInitializer {
   const AppInitializer._();

@@ -4,10 +4,10 @@ import 'package:get/get.dart';
 import '../../components/liquid_background.dart';
 import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
-import '../../controllers/bridge_controller.dart';
-import '../../controllers/theme_controller.dart';
 import '../../routes/app_pages.dart';
 import '../../theme/recodex_theme.dart';
+import '../main/bridge_controller.dart';
+import 'theme_controller.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});

@@ -1,9 +1,10 @@
 from pathlib import Path
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "assets" / "brand" / "recodex_icon_1024.png"
+SOURCE = ROOT / "assets" / "images" / "recodex_icon_1024.png"
+ICON_SCALE = 1.32
 
 
 def rounded_rectangle(draw, box, radius, fill):
@@ -39,10 +40,25 @@ def radial_glow(image, center, radius, color, max_alpha):
     image.alpha_composite(overlay)
 
 
+def draw_round_cap(draw, point, width, fill):
+    radius = width // 2
+    x, y = point
+    draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=fill)
+
+
 def create_source():
     size = 1024
     image = Image.new("RGBA", (size, size), "#ffffff")
     draw = ImageDraw.Draw(image)
+
+    def scaled(value):
+        return int(round(512 + (value - 512) * ICON_SCALE))
+
+    def scaled_box(box):
+        return tuple(scaled(value) for value in box)
+
+    def scaled_point(point):
+        return tuple(scaled(value) for value in point)
 
     for index in range(size):
         t = index / (size - 1)
@@ -63,34 +79,50 @@ def create_source():
     shadow = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     shadow_draw = ImageDraw.Draw(shadow)
     shadow_draw.rounded_rectangle(
-        (230, 248, 822, 810),
-        radius=188,
+        scaled_box((230, 248, 822, 810)),
+        radius=scaled(512 + 188) - 512,
         fill=(39, 70, 219, 98),
     )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(scaled(512 + 20) - 512))
     image.alpha_composite(shadow)
 
     # Rounded terminal bubble.
     bubble = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     bubble_draw = ImageDraw.Draw(bubble)
-    for y in range(222, 784):
-        t = (y - 222) / (784 - 222)
+    bubble_box = scaled_box((230, 222, 822, 784))
+    bubble_radius = scaled(512 + 188) - 512
+    for y in range(bubble_box[1], bubble_box[3]):
+        t = (y - bubble_box[1]) / (bubble_box[3] - bubble_box[1])
         r = int(184 * (1 - t) + 52 * t)
         g = int(181 * (1 - t) + 72 * t)
         b = int(255 * (1 - t) + 244 * t)
-        bubble_draw.line((230, y, 822, y), fill=(r, g, b, 255))
+        bubble_draw.line((bubble_box[0], y, bubble_box[2], y), fill=(r, g, b, 255))
     mask = Image.new("L", (size, size), 0)
     mask_draw = ImageDraw.Draw(mask)
-    mask_draw.rounded_rectangle((230, 222, 822, 784), radius=188, fill=255)
+    mask_draw.rounded_rectangle(bubble_box, radius=bubble_radius, fill=255)
     image.alpha_composite(Image.composite(bubble, Image.new("RGBA", (size, size)), mask))
 
     highlight = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     highlight_draw = ImageDraw.Draw(highlight)
-    highlight_draw.ellipse((300, 194, 752, 390), fill=(255, 255, 255, 52))
+    highlight_draw.ellipse(scaled_box((300, 194, 752, 390)), fill=(255, 255, 255, 52))
     image.alpha_composite(highlight)
     draw = ImageDraw.Draw(image)
 
-    draw.line((366, 444, 466, 546, 366, 648), fill="#edf6ff", width=52, joint="curve")
-    draw.line((552, 660, 718, 660), fill="#edf6ff", width=52)
+    stroke_width = scaled(512 + 52) - 512
+    prompt_points = [scaled_point((366, 444)), scaled_point((466, 546)), scaled_point((366, 648))]
+    draw.line(
+        (*prompt_points[0], *prompt_points[1], *prompt_points[2]),
+        fill="#edf6ff",
+        width=stroke_width,
+        joint="curve",
+    )
+    draw_round_cap(draw, prompt_points[0], stroke_width, "#edf6ff")
+    draw_round_cap(draw, prompt_points[2], stroke_width, "#edf6ff")
+
+    cursor_points = [scaled_point((552, 660)), scaled_point((718, 660))]
+    draw.line((*cursor_points[0], *cursor_points[1]), fill="#edf6ff", width=stroke_width)
+    draw_round_cap(draw, cursor_points[0], stroke_width, "#edf6ff")
+    draw_round_cap(draw, cursor_points[1], stroke_width, "#edf6ff")
 
     SOURCE.parent.mkdir(parents=True, exist_ok=True)
     image.save(SOURCE)
