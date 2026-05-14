@@ -15,7 +15,7 @@ class AboutPage extends StatelessWidget {
         backgroundColor: Colors.transparent,
         appBar: const LiquidPageAppBar(title: '关于'),
         body: ListView(
-          padding: const EdgeInsets.fromLTRB(30, 90, 30, 34),
+          padding: const EdgeInsets.fromLTRB(30, 40, 30, 34),
           children: [
             const _HeroBrand(),
             const SizedBox(height: 70),
@@ -24,7 +24,7 @@ class AboutPage extends StatelessWidget {
               opacity: 0.7,
               padding: const EdgeInsets.symmetric(horizontal: 38, vertical: 34),
               child: Text(
-                '一个自用的 Remodex 类工具，旨在通过手机安全地远程操作电脑上的 Codex 工作流。',
+                '一个自用的 Recodex 类工具，旨在通过手机安全地远程操作电脑上的 Codex 工作流。',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 22,
@@ -79,18 +79,6 @@ class _HeroBrand extends StatelessWidget {
         Container(
           width: 190,
           height: 190,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(44),
-            color: colors.surfaceOverlay,
-            border: Border.all(color: colors.glassBorder),
-            boxShadow: [
-              BoxShadow(
-                color: colors.glassShadow.withValues(alpha: 0.18),
-                offset: const Offset(0, 20),
-                blurRadius: 42,
-              ),
-            ],
-          ),
           padding: const EdgeInsets.all(18),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(34),
@@ -102,7 +90,7 @@ class _HeroBrand extends StatelessWidget {
         ),
         const SizedBox(height: 54),
         Text(
-          'Remodex\nCompanion',
+          'Recodex\nCompanion',
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.displaySmall,
         ),

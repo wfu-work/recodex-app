@@ -954,7 +954,7 @@ class ComposerBar extends StatelessWidget {
                 warning: this.context.requireConfirmGitWrite,
                 trailing: Icons.keyboard_arrow_down,
               ),
-              const SizedBox(width: 28),
+              const SizedBox(width: 18),
               _ContextPill(
                 icon: Icons.account_tree_outlined,
                 label: this.context.branch.isEmpty

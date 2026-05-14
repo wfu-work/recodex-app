@@ -23,6 +23,7 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> {
   static const double _headerReservedHeight = 142;
+  static const Curve _composerDampedCurve = Cubic(0.18, 0.89, 0.32, 1.08);
 
   final BridgeController controller = Get.find();
   final TextEditingController _promptController = TextEditingController();
@@ -60,10 +61,10 @@ class _MainPageState extends State<MainPage> {
       final bottomInset = mediaQuery.padding.bottom;
       final composerSlideDuration = mediaQuery.disableAnimations
           ? Duration.zero
-          : const Duration(milliseconds: 240);
+          : const Duration(milliseconds: 430);
       final composerFadeDuration = mediaQuery.disableAnimations
           ? Duration.zero
-          : const Duration(milliseconds: 180);
+          : const Duration(milliseconds: 300);
       final isDark = Theme.of(context).brightness == Brightness.dark;
       return LiquidBackground(
         child: AnnotatedRegion<SystemUiOverlayStyle>(
@@ -177,7 +178,7 @@ class _MainPageState extends State<MainPage> {
                           ? Offset.zero
                           : const Offset(0, 1.28),
                       duration: composerSlideDuration,
-                      curve: Curves.easeOutQuart,
+                      curve: _composerDampedCurve,
                       child: AnimatedOpacity(
                         opacity: _composerVisible ? 1 : 0,
                         duration: composerFadeDuration,
