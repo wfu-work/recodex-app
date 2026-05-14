@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../components/liquid_background.dart';
 import '../components/liquid_glass.dart';
 import '../components/liquid_page_app_bar.dart';
+import '../theme/recodex_theme.dart';
 
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
@@ -15,42 +16,50 @@ class AboutPage extends StatelessWidget {
         appBar: const LiquidPageAppBar(title: '关于'),
         body: ListView(
           padding: const EdgeInsets.fromLTRB(30, 90, 30, 34),
-          children: const [
-            _HeroBrand(),
-            SizedBox(height: 70),
+          children: [
+            const _HeroBrand(),
+            const SizedBox(height: 70),
             LiquidGlass(
               radius: 30,
               opacity: 0.7,
-              padding: EdgeInsets.symmetric(horizontal: 38, vertical: 34),
+              padding: const EdgeInsets.symmetric(horizontal: 38, vertical: 34),
               child: Text(
                 '一个自用的 Remodex 类工具，旨在通过手机安全地远程操作电脑上的 Codex 工作流。',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 22,
                   height: 1.55,
-                  color: Color(0xff303132),
+                  color: context.recodexColors.text,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
-            SizedBox(height: 74),
-            _AboutRow(icon: Icons.public, title: '官方网站', value: 'remodex.io'),
-            SizedBox(height: 28),
-            _AboutRow(
+            const SizedBox(height: 74),
+            const _AboutRow(
+              icon: Icons.public,
+              title: '官方网站',
+              value: 'remodex.io',
+            ),
+            const SizedBox(height: 28),
+            const _AboutRow(
               icon: Icons.group_outlined,
               title: '开发者',
               value: 'Remodex Team',
             ),
-            SizedBox(height: 28),
-            _AboutRow(
+            const SizedBox(height: 28),
+            const _AboutRow(
               icon: Icons.description_outlined,
               title: '开源协议',
               value: 'MIT License',
             ),
-            SizedBox(height: 112),
+            const SizedBox(height: 112),
             Text(
               '© 2024 Remodex. All rights reserved.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Color(0xff747878), fontSize: 15),
+              style: TextStyle(
+                color: context.recodexColors.textMuted,
+                fontSize: 15,
+              ),
             ),
           ],
         ),
@@ -64,23 +73,32 @@ class _HeroBrand extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return Column(
       children: [
         Container(
           width: 190,
           height: 190,
           decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.white.withValues(alpha: 0.84),
+            borderRadius: BorderRadius.circular(44),
+            color: colors.surfaceOverlay,
+            border: Border.all(color: colors.glassBorder),
             boxShadow: [
               BoxShadow(
-                color: Colors.white.withValues(alpha: 0.9),
+                color: colors.glassShadow.withValues(alpha: 0.18),
+                offset: const Offset(0, 20),
                 blurRadius: 42,
-                spreadRadius: 18,
               ),
             ],
           ),
-          child: const Icon(Icons.terminal, color: Color(0xff005fc7), size: 78),
+          padding: const EdgeInsets.all(18),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(34),
+            child: Image.asset(
+              'assets/brand/recodex_icon_1024.png',
+              fit: BoxFit.cover,
+            ),
+          ),
         ),
         const SizedBox(height: 54),
         Text(
@@ -92,13 +110,14 @@ class _HeroBrand extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.78),
+            color: colors.surfaceOverlay,
             borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: colors.glassBorder),
           ),
-          child: const Text(
+          child: Text(
             '版本 v1.0.4',
             style: TextStyle(
-              color: Color(0xff005fc7),
+              color: colors.icon,
               fontWeight: FontWeight.w900,
               fontSize: 16,
             ),
@@ -122,23 +141,32 @@ class _AboutRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return LiquidGlass(
       radius: 28,
       opacity: 0.7,
       padding: const EdgeInsets.symmetric(horizontal: 38, vertical: 22),
       child: Row(
         children: [
-          Icon(icon, size: 30, color: const Color(0xff4f5356)),
+          Icon(icon, size: 30, color: colors.icon),
           const SizedBox(width: 22),
           Expanded(
             child: Text(
               title,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+              style: TextStyle(
+                color: colors.text,
+                fontSize: 18,
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ),
           Text(
             value,
-            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ],
       ),

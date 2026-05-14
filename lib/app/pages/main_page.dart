@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import '../components/chat_components.dart';
 import '../components/liquid_background.dart';
@@ -7,7 +8,9 @@ import '../components/liquid_glass.dart';
 import '../components/menu_drawer.dart';
 import '../components/status_chips.dart';
 import '../controllers/bridge_controller.dart';
+import '../controllers/theme_controller.dart';
 import '../models/bridge_models.dart';
+import '../theme/recodex_theme.dart';
 import 'pairing_page.dart';
 import 'settings_page.dart';
 
@@ -19,19 +22,38 @@ class MainPage extends StatefulWidget {
 }
 
 class _MainPageState extends State<MainPage> {
+  static const double _headerReservedHeight = 142;
+
   final BridgeController controller = Get.find();
   final TextEditingController _promptController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  final GlobalKey _timelineBottomKey = GlobalKey();
+  final stt.SpeechToText _speech = stt.SpeechToText();
+  double _headerBackgroundProgress = 0;
+  bool _listening = false;
+  String _lastAutoScrollSignature = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_updateHeaderBackground);
+  }
 
   @override
   void dispose() {
+    _scrollController
+      ..removeListener(_updateHeaderBackground)
+      ..dispose();
     _promptController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Obx(
-      () => LiquidBackground(
+    return Obx(() {
+      Get.find<ThemeController>().fontScale.value;
+      _scheduleScrollToLatest(_timelineSignature);
+      return LiquidBackground(
         child: Scaffold(
           backgroundColor: Colors.transparent,
           drawer: RemodexDrawer(
@@ -49,16 +71,10 @@ class _MainPageState extends State<MainPage> {
             child: Stack(
               children: [
                 CustomScrollView(
+                  controller: _scrollController,
                   slivers: [
-                    SliverToBoxAdapter(
-                      child: _HomeHeader(
-                        path: _workspacePath,
-                        added: _diffAdded,
-                        removed: _diffRemoved,
-                        onRefreshGit: controller.canUseWorkspace
-                            ? () => controller.gitStatus(includeDiff: true)
-                            : null,
-                      ),
+                    const SliverToBoxAdapter(
+                      child: SizedBox(height: _headerReservedHeight),
                     ),
                     if (controller.lastError.value.isNotEmpty)
                       SliverToBoxAdapter(
@@ -67,8 +83,18 @@ class _MainPageState extends State<MainPage> {
                           onDismiss: () => controller.lastError.value = '',
                         ),
                       ),
+                    if (_gitChangeSummary != null)
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(36, 26, 36, 0),
+                        sliver: SliverToBoxAdapter(
+                          child: GitChangeCard(
+                            summary: _gitChangeSummary!,
+                            onUndo: _confirmUndoChanges,
+                          ),
+                        ),
+                      ),
                     SliverPadding(
-                      padding: const EdgeInsets.fromLTRB(36, 26, 36, 140),
+                      padding: const EdgeInsets.fromLTRB(36, 26, 36, 0),
                       sliver: SliverList.separated(
                         itemCount: _timelineCount,
                         separatorBuilder: (context, index) =>
@@ -79,17 +105,39 @@ class _MainPageState extends State<MainPage> {
                               connected: controller.connected.value,
                               connectionLabel: controller.connectionLabel.value,
                               workspaceCount: controller.workspaces.length,
+                              onPairing: () => _openPage(const PairingPage()),
                             );
                           }
-                          final event = controller.events[index];
-                          if (event.kind == 'tool') {
-                            return ToolCallRow(title: event.text, status: '完成');
+                          final entry = _timelineEntries[index];
+                          if (entry.userEvent != null) {
+                            return AssistantBubble(event: entry.userEvent!);
                           }
-                          return AssistantBubble(event: event);
+                          return AssistantAnswerBlock(
+                            events: entry.events,
+                            completed:
+                                controller.currentSessionId.value == null,
+                          );
                         },
                       ),
                     ),
+                    SliverToBoxAdapter(
+                      child: SizedBox(key: _timelineBottomKey, height: 210),
+                    ),
                   ],
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 0,
+                  child: _HomeHeader(
+                    path: _workspaceName,
+                    added: _changedFilesAdded,
+                    removed: _changedFilesRemoved,
+                    backgroundProgress: _headerBackgroundProgress,
+                    onRefreshGit: controller.canUseWorkspace
+                        ? () => controller.gitStatus(includeDiff: true)
+                        : null,
+                  ),
                 ),
                 Positioned(
                   left: 36,
@@ -98,35 +146,174 @@ class _MainPageState extends State<MainPage> {
                   child: ComposerBar(
                     controller: _promptController,
                     enabled: controller.canUseWorkspace,
+                    context: controller.composerContext.value,
                     onSend: _sendPrompt,
+                    onModelChanged: controller.setComposerModel,
+                    onReasoningChanged: controller.setReasoningEffort,
+                    onVoicePressed: _toggleVoiceInput,
+                    listening: _listening,
                   ),
                 ),
               ],
             ),
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 
   int get _timelineCount =>
-      controller.events.isEmpty ? 1 : controller.events.length;
+      controller.events.isEmpty ? 1 : _timelineEntries.length;
 
-  String get _workspacePath {
-    final workspace = controller.selectedWorkspace.value;
-    if (workspace == null) return '未选择工作区';
-    return workspace.path.isEmpty ? workspace.name : workspace.path;
+  List<_TimelineEntry> get _timelineEntries {
+    final entries = <_TimelineEntry>[];
+    final answerEvents = <SessionEvent>[];
+
+    void flushAnswer() {
+      if (answerEvents.isEmpty) return;
+      entries.add(_TimelineEntry.answer(List.of(answerEvents)));
+      answerEvents.clear();
+    }
+
+    for (final event in controller.events) {
+      if (event.kind == 'user') {
+        flushAnswer();
+        entries.add(_TimelineEntry.user(event));
+      } else {
+        answerEvents.add(event);
+      }
+    }
+    flushAnswer();
+    return entries;
   }
 
-  int get _diffAdded => _parseDiffStat(controller.gitSnapshot.value?.stat).$1;
+  String get _workspaceName {
+    final workspace = controller.selectedWorkspace.value;
+    if (workspace == null) return '未选择工作区';
+    final source = workspace.path.isEmpty ? workspace.name : workspace.path;
+    return _lastPathSegment(source);
+  }
 
-  int get _diffRemoved => _parseDiffStat(controller.gitSnapshot.value?.stat).$2;
+  int get _changedFilesAdded =>
+      _parseChangedFileCounts(controller.gitSnapshot.value).$1;
+
+  int get _changedFilesRemoved =>
+      _parseChangedFileCounts(controller.gitSnapshot.value).$2;
+
+  GitChangeSummary? get _gitChangeSummary {
+    final snapshot = controller.gitSnapshot.value;
+    if (snapshot == null) return null;
+    return GitChangeSummary.tryParse(
+      snapshot.numstat.isNotEmpty ? snapshot.numstat : snapshot.stat,
+    );
+  }
+
+  String get _timelineSignature {
+    final last = controller.events.isEmpty ? '' : controller.events.last.text;
+    return '${controller.events.length}:${controller.currentSessionId.value}:$last';
+  }
+
+  void _updateHeaderBackground() {
+    final next = (_scrollController.offset / 72).clamp(0.0, 1.0);
+    if ((next - _headerBackgroundProgress).abs() < 0.02) return;
+    setState(() => _headerBackgroundProgress = next);
+  }
+
+  void _scheduleScrollToLatest(String signature) {
+    if (signature == _lastAutoScrollSignature) return;
+    _lastAutoScrollSignature = signature;
+    _scrollToLatestAfterLayout();
+    Future<void>.delayed(
+      const Duration(milliseconds: 80),
+      _scrollToLatestAfterLayout,
+    );
+    Future<void>.delayed(
+      const Duration(milliseconds: 180),
+      _scrollToLatestAfterLayout,
+    );
+  }
+
+  void _scrollToLatestAfterLayout() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      final bottomContext = _timelineBottomKey.currentContext;
+      if (bottomContext != null) {
+        Scrollable.ensureVisible(
+          bottomContext,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
+          alignment: 1,
+        );
+        return;
+      }
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
 
   void _sendPrompt() {
     final prompt = _promptController.text.trim();
     if (prompt.isEmpty) return;
     controller.startSession(prompt);
     _promptController.clear();
+  }
+
+  Future<void> _toggleVoiceInput() async {
+    if (_listening) {
+      await _speech.stop();
+      if (mounted) setState(() => _listening = false);
+      return;
+    }
+    final available = await _speech.initialize(
+      onStatus: (status) {
+        if ((status == 'done' || status == 'notListening') && mounted) {
+          setState(() => _listening = false);
+        }
+      },
+      onError: (error) {
+        controller.lastError.value = error.errorMsg;
+        if (mounted) setState(() => _listening = false);
+      },
+    );
+    if (!available) {
+      controller.lastError.value = '当前设备不可用语音输入或麦克风权限未开启。';
+      return;
+    }
+    setState(() => _listening = true);
+    await _speech.listen(
+      localeId: 'zh_CN',
+      onResult: (result) {
+        _promptController.text = result.recognizedWords;
+        _promptController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _promptController.text.length),
+        );
+      },
+    );
+  }
+
+  Future<void> _confirmUndoChanges() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('撤销当前修改？'),
+        content: const Text('这会还原当前工作区中未提交的文件修改。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('撤销'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    controller.gitUndo(confirm: true);
   }
 
   void _openPage(Widget page) {
@@ -137,87 +324,156 @@ class _MainPageState extends State<MainPage> {
   }
 }
 
+class _TimelineEntry {
+  const _TimelineEntry._({required this.events, this.userEvent});
+
+  factory _TimelineEntry.user(SessionEvent event) {
+    return _TimelineEntry._(events: const [], userEvent: event);
+  }
+
+  factory _TimelineEntry.answer(List<SessionEvent> events) {
+    return _TimelineEntry._(events: events);
+  }
+
+  final List<SessionEvent> events;
+  final SessionEvent? userEvent;
+}
+
+String _lastPathSegment(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) return trimmed;
+  final normalized = trimmed.replaceAll('\\', '/');
+  final parts = normalized
+      .split('/')
+      .where((part) => part.trim().isNotEmpty)
+      .toList();
+  return parts.isEmpty ? trimmed : parts.last;
+}
+
 class _HomeHeader extends StatelessWidget {
   const _HomeHeader({
     required this.path,
     required this.added,
     required this.removed,
+    required this.backgroundProgress,
     required this.onRefreshGit,
   });
 
   final String path;
   final int added;
   final int removed;
+  final double backgroundProgress;
   final VoidCallback? onRefreshGit;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(36, 32, 24, 20),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Builder(
-            builder: (context) => LiquidIconButton(
-              icon: Icons.menu,
-              tooltip: '菜单',
-              onPressed: () => Scaffold.of(context).openDrawer(),
+    final colors = context.recodexColors;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.headerColor.withValues(
+          alpha: 0.18 + backgroundProgress * 0.78,
+        ),
+        border: Border(
+          bottom: BorderSide(
+            color: colors.headerBorder.withValues(
+              alpha: backgroundProgress * 0.52,
             ),
           ),
-          const SizedBox(width: 18),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Text(
-                  'Remodex',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontSize: 34,
-                    letterSpacing: -0.5,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  path,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Color(0xff747878),
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                    height: 1.08,
-                  ),
-                ),
-              ],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: colors.headerShadow.withValues(
+              alpha: backgroundProgress * 0.11,
             ),
-          ),
-          const SizedBox(width: 12),
-          GestureDetector(
-            onTap: onRefreshGit,
-            child: DiffChip(added: added, removed: removed),
+            offset: const Offset(0, 10),
+            blurRadius: 24,
           ),
         ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(36, 32, 24, 20),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Builder(
+              builder: (context) => LiquidIconButton(
+                icon: Icons.menu,
+                tooltip: '菜单',
+                onPressed: () => Scaffold.of(context).openDrawer(),
+              ),
+            ),
+            const SizedBox(width: 18),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text(
+                    'Remodex',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.headlineMedium?.copyWith(fontSize: 34),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    path,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: colors.textMuted,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      height: 1.08,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            GestureDetector(
+              onTap: onRefreshGit,
+              child: DiffChip(added: added, removed: removed),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-(int, int) _parseDiffStat(String? stat) {
-  if (stat == null || stat.trim().isEmpty) return (0, 0);
-  var added = 0;
-  var removed = 0;
-  for (final line in stat.split('\n')) {
-    final insertions = RegExp(r'(\d+)\s+insertion').firstMatch(line);
-    final deletions = RegExp(r'(\d+)\s+deletion').firstMatch(line);
-    if (insertions != null) {
-      added += int.tryParse(insertions.group(1) ?? '') ?? 0;
-    }
-    if (deletions != null) {
-      removed += int.tryParse(deletions.group(1) ?? '') ?? 0;
-    }
+(int, int) _parseChangedFileCounts(GitSnapshot? snapshot) {
+  if (snapshot == null) return (0, 0);
+  var addedFiles = 0;
+  var removedFiles = 0;
+  final seenAdded = <String>{};
+  final seenRemoved = <String>{};
+
+  for (final line in snapshot.numstat.split('\n')) {
+    final parts = line.split('\t');
+    if (parts.length < 3) continue;
+    final path = parts.sublist(2).join('\t').trim();
+    if (path.isEmpty) continue;
+    final added = int.tryParse(parts[0]) ?? 0;
+    final removed = int.tryParse(parts[1]) ?? 0;
+    if (added > 0 && seenAdded.add(path)) addedFiles += 1;
+    if (removed > 0 && seenRemoved.add(path)) removedFiles += 1;
   }
-  return (added, removed);
+
+  if (addedFiles != 0 || removedFiles != 0) return (addedFiles, removedFiles);
+
+  for (final line in snapshot.status.split('\n')) {
+    if (line.length < 3) continue;
+    final code = line.substring(0, 2);
+    final path = line.substring(3).trim();
+    if (path.isEmpty) continue;
+    final hasAddedChange =
+        code.contains('A') || code.contains('M') || code.contains('?');
+    final hasRemovedChange = code.contains('D');
+    if (hasAddedChange && seenAdded.add(path)) addedFiles += 1;
+    if (hasRemovedChange && seenRemoved.add(path)) removedFiles += 1;
+  }
+
+  return (addedFiles, removedFiles);
 }
 
 class _WelcomeTimeline extends StatelessWidget {
@@ -225,11 +481,13 @@ class _WelcomeTimeline extends StatelessWidget {
     required this.connected,
     required this.connectionLabel,
     required this.workspaceCount,
+    required this.onPairing,
   });
 
   final bool connected;
   final String connectionLabel;
   final int workspaceCount;
+  final VoidCallback onPairing;
 
   @override
   Widget build(BuildContext context) {
@@ -258,11 +516,16 @@ class _WelcomeTimeline extends StatelessWidget {
         AssistantBubble(
           event: SessionEvent(
             kind: 'message',
-            text: '选择一个工作区，然后输入任务。你可以让我分析项目结构、修改代码、运行测试，或在提交前检查 Git 状态。',
+            text: '我已准备好在当前工作区执行任务。你可以直接描述要改的功能、要排查的问题，或让我先检查项目和 Git 状态。',
           ),
         ),
         const SizedBox(height: 26),
-        ToolCallRow(title: title, status: status, icon: icon),
+        ToolCallRow(
+          title: title,
+          status: status,
+          icon: icon,
+          onTap: connected ? null : onPairing,
+        ),
       ],
     );
   }
@@ -276,6 +539,7 @@ class _InlineError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return Padding(
       padding: const EdgeInsets.fromLTRB(36, 8, 36, 0),
       child: LiquidGlass(
@@ -284,7 +548,7 @@ class _InlineError extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(18, 12, 8, 12),
         child: Row(
           children: [
-            const Icon(Icons.warning_amber_rounded, color: Color(0xffba1a1a)),
+            Icon(Icons.warning_amber_rounded, color: colors.error),
             const SizedBox(width: 10),
             Expanded(child: Text(message)),
             IconButton(onPressed: onDismiss, icon: const Icon(Icons.close)),

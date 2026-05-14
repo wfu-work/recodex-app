@@ -14,6 +14,7 @@ class BridgeController extends GetxController {
   final deviceName = 'Flutter phone'.obs;
   final deviceId = 'flutter_${DateTime.now().millisecondsSinceEpoch}'.obs;
   final deviceKey = ''.obs;
+  final pairingToken = ''.obs;
   final connectionLabel = 'offline'.obs;
   final lastError = ''.obs;
   final connected = false.obs;
@@ -26,6 +27,7 @@ class BridgeController extends GetxController {
 
   final selectedWorkspace = Rxn<WorkspaceInfo>();
   final gitSnapshot = Rxn<GitSnapshot>();
+  final composerContext = ComposerContext.fallback.obs;
   final currentSessionId = RxnString();
 
   WebSocket? _socket;
@@ -34,6 +36,7 @@ class BridgeController extends GetxController {
   int _messageSeq = 0;
   bool _manualDisconnect = false;
   String? _requestedEventsSessionId;
+  String? _requestedEventsPrompt;
 
   bool get canUseWorkspace =>
       connected.value && selectedWorkspace.value != null;
@@ -69,6 +72,13 @@ class BridgeController extends GetxController {
           ? 'Flutter phone'
           : inputDeviceName.trim();
       final wsUrl = '${baseUrl.value.replaceFirst(RegExp('^http'), 'ws')}/ws';
+      final trimmedToken = token.trim();
+      if (trimmedToken.isNotEmpty) {
+        pairingToken.value = trimmedToken;
+        unawaited(
+          _storage.write(key: 'recodex_pairing_token', value: trimmedToken),
+        );
+      }
       _socket = await WebSocket.connect(wsUrl);
       _socketSubscription = _socket!.listen(
         _handleRawMessage,
@@ -79,7 +89,7 @@ class BridgeController extends GetxController {
         'deviceId': deviceId.value,
         'deviceName': deviceName.value,
         'deviceKey': deviceKey.value,
-        'token': token.trim(),
+        'token': trimmedToken.isNotEmpty ? trimmedToken : pairingToken.value,
       });
     } catch (error) {
       _fail(error);
@@ -115,18 +125,34 @@ class BridgeController extends GetxController {
     gitSnapshot.value = null;
     currentSessionId.value = null;
     events.clear();
+    refreshContext();
+    gitStatus(includeDiff: true);
     _loadLatestSessionEventsForSelectedWorkspace();
   }
 
   void startSession(String prompt) {
     final workspace = selectedWorkspace.value;
     if (workspace == null) return;
-    events.clear();
+    final trimmedPrompt = prompt.trim();
+    if (trimmedPrompt.isEmpty) return;
+    events.add(SessionEvent(kind: 'user', text: trimmedPrompt));
     currentSessionId.value = null;
     _send('session.start', {
       'workspace': workspace.name,
-      'prompt': prompt.trim(),
+      'prompt': trimmedPrompt,
+      'model': composerContext.value.model,
+      'reasoningEffort': composerContext.value.reasoningEffort,
     });
+  }
+
+  void setComposerModel(String model) {
+    composerContext.value = composerContext.value.copyWith(model: model);
+  }
+
+  void setReasoningEffort(String effort) {
+    composerContext.value = composerContext.value.copyWith(
+      reasoningEffort: effort,
+    );
   }
 
   void interrupt() {
@@ -159,6 +185,12 @@ class BridgeController extends GetxController {
     _send('git.push', {'workspace': workspace.name, 'confirm': confirm});
   }
 
+  void gitUndo({required bool confirm}) {
+    final workspace = selectedWorkspace.value;
+    if (workspace == null) return;
+    _send('git.undo', {'workspace': workspace.name, 'confirm': confirm});
+  }
+
   Future<PairingInfo?> fetchPairing(String inputBaseUrl) async {
     busy.value = true;
     lastError.value = '';
@@ -177,6 +209,10 @@ class BridgeController extends GetxController {
           jsonDecode(body) as Map<String, dynamic>,
         );
         baseUrl.value = info.baseUrl;
+        if (info.token.isNotEmpty) {
+          pairingToken.value = info.token;
+          unawaited(_storeConnectionHints());
+        }
         return info;
       } finally {
         client.close();
@@ -193,15 +229,22 @@ class BridgeController extends GetxController {
     _send('device.list', {});
   }
 
+  void refreshContext() {
+    final workspace = selectedWorkspace.value;
+    _send('context.get', {'workspace': workspace?.name ?? ''});
+  }
+
   void revokeDevice(String id) {
     _send('device.revoke', {'deviceId': id});
   }
 
   Future<void> clearStoredCredentials() async {
     deviceKey.value = '';
+    pairingToken.value = '';
     lastError.value = '';
     try {
       await _storage.delete(key: 'recodex_device_key');
+      await _storage.delete(key: 'recodex_pairing_token');
     } catch (_) {
       lastError.value = 'Secure storage is unavailable on this target.';
     }
@@ -226,10 +269,12 @@ class BridgeController extends GetxController {
           if (newKey.isNotEmpty) {
             deviceKey.value = newKey;
           }
-          unawaited(_storeCredentials());
+          pairingToken.value = '';
+          unawaited(_storeCredentials(clearPairingToken: true));
           _send('workspace.list', {});
           _send('session.list', {});
           _send('device.list', {});
+          _send('context.get', {});
         case 'workspace.list.result':
           workspaces.assignAll(
             ((map['workspaces'] as List?) ?? const []).whereType<Map>().map(
@@ -239,6 +284,8 @@ class BridgeController extends GetxController {
           selectedWorkspace.value ??= workspaces.isEmpty
               ? null
               : workspaces.first;
+          refreshContext();
+          gitStatus(includeDiff: true);
           _loadLatestSessionEventsForSelectedWorkspace();
         case 'session.list.result':
           sessions.assignAll(
@@ -253,22 +300,34 @@ class BridgeController extends GetxController {
               (item) => DeviceInfo.fromJson(item.cast<String, dynamic>()),
             ),
           );
+        case 'context.result':
+          composerContext.value = ComposerContext.fromJson(map);
         case 'session.created':
           final record = SessionRecord.fromJson(map);
           currentSessionId.value = record.id;
           sessions.insert(0, record);
+          events.add(
+            const SessionEvent(kind: 'running', text: '正在启动 Codex 任务...'),
+          );
         case 'session.event':
-          events.add(SessionEvent.fromJson(map));
+          final event = SessionEvent.fromJson(map);
+          if (!_hasDuplicateUserEvent(event)) {
+            events.add(event);
+          }
         case 'session.done':
           events.add(SessionEvent.fromJson(map));
           currentSessionId.value = null;
           _send('session.list', {});
+          gitStatus(includeDiff: true);
         case 'session.events.result':
           final sessionId = map['sessionId'] as String? ?? '';
           if (sessionId != _requestedEventsSessionId) break;
           events.assignAll(
-            ((map['events'] as List?) ?? const []).whereType<Map>().map(
-              (item) => SessionEvent.fromJson(item.cast<String, dynamic>()),
+            _withPromptEvent(
+              ((map['events'] as List?) ?? const []).whereType<Map>().map(
+                (item) => SessionEvent.fromJson(item.cast<String, dynamic>()),
+              ),
+              _requestedEventsPrompt,
             ),
           );
         case 'session.error':
@@ -278,9 +337,11 @@ class BridgeController extends GetxController {
               'Unknown error';
           if (map['code'] == 'auth_failed') {
             deviceKey.value = '';
+            pairingToken.value = '';
             connected.value = false;
             connectionLabel.value = 'failed';
             unawaited(_storage.delete(key: 'recodex_device_key'));
+            unawaited(_storage.delete(key: 'recodex_pairing_token'));
             unawaited(_closeSocket());
           }
           lastError.value = message;
@@ -296,7 +357,15 @@ class BridgeController extends GetxController {
           );
         case 'git.status.result':
         case 'git.diff.result':
-          gitSnapshot.value = GitSnapshot.fromJson(map);
+          final snapshot = GitSnapshot.fromJson(map);
+          gitSnapshot.value = snapshot;
+          if (snapshot.branch.isNotEmpty) {
+            composerContext.value = composerContext.value.copyWith(
+              branch: snapshot.branch,
+            );
+          }
+        case 'git.undo.result':
+          gitStatus(includeDiff: true);
         case 'device.revoke.result':
           final revokedId = map['deviceId'] as String? ?? '';
           devices.removeWhere((device) => device.id == revokedId);
@@ -359,7 +428,30 @@ class BridgeController extends GetxController {
     if (_requestedEventsSessionId == latest.id && events.isNotEmpty) return;
 
     _requestedEventsSessionId = latest.id;
+    _requestedEventsPrompt = latest.prompt;
     _send('session.events', {'sessionId': latest.id});
+  }
+
+  bool _hasDuplicateUserEvent(SessionEvent event) {
+    return event.kind == 'user' &&
+        events.any(
+          (existing) =>
+              existing.kind == 'user' &&
+              existing.text.trim() == event.text.trim(),
+        );
+  }
+
+  List<SessionEvent> _withPromptEvent(
+    Iterable<SessionEvent> source,
+    String? prompt,
+  ) {
+    final loadedEvents = source.toList();
+    final trimmedPrompt = prompt?.trim() ?? '';
+    if (trimmedPrompt.isEmpty ||
+        loadedEvents.any((event) => event.kind == 'user')) {
+      return loadedEvents;
+    }
+    return [SessionEvent(kind: 'user', text: trimmedPrompt), ...loadedEvents];
   }
 
   Future<void> _loadStoredCredentials() async {
@@ -368,6 +460,9 @@ class BridgeController extends GetxController {
       final storedDeviceName = await _storage.read(key: 'recodex_device_name');
       final storedDeviceId = await _storage.read(key: 'recodex_device_id');
       final storedDeviceKey = await _storage.read(key: 'recodex_device_key');
+      final storedPairingToken = await _storage.read(
+        key: 'recodex_pairing_token',
+      );
       if (storedBaseUrl != null && storedBaseUrl.isNotEmpty) {
         baseUrl.value = _normalizeBaseUrl(storedBaseUrl);
       }
@@ -381,6 +476,11 @@ class BridgeController extends GetxController {
       }
       if (storedDeviceKey != null && storedDeviceKey.isNotEmpty) {
         deviceKey.value = storedDeviceKey;
+      }
+      if (storedPairingToken != null && storedPairingToken.isNotEmpty) {
+        pairingToken.value = storedPairingToken;
+      }
+      if (deviceKey.value.isNotEmpty || pairingToken.value.isNotEmpty) {
         unawaited(_autoConnect());
       }
     } catch (_) {
@@ -388,12 +488,29 @@ class BridgeController extends GetxController {
     }
   }
 
-  Future<void> _storeCredentials() async {
+  Future<void> _storeConnectionHints() async {
     try {
       await _storage.write(key: 'recodex_base_url', value: baseUrl.value);
       await _storage.write(key: 'recodex_device_name', value: deviceName.value);
       await _storage.write(key: 'recodex_device_id', value: deviceId.value);
+      if (pairingToken.value.isNotEmpty) {
+        await _storage.write(
+          key: 'recodex_pairing_token',
+          value: pairingToken.value,
+        );
+      }
+    } catch (_) {
+      // Keep the in-memory values for the current connection if storage is unavailable.
+    }
+  }
+
+  Future<void> _storeCredentials({bool clearPairingToken = false}) async {
+    try {
+      await _storeConnectionHints();
       await _storage.write(key: 'recodex_device_key', value: deviceKey.value);
+      if (clearPairingToken) {
+        await _storage.delete(key: 'recodex_pairing_token');
+      }
     } catch (_) {
       // Keep the in-memory key for the current connection if secure storage is unavailable.
     }
@@ -402,14 +519,14 @@ class BridgeController extends GetxController {
   Future<void> _autoConnect() {
     return connect(
       inputBaseUrl: baseUrl.value,
-      token: '',
+      token: pairingToken.value,
       inputDeviceName: deviceName.value,
     );
   }
 
   void _scheduleReconnect() {
     if (_manualDisconnect ||
-        deviceKey.value.isEmpty ||
+        (deviceKey.value.isEmpty && pairingToken.value.isEmpty) ||
         _reconnectTimer != null) {
       return;
     }
@@ -418,7 +535,7 @@ class BridgeController extends GetxController {
       _reconnectTimer = null;
       if (!_manualDisconnect &&
           !connected.value &&
-          deviceKey.value.isNotEmpty) {
+          (deviceKey.value.isNotEmpty || pairingToken.value.isNotEmpty)) {
         unawaited(_autoConnect());
       }
     });

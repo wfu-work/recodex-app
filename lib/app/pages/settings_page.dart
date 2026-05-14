@@ -5,6 +5,10 @@ import '../components/liquid_background.dart';
 import '../components/liquid_glass.dart';
 import '../components/liquid_page_app_bar.dart';
 import '../controllers/bridge_controller.dart';
+import '../controllers/theme_controller.dart';
+import 'about_page.dart';
+import 'service_page.dart';
+import '../theme/recodex_theme.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -15,6 +19,8 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final BridgeController controller = Get.find();
+  final ThemeController themeController = Get.find();
+  bool _notificationsEnabled = true;
 
   @override
   Widget build(BuildContext context) {
@@ -24,81 +30,91 @@ class _SettingsPageState extends State<SettingsPage> {
           backgroundColor: Colors.transparent,
           appBar: const LiquidPageAppBar(title: '设置'),
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(34, 92, 34, 40),
+            padding: const EdgeInsets.fromLTRB(24, 88, 24, 36),
             children: [
-              _SettingsOverview(
-                connected: controller.connected.value,
-                workspaceCount: controller.workspaces.length,
-                deviceName: controller.deviceName.value,
-              ),
-              const SizedBox(height: 30),
-              const _SettingsSection(
-                icon: Icons.tune,
-                title: '运行方式',
+              _SettingsGroup(
+                title: '外观',
                 children: [
-                  _InfoRow(
-                    title: '自动重连',
-                    subtitle: '已启用，Bridge 断开后自动恢复连接',
-                    icon: Icons.sync,
+                  _SettingsTile(
+                    icon: Icons.text_fields,
+                    title: '字体大小',
+                    subtitle: _fontSizeLabel,
+                    trailing: SizedBox(
+                      width: 148,
+                      child: Slider(
+                        value: themeController.fontScaleToSliderValue(),
+                        min: 0,
+                        max: 2,
+                        divisions: 2,
+                        onChanged: themeController.setFontScale,
+                      ),
+                    ),
                   ),
-                  SizedBox(height: 18),
-                  _InfoRow(
-                    title: '历史会话',
-                    subtitle: '读取 Recodex 事件和本机 Codex 历史',
-                    icon: Icons.history,
-                  ),
-                  SizedBox(height: 18),
-                  _InfoRow(
-                    title: '高风险二次确认',
-                    subtitle: '提交、推送等写操作默认需要确认',
-                    icon: Icons.verified_outlined,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 26),
-              _SettingsSection(
-                icon: Icons.security,
-                title: '安全',
-                children: [
-                  _InfoRow(
-                    title: '设备密钥',
-                    subtitle: controller.hasDeviceKey ? '已保存' : '未保存',
-                    icon: controller.hasDeviceKey
-                        ? Icons.verified_user_outlined
-                        : Icons.no_encryption_outlined,
-                  ),
-                  const SizedBox(height: 18),
-                  _InfoRow(
-                    title: '已授权设备',
-                    subtitle: '${controller.devices.length} 台',
-                    icon: Icons.devices_outlined,
-                  ),
-                  const SizedBox(height: 22),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: OutlinedButton.icon(
-                      onPressed: controller.clearStoredCredentials,
-                      icon: const Icon(Icons.logout),
-                      label: const Text('清除本机密钥'),
+                  _DividerLine(),
+                  _SettingsMenuTile(
+                    icon: Icons.dark_mode_outlined,
+                    title: '主题设置',
+                    value: themeController.preference.value.label,
+                    options: RecodexThemePreference.values
+                        .map((preference) => preference.label)
+                        .toList(),
+                    onSelected: (value) => themeController.setPreference(
+                      RecodexThemePreference.fromLabel(value),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 26),
-              const _SettingsSection(
-                icon: Icons.info_outline,
+              const SizedBox(height: 18),
+              _SettingsGroup(
+                title: '通知',
+                children: [
+                  _SettingsTile(
+                    icon: Icons.notifications_outlined,
+                    title: '消息通知',
+                    subtitle: _notificationsEnabled ? '任务完成后提醒' : '已关闭',
+                    trailing: Switch(
+                      value: _notificationsEnabled,
+                      onChanged: (value) =>
+                          setState(() => _notificationsEnabled = value),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _SettingsGroup(
+                title: '服务',
+                children: [
+                  _SettingsTile(
+                    icon: controller.connected.value
+                        ? Icons.cloud_done_outlined
+                        : Icons.cloud_off,
+                    title: '服务状态',
+                    subtitle: controller.connected.value
+                        ? 'Bridge 在线'
+                        : 'Bridge 未连接',
+                    trailing: _StatusDot(connected: controller.connected.value),
+                    trailingIcon: Icons.chevron_right,
+                    onTap: () => _openPage(const ServicePage()),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _SettingsGroup(
                 title: '关于',
                 children: [
-                  _InfoRow(
-                    title: '应用',
+                  _SettingsTile(
+                    icon: Icons.info_outline,
+                    title: '关于我们',
                     subtitle: 'Remodex Companion',
-                    icon: Icons.terminal,
+                    trailingIcon: Icons.chevron_right,
+                    onTap: () => _openPage(const AboutPage()),
                   ),
-                  SizedBox(height: 18),
-                  _InfoRow(
-                    title: '版本',
-                    subtitle: 'v1.0.4',
+                  _DividerLine(),
+                  const _SettingsTile(
                     icon: Icons.new_releases_outlined,
+                    title: '检测更新',
+                    subtitle: '当前版本 v1.0.4',
+                    trailingText: '已是最新',
                   ),
                 ],
               ),
@@ -108,213 +124,285 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
   }
-}
 
-class _SettingsOverview extends StatelessWidget {
-  const _SettingsOverview({
-    required this.connected,
-    required this.workspaceCount,
-    required this.deviceName,
-  });
+  String get _fontSizeLabel {
+    return themeController.fontSizeLabel;
+  }
 
-  final bool connected;
-  final int workspaceCount;
-  final String deviceName;
-
-  @override
-  Widget build(BuildContext context) {
-    return LiquidGlass(
-      radius: 38,
-      opacity: 0.74,
-      padding: const EdgeInsets.fromLTRB(30, 28, 30, 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.86),
-                ),
-                child: Icon(
-                  connected ? Icons.cloud_done_outlined : Icons.cloud_off,
-                  color: const Color(0xff005fc7),
-                  size: 32,
-                ),
-              ),
-              const SizedBox(width: 18),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '应用控制台',
-                      style: TextStyle(
-                        fontSize: 25,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      connected ? 'Bridge 在线' : 'Bridge 未连接',
-                      style: const TextStyle(
-                        color: Color(0xff747878),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-          Row(
-            children: [
-              Expanded(
-                child: _MetricChip(label: '工作区', value: '$workspaceCount'),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _MetricChip(label: '设备', value: deviceName),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
+  void _openPage(Widget page) {
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
   }
 }
 
-class _SettingsSection extends StatelessWidget {
-  const _SettingsSection({
-    required this.icon,
-    required this.title,
-    required this.children,
-  });
+class _SettingsGroup extends StatelessWidget {
+  const _SettingsGroup({required this.title, required this.children});
 
-  final IconData icon;
   final String title;
   final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
-    return LiquidGlass(
-      radius: 34,
-      opacity: 0.7,
-      padding: const EdgeInsets.fromLTRB(30, 28, 30, 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, color: const Color(0xff005fc7), size: 28),
-              const SizedBox(width: 14),
-              Text(
-                title,
-                style: const TextStyle(
-                  color: Color(0xff005fc7),
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 28),
-          ...children,
-        ],
-      ),
-    );
-  }
-}
-
-class _InfoRow extends StatelessWidget {
-  const _InfoRow({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-  });
-
-  final String title;
-  final String subtitle;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, color: const Color(0xff5d6266), size: 24),
-        const SizedBox(width: 14),
-        Expanded(
-          child: _Label(title: title, subtitle: subtitle),
-        ),
-      ],
-    );
-  }
-}
-
-class _MetricChip extends StatelessWidget {
-  const _MetricChip({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              color: Color(0xff747878),
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Label extends StatelessWidget {
-  const _Label({required this.title, required this.subtitle});
-
-  final String title;
-  final String subtitle;
-
-  @override
-  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          child: Text(
+            title,
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
         ),
-        const SizedBox(height: 4),
-        Text(
-          subtitle,
-          style: const TextStyle(color: Color(0xff747878), fontSize: 14),
+        LiquidGlass(
+          radius: 24,
+          opacity: 0.66,
+          padding: EdgeInsets.zero,
+          child: Column(children: children),
         ),
       ],
+    );
+  }
+}
+
+class _SettingsTile extends StatelessWidget {
+  const _SettingsTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+    this.trailingText,
+    this.trailingIcon,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+  final String? trailingText;
+  final IconData? trailingIcon;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final child = Padding(
+      padding: const EdgeInsets.fromLTRB(16, 13, 14, 13),
+      child: Row(
+        children: [
+          Icon(icon, color: colors.icon, size: 23),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: colors.text,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colors.textMuted,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ?trailing,
+          if (trailingText != null)
+            Text(
+              trailingText!,
+              style: TextStyle(
+                color: colors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          if (trailingIcon != null) Icon(trailingIcon, color: colors.textMuted),
+        ],
+      ),
+    );
+    if (onTap == null) return child;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(onTap: onTap, child: child),
+    );
+  }
+}
+
+class _SettingsMenuTile extends StatelessWidget {
+  const _SettingsMenuTile({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.options,
+    required this.onSelected,
+  });
+
+  final IconData icon;
+  final String title;
+  final String value;
+  final List<String> options;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsTile(
+      icon: icon,
+      title: title,
+      subtitle: '当前：$value',
+      trailingText: value,
+      trailingIcon: Icons.keyboard_arrow_down,
+      onTap: () => _showOptions(context),
+    );
+  }
+
+  Future<void> _showOptions(BuildContext context) async {
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.18),
+      builder: (context) =>
+          _SettingsOptionSheet(title: title, value: value, options: options),
+    );
+    if (selected != null) {
+      onSelected(selected);
+    }
+  }
+}
+
+class _SettingsOptionSheet extends StatelessWidget {
+  const _SettingsOptionSheet({
+    required this.title,
+    required this.value,
+    required this.options,
+  });
+
+  final String title;
+  final String value;
+  final List<String> options;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return SafeArea(
+      minimum: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+      child: LiquidGlass(
+        radius: 26,
+        opacity: 0.84,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        color: colors.text,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: Icon(Icons.close, color: colors.textMuted),
+                  ),
+                ],
+              ),
+            ),
+            for (var index = 0; index < options.length; index += 1) ...[
+              _SettingsOptionTile(
+                label: options[index],
+                selected: options[index] == value,
+              ),
+              if (index != options.length - 1) _DividerLine(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsOptionTile extends StatelessWidget {
+  const _SettingsOptionTile({required this.label, required this.selected});
+
+  final String label;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => Navigator.of(context).pop(label),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              if (selected) Icon(Icons.check, color: colors.icon, size: 22),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusDot extends StatelessWidget {
+  const _StatusDot({required this.connected});
+
+  final bool connected;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return Icon(
+      Icons.circle,
+      size: 12,
+      color: connected ? colors.success : colors.textMuted,
+    );
+  }
+}
+
+class _DividerLine extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return Divider(
+      height: 1,
+      indent: 53,
+      color: colors.textMuted.withValues(alpha: 0.16),
     );
   }
 }

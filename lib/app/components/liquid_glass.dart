@@ -2,6 +2,8 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import '../theme/recodex_theme.dart';
+
 class LiquidGlass extends StatelessWidget {
   const LiquidGlass({
     required this.child,
@@ -20,26 +22,27 @@ class LiquidGlass extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     final shape = BorderRadius.circular(radius);
     final content = ClipRRect(
       borderRadius: shape,
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 34, sigmaY: 34),
+        filter: ImageFilter.blur(sigmaX: 42, sigmaY: 42),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: opacity),
+            color: colors.glassColor.withValues(alpha: opacity),
             borderRadius: shape,
-            border: Border.all(color: Colors.white.withValues(alpha: 0.66)),
+            border: Border.all(color: colors.glassBorder),
             boxShadow: [
               BoxShadow(
-                color: Colors.white.withValues(alpha: 0.78),
-                offset: const Offset(-10, -10),
-                blurRadius: 28,
+                color: colors.glassHighlight,
+                offset: const Offset(-8, -8),
+                blurRadius: 24,
               ),
               BoxShadow(
-                color: const Color(0xff9da8b7).withValues(alpha: 0.17),
-                offset: const Offset(18, 24),
-                blurRadius: 44,
+                color: colors.glassShadow,
+                offset: const Offset(0, 18),
+                blurRadius: 38,
               ),
             ],
           ),
@@ -61,7 +64,7 @@ class LiquidIconButton extends StatelessWidget {
     required this.icon,
     this.onPressed,
     this.tooltip,
-    this.size = 56,
+    this.size = 36,
     super.key,
   });
 
@@ -72,16 +75,25 @@ class LiquidIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return Tooltip(
       message: tooltip ?? '',
       child: SizedBox.square(
         dimension: size,
-        child: LiquidGlass(
-          padding: EdgeInsets.zero,
-          radius: size / 2,
-          opacity: 0.58,
-          onTap: onPressed,
-          child: Icon(icon, color: const Color(0xff005fc7), size: size * 0.48),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: colors.glassColor.withValues(alpha: 0.72),
+            border: Border.all(color: colors.glassBorder),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onPressed,
+              child: Icon(icon, color: colors.icon, size: size * 0.48),
+            ),
+          ),
         ),
       ),
     );
@@ -105,14 +117,15 @@ class BluePillButton extends StatelessWidget {
     return FilledButton.icon(
       onPressed: onPressed,
       style: FilledButton.styleFrom(
-        backgroundColor: const Color(0xff005fc7),
+        backgroundColor: Theme.of(context).colorScheme.primary,
         foregroundColor: Colors.white,
-        disabledBackgroundColor: const Color(0xffd8dde7),
+        disabledBackgroundColor: Theme.of(
+          context,
+        ).colorScheme.outline.withValues(alpha: 0.34),
         minimumSize: const Size(0, 58),
         padding: const EdgeInsets.symmetric(horizontal: 22),
         shape: const StadiumBorder(),
-        elevation: 8,
-        shadowColor: const Color(0xff005fc7).withValues(alpha: 0.28),
+        elevation: 0,
       ),
       icon: Icon(icon),
       label: Text(label),

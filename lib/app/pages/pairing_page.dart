@@ -5,6 +5,7 @@ import '../components/liquid_background.dart';
 import '../components/liquid_glass.dart';
 import '../components/liquid_page_app_bar.dart';
 import '../controllers/bridge_controller.dart';
+import '../theme/recodex_theme.dart';
 
 class PairingPage extends StatefulWidget {
   const PairingPage({super.key});
@@ -36,119 +37,142 @@ class _PairingPageState extends State<PairingPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Obx(
-      () => LiquidBackground(
+    return Obx(() {
+      final connected = controller.connected.value;
+      final connectionLabel = controller.connectionLabel.value;
+      final lastError = controller.lastError.value;
+      final busy = controller.busy.value;
+      final serviceContext = controller.composerContext.value;
+      return LiquidBackground(
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: const LiquidPageAppBar(title: '配对'),
-          body: ListView(
-            padding: const EdgeInsets.fromLTRB(36, 92, 36, 40),
-            children: [
-              _PairingHero(connected: controller.connected.value),
-              const SizedBox(height: 34),
-              _PairingCard(
-                icon: Icons.router_outlined,
-                title: 'Bridge 连接',
+          body: LayoutBuilder(
+            builder: (context, constraints) {
+              final horizontalPadding = constraints.maxWidth >= 720
+                  ? 48.0
+                  : 24.0;
+              return ListView(
+                padding: EdgeInsets.fromLTRB(
+                  horizontalPadding,
+                  92,
+                  horizontalPadding,
+                  40,
+                ),
                 children: [
-                  _TextSettingRow(
-                    title: 'Bridge 地址',
-                    subtitle: '本机或局域网网桥',
-                    controller: _baseUrlController,
-                    onSubmitted: (_) => _connect(),
-                  ),
-                  const SizedBox(height: 24),
-                  _ConnectionStatusRow(
-                    connected: controller.connected.value,
-                    label: controller.connectionLabel.value,
-                    error: controller.lastError.value,
-                  ),
-                  const SizedBox(height: 30),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _pairingStatus,
-                          style: TextStyle(
-                            color: _pairingStatus.contains('失败')
-                                ? const Color(0xffba1a1a)
-                                : const Color(0xff747878),
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                      BluePillButton(
-                        label: controller.busy.value ? '获取中' : '获取配对信息',
-                        icon: controller.busy.value ? Icons.sync : Icons.link,
-                        onPressed: controller.busy.value ? null : _fetchPairing,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    '真机连接时 Bridge 地址应使用电脑局域网地址，例如 http://192.168.x.x:8765。',
-                    style: TextStyle(
-                      color: Color(0xff747878),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 34),
-              _PairingCard(
-                icon: Icons.key_outlined,
-                title: '令牌认证',
-                children: [
-                  Row(
-                    children: [
-                      const Expanded(
-                        child: _SettingLabel(
-                          title: '配对令牌',
-                          subtitle: 'Bridge 生成的短期令牌',
-                        ),
-                      ),
-                      SizedBox(
-                        width: 260,
-                        child: TextField(
-                          controller: _tokenController,
-                          obscureText: !_showToken,
-                          textAlign: TextAlign.center,
-                          decoration: InputDecoration(
-                            hintText: '输入配对令牌',
-                            suffixIcon: IconButton(
-                              tooltip: _showToken ? '隐藏令牌' : '显示令牌',
-                              onPressed: () =>
-                                  setState(() => _showToken = !_showToken),
-                              icon: Icon(
-                                _showToken
-                                    ? Icons.visibility_off
-                                    : Icons.visibility,
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 760),
+                      child: Column(
+                        children: [
+                          _PairingHero(connected: connected),
+                          const SizedBox(height: 34),
+                          _PairingCard(
+                            icon: Icons.router_outlined,
+                            title: 'Bridge 连接',
+                            children: [
+                              _TextSettingRow(
+                                title: 'Bridge 地址',
+                                subtitle: '本机或局域网网桥',
+                                controller: _baseUrlController,
+                                onSubmitted: (_) => _connect(),
                               ),
-                            ),
+                              const SizedBox(height: 24),
+                              _ConnectionStatusRow(
+                                connected: connected,
+                                label: connectionLabel,
+                                error: lastError,
+                              ),
+                              const SizedBox(height: 30),
+                              _PairingActionRow(
+                                status: _pairingStatus,
+                                busy: busy,
+                                onFetchPairing: _fetchPairing,
+                              ),
+                              const SizedBox(height: 12),
+                              _PairingHint(
+                                text:
+                                    '真机连接时 Bridge 地址应使用电脑局域网地址，例如 http://192.168.x.x:8765。',
+                                error: false,
+                              ),
+                            ],
                           ),
-                        ),
+                          const SizedBox(height: 34),
+                          _PairingCard(
+                            icon: Icons.key_outlined,
+                            title: '令牌认证',
+                            children: [
+                              _TokenSettingRow(
+                                controller: _tokenController,
+                                showToken: _showToken,
+                                onToggleToken: () =>
+                                    setState(() => _showToken = !_showToken),
+                              ),
+                              const SizedBox(height: 22),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: BluePillButton(
+                                  label: busy ? '连接中' : '连接 Bridge',
+                                  icon: busy ? Icons.sync : Icons.qr_code_2,
+                                  onPressed: busy ? null : _connect,
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (connected) ...[
+                            const SizedBox(height: 34),
+                            _PairingCard(
+                              icon: Icons.terminal,
+                              title: '远程 Codex',
+                              children: [
+                                _ServiceInfoGrid(
+                                  items: [
+                                    _ServiceInfoItem(
+                                      label: 'Bridge 版本',
+                                      value:
+                                          serviceContext.bridgeVersion.isEmpty
+                                          ? '未知'
+                                          : serviceContext.bridgeVersion,
+                                      icon: Icons.hub_outlined,
+                                    ),
+                                    _ServiceInfoItem(
+                                      label: 'Codex 版本',
+                                      value: serviceContext.codexVersion.isEmpty
+                                          ? '未检测到'
+                                          : serviceContext.codexVersion,
+                                      icon: Icons.terminal,
+                                    ),
+                                    _ServiceInfoItem(
+                                      label: 'API Key',
+                                      value: serviceContext.apiKeyConfigured
+                                          ? '已配置'
+                                          : '未配置',
+                                      icon: serviceContext.apiKeyConfigured
+                                          ? Icons.key
+                                          : Icons.key_off_outlined,
+                                      positive: serviceContext.apiKeyConfigured,
+                                    ),
+                                    _ServiceInfoItem(
+                                      label: '默认模型',
+                                      value: serviceContext.model,
+                                      icon: Icons.memory_outlined,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 22),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: BluePillButton(
-                      label: controller.busy.value ? '连接中' : '连接 Bridge',
-                      icon: controller.busy.value
-                          ? Icons.sync
-                          : Icons.qr_code_2,
-                      onPressed: controller.busy.value ? null : _connect,
                     ),
                   ),
                 ],
-              ),
-            ],
+              );
+            },
           ),
         ),
-      ),
-    );
+      );
+    });
   }
 
   void _connect() {
@@ -179,6 +203,53 @@ class _PairingPageState extends State<PairingPage> {
           ? '未获取到令牌，请重启或刷新 Bridge 配对窗口。'
           : '已获取新令牌。';
     });
+  }
+}
+
+class _PairingActionRow extends StatelessWidget {
+  const _PairingActionRow({
+    required this.status,
+    required this.busy,
+    required this.onFetchPairing,
+  });
+
+  final String status;
+  final bool busy;
+  final VoidCallback onFetchPairing;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 460;
+        final statusText = _PairingHint(
+          text: status,
+          error: status.contains('失败'),
+        );
+        final button = BluePillButton(
+          label: busy ? '获取中' : '获取配对信息',
+          icon: busy ? Icons.sync : Icons.link,
+          onPressed: busy ? null : onFetchPairing,
+        );
+        if (compact) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              statusText,
+              const SizedBox(height: 12),
+              Align(alignment: Alignment.centerRight, child: button),
+            ],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: statusText),
+            const SizedBox(width: 16),
+            button,
+          ],
+        );
+      },
+    );
   }
 }
 
@@ -294,27 +365,106 @@ class _TextSettingRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: _SettingLabel(title: title, subtitle: subtitle),
+    return _ResponsiveSettingRow(
+      label: _SettingLabel(title: title, subtitle: subtitle),
+      field: TextField(
+        controller: controller,
+        textAlign: TextAlign.center,
+        keyboardType: TextInputType.url,
+        onSubmitted: onSubmitted,
+        style: TextStyle(
+          color: context.recodexColors.icon,
+          fontSize: 17,
+          fontWeight: FontWeight.w800,
         ),
-        SizedBox(
-          width: 260,
-          child: TextField(
-            controller: controller,
-            textAlign: TextAlign.center,
-            keyboardType: TextInputType.url,
-            onSubmitted: onSubmitted,
-            style: const TextStyle(
-              color: Color(0xff005fc7),
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
-            ),
-            decoration: const InputDecoration(border: InputBorder.none),
+        decoration: const InputDecoration(border: InputBorder.none),
+      ),
+    );
+  }
+}
+
+class _TokenSettingRow extends StatelessWidget {
+  const _TokenSettingRow({
+    required this.controller,
+    required this.showToken,
+    required this.onToggleToken,
+  });
+
+  final TextEditingController controller;
+  final bool showToken;
+  final VoidCallback onToggleToken;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ResponsiveSettingRow(
+      label: const _SettingLabel(title: '配对令牌', subtitle: 'Bridge 生成的短期令牌'),
+      field: TextField(
+        controller: controller,
+        obscureText: !showToken,
+        textAlign: TextAlign.center,
+        decoration: InputDecoration(
+          hintText: '输入配对令牌',
+          suffixIcon: IconButton(
+            tooltip: showToken ? '隐藏令牌' : '显示令牌',
+            onPressed: onToggleToken,
+            icon: Icon(showToken ? Icons.visibility_off : Icons.visibility),
           ),
         ),
-      ],
+      ),
+    );
+  }
+}
+
+class _ResponsiveSettingRow extends StatelessWidget {
+  const _ResponsiveSettingRow({required this.label, required this.field});
+
+  final Widget label;
+  final Widget field;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth < 520) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [label, const SizedBox(height: 12), field],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            SizedBox(width: 180, child: label),
+            const SizedBox(width: 22),
+            Expanded(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 380),
+                child: field,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _PairingHint extends StatelessWidget {
+  const _PairingHint({required this.text, required this.error});
+
+  final String text;
+  final bool error;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return Text(
+      text,
+      style: TextStyle(
+        color: error ? colors.error : colors.textMuted,
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+      ),
     );
   }
 }
@@ -332,11 +482,12 @@ class _ConnectionStatusRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     final color = connected
-        ? const Color(0xff0b7a3b)
+        ? colors.success
         : label == 'connecting' || label == 'auth' || label == 'reconnecting'
-        ? const Color(0xff005fc7)
-        : const Color(0xffba1a1a);
+        ? colors.icon
+        : colors.error;
     final text = connected
         ? '已连接'
         : label == 'connecting'
@@ -349,61 +500,77 @@ class _ConnectionStatusRow extends StatelessWidget {
         ? '连接失败'
         : '未连接';
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Expanded(
-          child: _SettingLabel(title: '连接状态', subtitle: 'Bridge 实时状态'),
-        ),
-        Flexible(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 12,
-                ),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      connected ? Icons.check_circle : Icons.info_outline,
-                      size: 18,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final badge = Column(
+          crossAxisAlignment: constraints.maxWidth < 520
+              ? CrossAxisAlignment.start
+              : CrossAxisAlignment.end,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    connected ? Icons.check_circle : Icons.info_outline,
+                    size: 18,
+                    color: color,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    text,
+                    style: TextStyle(
                       color: color,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 16,
                     ),
-                    const SizedBox(width: 8),
-                    Text(
-                      text,
-                      style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
+                  ),
+                ],
+              ),
+            ),
+            if (error.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                error,
+                textAlign: constraints.maxWidth < 520
+                    ? TextAlign.left
+                    : TextAlign.right,
+                style: TextStyle(
+                  color: colors.error,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              if (error.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Text(
-                  error,
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(
-                    color: Color(0xffba1a1a),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
             ],
-          ),
-        ),
-      ],
+          ],
+        );
+        if (constraints.maxWidth < 520) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const _SettingLabel(title: '连接状态', subtitle: 'Bridge 实时状态'),
+              const SizedBox(height: 12),
+              badge,
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(
+              width: 180,
+              child: _SettingLabel(title: '连接状态', subtitle: 'Bridge 实时状态'),
+            ),
+            const SizedBox(width: 22),
+            Expanded(child: badge),
+          ],
+        );
+      },
     );
   }
 }
@@ -416,19 +583,124 @@ class _SettingLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
           title,
-          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: colors.text,
+            fontSize: 20,
+            fontWeight: FontWeight.w900,
+          ),
         ),
         const SizedBox(height: 4),
         Text(
           subtitle,
-          style: const TextStyle(color: Color(0xff747878), fontSize: 15),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: colors.textMuted, fontSize: 15),
         ),
       ],
+    );
+  }
+}
+
+class _ServiceInfoItem {
+  const _ServiceInfoItem({
+    required this.label,
+    required this.value,
+    required this.icon,
+    this.positive = false,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+  final bool positive;
+}
+
+class _ServiceInfoGrid extends StatelessWidget {
+  const _ServiceInfoGrid({required this.items});
+
+  final List<_ServiceInfoItem> items;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 560 ? 2 : 1;
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            for (final item in items)
+              SizedBox(
+                width: columns == 1
+                    ? constraints.maxWidth
+                    : (constraints.maxWidth - 12) / 2,
+                child: _ServiceInfoTile(item: item),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ServiceInfoTile extends StatelessWidget {
+  const _ServiceInfoTile({required this.item});
+
+  final _ServiceInfoItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final accent = item.positive ? colors.success : colors.icon;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.surfaceOverlay.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: colors.glassBorder),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        child: Row(
+          children: [
+            Icon(item.icon, color: accent, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.label,
+                    style: TextStyle(
+                      color: colors.textMuted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    item.value,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.text,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

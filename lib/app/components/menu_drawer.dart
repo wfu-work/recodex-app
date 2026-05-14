@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/bridge_models.dart';
+import '../theme/recodex_theme.dart';
 import 'liquid_glass.dart';
 import 'status_chips.dart';
 
@@ -24,6 +25,7 @@ class RemodexDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return Drawer(
       width: 292,
       backgroundColor: Colors.transparent,
@@ -49,11 +51,12 @@ class RemodexDrawer extends StatelessWidget {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           '主分支',
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.w900,
+                            color: colors.text,
                           ),
                         ),
                         ConnectionDot(
@@ -67,10 +70,10 @@ class RemodexDrawer extends StatelessWidget {
                 const SizedBox(height: 30),
                 Row(
                   children: [
-                    const Text(
+                    Text(
                       '工作区',
                       style: TextStyle(
-                        color: Color(0xff747878),
+                        color: colors.textMuted,
                         fontSize: 12,
                         fontWeight: FontWeight.w700,
                       ),
@@ -78,8 +81,8 @@ class RemodexDrawer extends StatelessWidget {
                     const Spacer(),
                     Text(
                       '${workspaces.length}',
-                      style: const TextStyle(
-                        color: Color(0xff747878),
+                      style: TextStyle(
+                        color: colors.textMuted,
                         fontSize: 12,
                         fontWeight: FontWeight.w800,
                       ),
@@ -115,7 +118,7 @@ class RemodexDrawer extends StatelessWidget {
                   child: Text(
                     'Remodex v1.0.4',
                     style: TextStyle(
-                      color: const Color(0xff747878).withValues(alpha: 0.86),
+                      color: colors.textMuted.withValues(alpha: 0.86),
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                     ),
@@ -145,6 +148,7 @@ class _WorkspaceLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return InkWell(
       borderRadius: BorderRadius.circular(16),
       onTap: onTap,
@@ -155,7 +159,7 @@ class _WorkspaceLine extends StatelessWidget {
             Icon(
               active ? Icons.folder : Icons.folder_outlined,
               size: 18,
-              color: active ? const Color(0xff005fc7) : const Color(0xff747878),
+              color: active ? colors.icon : colors.textMuted,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -166,19 +170,17 @@ class _WorkspaceLine extends StatelessWidget {
                     name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w900,
+                      color: colors.text,
                     ),
                   ),
                   Text(
                     path,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xff747878),
-                    ),
+                    style: TextStyle(fontSize: 11, color: colors.textMuted),
                   ),
                 ],
               ),
@@ -198,38 +200,35 @@ class _BottomDock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.58),
+        color: colors.surfaceOverlay,
         borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.72)),
+        border: Border.all(color: colors.glassBorder),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xff9da8b7).withValues(alpha: 0.14),
+            color: colors.glassShadow,
             offset: const Offset(0, 14),
             blurRadius: 28,
           ),
         ],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(6),
-        child: Row(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Expanded(
-              child: _DockButton(
-                icon: Icons.devices_outlined,
-                label: '配对',
-                onTap: onPairing,
-                active: true,
-              ),
+            _DockButton(
+              icon: Icons.devices_outlined,
+              label: '配对',
+              onTap: onPairing,
             ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: _DockButton(
-                icon: Icons.settings_outlined,
-                label: '设置',
-                onTap: onSettings,
-              ),
+            const SizedBox(height: 6),
+            _DockButton(
+              icon: Icons.settings_outlined,
+              label: '设置',
+              onTap: onSettings,
             ),
           ],
         ),
@@ -243,31 +242,29 @@ class _DockButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
-    this.active = false,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-  final bool active;
 
   @override
   Widget build(BuildContext context) {
-    final color = active ? const Color(0xff005fc7) : const Color(0xff303132);
+    final colors = context.recodexColors;
+    final color = colors.text;
     return Material(
-      color: active ? Colors.white.withValues(alpha: 0.86) : Colors.transparent,
-      borderRadius: BorderRadius.circular(22),
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(18),
       child: InkWell(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(18),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               Icon(icon, color: color, size: 19),
-              const SizedBox(width: 7),
-              Flexible(
+              const SizedBox(width: 12),
+              Expanded(
                 child: Text(
                   label,
                   overflow: TextOverflow.ellipsis,

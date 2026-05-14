@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/recodex_theme.dart';
+
 class DiffChip extends StatelessWidget {
   const DiffChip({required this.added, required this.removed, super.key});
 
@@ -8,24 +10,25 @@ class DiffChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.72),
+        color: colors.surfaceOverlay,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.72)),
+        border: Border.all(color: colors.glassBorder),
       ),
       child: Text.rich(
         TextSpan(
           children: [
             TextSpan(
               text: '+$added',
-              style: const TextStyle(color: Color(0xff0069c7)),
+              style: TextStyle(color: colors.icon),
             ),
             const TextSpan(text: '  '),
             TextSpan(
               text: '-$removed',
-              style: const TextStyle(color: Color(0xffb00020)),
+              style: TextStyle(color: colors.error),
             ),
           ],
         ),
@@ -47,20 +50,21 @@ class ConnectionDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(
           Icons.circle,
           size: 8,
-          color: connected ? const Color(0xff0a8f43) : const Color(0xffa2a7ae),
+          color: connected ? colors.success : colors.textMuted,
         ),
         const SizedBox(width: 6),
         Text(
           label,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 12,
-            color: Color(0xff747878),
+            color: colors.textMuted,
             fontWeight: FontWeight.w700,
           ),
         ),
