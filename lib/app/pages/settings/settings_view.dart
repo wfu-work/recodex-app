@@ -77,6 +77,17 @@ class _SettingsPageState extends State<SettingsPage> {
                       onChanged: notificationController.setEnabled,
                     ),
                   ),
+                  if (notificationController.enabled.value &&
+                      notificationController.permissionGranted.value) ...[
+                    _DividerLine(),
+                    _SettingsTile(
+                      icon: Icons.notifications_active_outlined,
+                      title: '测试通知',
+                      subtitle: '发送一条本地通知',
+                      trailingIcon: Icons.chevron_right,
+                      onTap: notificationController.sendTestNotification,
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 18),

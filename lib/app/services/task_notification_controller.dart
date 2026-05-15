@@ -64,7 +64,6 @@ class TaskNotificationController extends GetxController {
     } catch (_) {
       permissionGranted.value = false;
       enabled.value = false;
-      ready.value = true;
       return;
     }
     ready.value = true;
@@ -81,12 +80,13 @@ class TaskNotificationController extends GetxController {
   }
 
   Future<void> setEnabled(bool value) async {
-    await initialize();
     if (!value) {
       enabled.value = false;
       await _storage.write(key: _storageKey, value: 'false');
       return;
     }
+    await initialize();
+    if (!ready.value) return;
 
     final granted = await _safeRequestPermissions();
     permissionGranted.value = granted;
@@ -153,6 +153,15 @@ class TaskNotificationController extends GetxController {
     } catch (_) {
       permissionGranted.value = false;
     }
+  }
+
+  Future<void> sendTestNotification() async {
+    await notifySessionTerminal(
+      status: TaskNotificationStatus.completed,
+      sessionId: null,
+      workspaceName: 'Recodex',
+      prompt: '这是一条测试通知。',
+    );
   }
 
   Future<bool> _requestPermissions() async {

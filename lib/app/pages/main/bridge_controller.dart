@@ -44,6 +44,7 @@ class BridgeController extends GetxController {
   String? _requestedEventsPrompt;
   String? _storedWorkspaceName;
   String? _storedWorkspacePath;
+  final _notifiedTerminalSessions = <String>{};
 
   bool get canUseWorkspace =>
       connected.value && selectedWorkspace.value != null;
@@ -352,10 +353,15 @@ class BridgeController extends GetxController {
           final event = SessionEvent.fromJson(map);
           events.add(event);
           _bumpTimelineRevision();
+          final doneSessionId =
+              map['sessionId'] as String? ?? currentSessionId.value;
+          if (doneSessionId != null && doneSessionId.isNotEmpty) {
+            _notifiedTerminalSessions.add(doneSessionId);
+          }
           unawaited(
             _notifySessionFinished(
               status: TaskNotificationStatus.completed,
-              sessionId: map['sessionId'] as String? ?? currentSessionId.value,
+              sessionId: doneSessionId,
             ),
           );
           currentSessionId.value = null;
@@ -378,6 +384,12 @@ class BridgeController extends GetxController {
             _bumpTimelineRevision();
           }
           if (_hasTerminalEvent(loadedEvents)) {
+            unawaited(
+              _notifyTerminalEventsIfNeeded(
+                sessionId: sessionId,
+                events: loadedEvents,
+              ),
+            );
             currentSessionId.value = null;
             timelineSessionRunning.value = false;
             _pendingSessionStart = false;
@@ -401,10 +413,15 @@ class BridgeController extends GetxController {
           lastError.value = message;
           events.add(SessionEvent(kind: 'error', text: message));
           _bumpTimelineRevision();
+          final errorSessionId =
+              map['sessionId'] as String? ?? currentSessionId.value;
+          if (errorSessionId != null && errorSessionId.isNotEmpty) {
+            _notifiedTerminalSessions.add(errorSessionId);
+          }
           unawaited(
             _notifySessionFinished(
               status: TaskNotificationStatus.failed,
-              sessionId: map['sessionId'] as String? ?? currentSessionId.value,
+              sessionId: errorSessionId,
               errorMessage: message,
             ),
           );
@@ -412,10 +429,15 @@ class BridgeController extends GetxController {
           timelineSessionRunning.value = false;
           _pendingSessionStart = false;
         case 'session.interrupted':
+          final interruptedSessionId =
+              map['sessionId'] as String? ?? currentSessionId.value;
+          if (interruptedSessionId != null && interruptedSessionId.isNotEmpty) {
+            _notifiedTerminalSessions.add(interruptedSessionId);
+          }
           unawaited(
             _notifySessionFinished(
               status: TaskNotificationStatus.interrupted,
-              sessionId: map['sessionId'] as String? ?? currentSessionId.value,
+              sessionId: interruptedSessionId,
             ),
           );
           currentSessionId.value = null;
@@ -680,6 +702,39 @@ class BridgeController extends GetxController {
           kind.contains('complete') ||
           kind.contains('completed');
     });
+  }
+
+  Future<void> _notifyTerminalEventsIfNeeded({
+    required String sessionId,
+    required List<SessionEvent> events,
+  }) async {
+    if (sessionId.isEmpty || !_notifiedTerminalSessions.add(sessionId)) return;
+    SessionEvent? terminal;
+    for (final event in events.reversed) {
+      final kind = event.kind.toLowerCase();
+      if (kind == 'done' ||
+          kind == 'interrupted' ||
+          kind == 'error' ||
+          kind.contains('complete') ||
+          kind.contains('completed')) {
+        terminal = event;
+        break;
+      }
+    }
+    if (terminal == null) return;
+    final kind = terminal.kind.toLowerCase();
+    final status = kind == 'error'
+        ? TaskNotificationStatus.failed
+        : kind == 'interrupted'
+        ? TaskNotificationStatus.interrupted
+        : TaskNotificationStatus.completed;
+    await _notifySessionFinished(
+      status: status,
+      sessionId: sessionId,
+      errorMessage: status == TaskNotificationStatus.failed
+          ? terminal.text
+          : null,
+    );
   }
 
   Future<void> _notifySessionFinished({
