@@ -281,7 +281,7 @@ class _MainPageState extends State<MainPage> {
         controller.selectedWorkspace.value?.path ??
         controller.selectedWorkspace.value?.name ??
         '';
-    return '$workspace:${controller.events.length}:${controller.currentSessionId.value}:$last';
+    return '$workspace:${controller.timelineRevision.value}:${controller.events.length}:${controller.currentSessionId.value}:$last';
   }
 
   void _updateHeaderBackground() {
@@ -323,6 +323,10 @@ class _MainPageState extends State<MainPage> {
     );
     Future<void>.delayed(
       const Duration(milliseconds: 360),
+      _scrollToLatestAfterLayout,
+    );
+    Future<void>.delayed(
+      const Duration(milliseconds: 700),
       _scrollToLatestAfterLayout,
     );
   }

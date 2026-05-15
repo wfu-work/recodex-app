@@ -2,6 +2,7 @@ import 'package:get/get.dart';
 
 import '../app/pages/main/bridge_controller.dart';
 import '../app/pages/settings/theme_controller.dart';
+import '../app/services/task_notification_controller.dart';
 
 class GlobalBinding extends Bindings {
   @override
@@ -11,6 +12,12 @@ class GlobalBinding extends Bindings {
     }
     if (!Get.isRegistered<ThemeController>()) {
       Get.put<ThemeController>(ThemeController(), permanent: true);
+    }
+    if (!Get.isRegistered<TaskNotificationController>()) {
+      Get.put<TaskNotificationController>(
+        TaskNotificationController(),
+        permanent: true,
+      );
     }
   }
 }

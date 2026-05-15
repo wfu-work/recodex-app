@@ -5,6 +5,7 @@ import '../../components/liquid_background.dart';
 import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../routes/app_pages.dart';
+import '../../services/task_notification_controller.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
 import 'theme_controller.dart';
@@ -19,7 +20,7 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   final BridgeController controller = Get.find();
   final ThemeController themeController = Get.find();
-  bool _notificationsEnabled = true;
+  final TaskNotificationController notificationController = Get.find();
 
   @override
   Widget build(BuildContext context) {
@@ -70,11 +71,10 @@ class _SettingsPageState extends State<SettingsPage> {
                   _SettingsTile(
                     icon: Icons.notifications_outlined,
                     title: '消息通知',
-                    subtitle: _notificationsEnabled ? '任务完成后提醒' : '已关闭',
+                    subtitle: notificationController.statusLabel,
                     trailing: Switch(
-                      value: _notificationsEnabled,
-                      onChanged: (value) =>
-                          setState(() => _notificationsEnabled = value),
+                      value: notificationController.enabled.value,
+                      onChanged: notificationController.setEnabled,
                     ),
                   ),
                 ],

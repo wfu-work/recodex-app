@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 
 import '../app/pages/main/bridge_controller.dart';
 import '../app/pages/settings/theme_controller.dart';
+import '../app/services/task_notification_controller.dart';
 
 class AppInitializer {
   const AppInitializer._();
@@ -19,6 +20,9 @@ class AppInitializer {
     );
     _putIfAbsent<BridgeController>(() => BridgeController());
     _putIfAbsent<ThemeController>(() => ThemeController());
+    _putIfAbsent<TaskNotificationController>(
+      () => TaskNotificationController(),
+    );
   }
 
   static void _putIfAbsent<T extends Object>(T Function() builder) {

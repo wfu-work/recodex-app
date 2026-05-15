@@ -19,7 +19,7 @@ class ServicePage extends StatelessWidget {
           backgroundColor: Colors.transparent,
           appBar: const LiquidPageAppBar(title: '服务状态'),
           body: ListView(
-            padding: const EdgeInsets.fromLTRB(24, 88, 24, 36),
+            padding: const EdgeInsets.fromLTRB(24, 28, 24, 36),
             children: [
               _StatusHero(connected: controller.connected.value),
               const SizedBox(height: 18),

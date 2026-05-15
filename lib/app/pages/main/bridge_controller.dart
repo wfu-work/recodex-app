@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
 
 import '../../models/bridge_models.dart';
+import '../../services/task_notification_controller.dart';
 
 class BridgeController extends GetxController {
   static const _storage = FlutterSecureStorage();
@@ -30,6 +31,7 @@ class BridgeController extends GetxController {
   final composerContext = ComposerContext.fallback.obs;
   final currentSessionId = RxnString();
   final timelineSessionRunning = false.obs;
+  final timelineRevision = 0.obs;
 
   WebSocket? _socket;
   StreamSubscription<dynamic>? _socketSubscription;
@@ -135,9 +137,10 @@ class BridgeController extends GetxController {
     _requestedEventsSessionId = null;
     _requestedEventsPrompt = null;
     events.clear();
+    _bumpTimelineRevision();
     refreshContext();
     gitStatus(includeDiff: true);
-    _loadLatestSessionEventsForSelectedWorkspace();
+    _loadLatestSessionEventsForSelectedWorkspace(force: true);
   }
 
   void startSession(String prompt) {
@@ -146,6 +149,7 @@ class BridgeController extends GetxController {
     final trimmedPrompt = prompt.trim();
     if (trimmedPrompt.isEmpty) return;
     events.add(SessionEvent(kind: 'user', text: trimmedPrompt));
+    _bumpTimelineRevision();
     currentSessionId.value = null;
     timelineSessionRunning.value = true;
     _pendingSessionStart = true;
@@ -309,7 +313,7 @@ class BridgeController extends GetxController {
           selectedWorkspace.value ??= _restoreSelectedWorkspace();
           refreshContext();
           gitStatus(includeDiff: true);
-          _loadLatestSessionEventsForSelectedWorkspace();
+          _loadLatestSessionEventsForSelectedWorkspace(force: true);
         case 'session.list.result':
           sessions.assignAll(
             ((map['sessions'] as List?) ?? const []).whereType<Map>().map(
@@ -338,13 +342,22 @@ class BridgeController extends GetxController {
           events.add(
             const SessionEvent(kind: 'running', text: '正在启动 Codex 任务...'),
           );
+          _bumpTimelineRevision();
         case 'session.event':
           final event = SessionEvent.fromJson(map);
           if (!_hasDuplicateUserEvent(event)) {
             _appendSessionEvent(event);
           }
         case 'session.done':
-          events.add(SessionEvent.fromJson(map));
+          final event = SessionEvent.fromJson(map);
+          events.add(event);
+          _bumpTimelineRevision();
+          unawaited(
+            _notifySessionFinished(
+              status: TaskNotificationStatus.completed,
+              sessionId: map['sessionId'] as String? ?? currentSessionId.value,
+            ),
+          );
           currentSessionId.value = null;
           timelineSessionRunning.value = false;
           _pendingSessionStart = false;
@@ -359,7 +372,11 @@ class BridgeController extends GetxController {
             ),
             _requestedEventsPrompt,
           );
-          events.assignAll(_mergeLiveEvents(loadedEvents));
+          final mergedEvents = _mergeLiveEvents(loadedEvents);
+          if (!_hasSameTimelineEvents(events, mergedEvents)) {
+            events.assignAll(mergedEvents);
+            _bumpTimelineRevision();
+          }
           if (_hasTerminalEvent(loadedEvents)) {
             currentSessionId.value = null;
             timelineSessionRunning.value = false;
@@ -383,10 +400,24 @@ class BridgeController extends GetxController {
           }
           lastError.value = message;
           events.add(SessionEvent(kind: 'error', text: message));
+          _bumpTimelineRevision();
+          unawaited(
+            _notifySessionFinished(
+              status: TaskNotificationStatus.failed,
+              sessionId: map['sessionId'] as String? ?? currentSessionId.value,
+              errorMessage: message,
+            ),
+          );
           currentSessionId.value = null;
           timelineSessionRunning.value = false;
           _pendingSessionStart = false;
         case 'session.interrupted':
+          unawaited(
+            _notifySessionFinished(
+              status: TaskNotificationStatus.interrupted,
+              sessionId: map['sessionId'] as String? ?? currentSessionId.value,
+            ),
+          );
           currentSessionId.value = null;
           timelineSessionRunning.value = false;
           _pendingSessionStart = false;
@@ -396,6 +427,7 @@ class BridgeController extends GetxController {
               text: 'Interrupted by user.',
             ),
           );
+          _bumpTimelineRevision();
         case 'git.status.result':
         case 'git.diff.result':
           final snapshot = GitSnapshot.fromJson(map);
@@ -466,11 +498,26 @@ class BridgeController extends GetxController {
       _requestedEventsPrompt = null;
       currentSessionId.value = null;
       timelineSessionRunning.value = false;
+      if (events.isNotEmpty) {
+        events.clear();
+        _bumpTimelineRevision();
+      }
       return;
     }
 
     final workspace = selectedWorkspace.value;
     final candidates = _timelineSessionCandidates(workspace);
+    if (candidates.isEmpty) {
+      _requestedEventsSessionId = null;
+      _requestedEventsPrompt = null;
+      currentSessionId.value = null;
+      timelineSessionRunning.value = false;
+      if (events.isNotEmpty) {
+        events.clear();
+        _bumpTimelineRevision();
+      }
+      return;
+    }
 
     final runningCandidates = candidates.where(
       (session) => session.status == 'running',
@@ -503,17 +550,28 @@ class BridgeController extends GetxController {
 
   List<SessionRecord> _timelineSessionCandidates(WorkspaceInfo? workspace) {
     if (workspace == null) return List<SessionRecord>.of(sessions);
-
-    final workspaceMatches = sessions
+    final workspaceName = _normalizeWorkspaceKey(workspace.name);
+    final workspacePath = _normalizeWorkspaceKey(workspace.path);
+    final strictMatches = sessions
         .where(
-          (session) =>
-              session.workspace == workspace.path ||
-              session.workspace == workspace.name,
+          (session) => _workspaceMatchesSession(
+            session.workspace,
+            workspaceName,
+            workspacePath,
+            allowBasename: false,
+          ),
         )
         .toList();
-    if (workspaceMatches.isNotEmpty) return workspaceMatches;
+    if (strictMatches.isNotEmpty) return strictMatches;
 
-    return List<SessionRecord>.of(sessions);
+    return sessions.where((session) {
+      return _workspaceMatchesSession(
+        session.workspace,
+        workspaceName,
+        workspacePath,
+        allowBasename: true,
+      );
+    }).toList();
   }
 
   bool _hasDuplicateUserEvent(SessionEvent event) {
@@ -530,10 +588,50 @@ class BridgeController extends GetxController {
       final last = events.isEmpty ? null : events.last;
       if (last?.kind == 'running') {
         events[events.length - 1] = event;
+        _bumpTimelineRevision();
         return;
       }
     }
     events.add(event);
+    _bumpTimelineRevision();
+  }
+
+  void _bumpTimelineRevision() {
+    timelineRevision.value += 1;
+  }
+
+  String _normalizeWorkspaceKey(String value) {
+    var normalized = value.trim().replaceAll('\\', '/');
+    while (normalized.endsWith('/') && normalized.length > 1) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+    return normalized;
+  }
+
+  bool _workspaceMatchesSession(
+    String sessionWorkspace,
+    String workspaceName,
+    String workspacePath, {
+    required bool allowBasename,
+  }) {
+    final session = _normalizeWorkspaceKey(sessionWorkspace);
+    if (session.isEmpty) return false;
+    if (workspacePath.isNotEmpty && session == workspacePath) return true;
+    if (workspaceName.isNotEmpty && session == workspaceName) return true;
+    if (workspaceName.isNotEmpty && session.endsWith('/$workspaceName')) {
+      return true;
+    }
+    if (!allowBasename) return false;
+    final sessionName = _lastPathSegment(session);
+    final pathName = _lastPathSegment(workspacePath);
+    return workspaceName.isNotEmpty && sessionName == workspaceName ||
+        pathName.isNotEmpty && sessionName == pathName;
+  }
+
+  String _lastPathSegment(String value) {
+    final normalized = _normalizeWorkspaceKey(value);
+    final parts = normalized.split('/').where((part) => part.isNotEmpty);
+    return parts.isEmpty ? normalized : parts.last;
   }
 
   List<SessionEvent> _mergeLiveEvents(List<SessionEvent> loadedEvents) {
@@ -560,6 +658,19 @@ class BridgeController extends GetxController {
     );
   }
 
+  bool _hasSameTimelineEvents(
+    List<SessionEvent> current,
+    List<SessionEvent> next,
+  ) {
+    if (current.length != next.length) return false;
+    for (var index = 0; index < current.length; index += 1) {
+      final a = current[index];
+      final b = next[index];
+      if (a.kind != b.kind || a.text != b.text) return false;
+    }
+    return true;
+  }
+
   bool _hasTerminalEvent(Iterable<SessionEvent> source) {
     return source.any((event) {
       final kind = event.kind.toLowerCase();
@@ -569,6 +680,35 @@ class BridgeController extends GetxController {
           kind.contains('complete') ||
           kind.contains('completed');
     });
+  }
+
+  Future<void> _notifySessionFinished({
+    required TaskNotificationStatus status,
+    required String? sessionId,
+    String? errorMessage,
+  }) async {
+    if (!Get.isRegistered<TaskNotificationController>()) return;
+    final workspace = selectedWorkspace.value;
+    final prompt = _currentPrompt();
+    await Get.find<TaskNotificationController>().notifySessionTerminal(
+      status: status,
+      sessionId: sessionId,
+      workspaceName: workspace?.name ?? workspace?.path ?? '',
+      prompt: prompt,
+      errorMessage: errorMessage,
+    );
+  }
+
+  String _currentPrompt() {
+    if ((_requestedEventsPrompt ?? '').trim().isNotEmpty) {
+      return _requestedEventsPrompt!.trim();
+    }
+    for (final event in events.reversed) {
+      if (event.kind == 'user' && event.text.trim().isNotEmpty) {
+        return event.text.trim();
+      }
+    }
+    return '';
   }
 
   List<SessionEvent> _withPromptEvent(
