@@ -5,7 +5,7 @@ import '../theme/recodex_theme.dart';
 import 'liquid_glass.dart';
 import 'status_chips.dart';
 
-class RemodexDrawer extends StatelessWidget {
+class RemodexDrawer extends StatefulWidget {
   const RemodexDrawer({
     required this.connected,
     required this.workspaces,
@@ -22,6 +22,107 @@ class RemodexDrawer extends StatelessWidget {
   final ValueChanged<WorkspaceInfo> onSelectWorkspace;
   final VoidCallback onPairing;
   final VoidCallback onSettings;
+
+  @override
+  State<RemodexDrawer> createState() => _RemodexDrawerState();
+}
+
+class _RemodexDrawerState extends State<RemodexDrawer> {
+  static const double _workspaceRowExtent = 56;
+  static const double _selectedWorkspaceTopPadding = 34;
+
+  final ScrollController _workspaceScrollController = ScrollController();
+  String? _lastScrolledWorkspaceKey;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleScrollToSelected(jump: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant RemodexDrawer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _scheduleScrollToSelected(
+      jump:
+          oldWidget.selectedWorkspace == null ||
+          oldWidget.workspaces.isEmpty != widget.workspaces.isEmpty,
+    );
+  }
+
+  @override
+  void dispose() {
+    _workspaceScrollController.dispose();
+    super.dispose();
+  }
+
+  String? _workspaceKey(WorkspaceInfo? workspace) {
+    if (workspace == null) {
+      return null;
+    }
+    if (workspace.path.isNotEmpty) {
+      return workspace.path;
+    }
+    if (workspace.name.isNotEmpty) {
+      return workspace.name;
+    }
+    return null;
+  }
+
+  bool _isSelectedWorkspace(WorkspaceInfo workspace) {
+    final selected = widget.selectedWorkspace;
+    if (selected == null) {
+      return false;
+    }
+    if (selected.path.isNotEmpty && workspace.path == selected.path) {
+      return true;
+    }
+    return selected.path.isEmpty &&
+        selected.name.isNotEmpty &&
+        workspace.name == selected.name;
+  }
+
+  int get _selectedWorkspaceIndex =>
+      widget.workspaces.indexWhere(_isSelectedWorkspace);
+
+  void _scheduleScrollToSelected({required bool jump}) {
+    final selectedKey = _workspaceKey(widget.selectedWorkspace);
+    if (selectedKey == null) {
+      return;
+    }
+    final scrollKey = '$selectedKey:${widget.workspaces.length}';
+    if (scrollKey == _lastScrolledWorkspaceKey) {
+      return;
+    }
+    _lastScrolledWorkspaceKey = scrollKey;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollSelectedIntoView(jump: jump);
+    });
+  }
+
+  void _scrollSelectedIntoView({required bool jump}) {
+    if (!mounted || !_workspaceScrollController.hasClients) {
+      return;
+    }
+    final index = _selectedWorkspaceIndex;
+    if (index < 0) {
+      return;
+    }
+    final position = _workspaceScrollController.position;
+    final target = (index * _workspaceRowExtent - _selectedWorkspaceTopPadding)
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+
+    if (jump) {
+      _workspaceScrollController.jumpTo(target);
+      return;
+    }
+    _workspaceScrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOutCubic,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -60,8 +161,8 @@ class RemodexDrawer extends StatelessWidget {
                           ),
                         ),
                         ConnectionDot(
-                          connected: connected,
-                          label: connected ? '已连接到本地链接' : '未连接',
+                          connected: widget.connected,
+                          label: widget.connected ? '已连接到本地链接' : '未连接',
                         ),
                       ],
                     ),
@@ -80,7 +181,7 @@ class RemodexDrawer extends StatelessWidget {
                     ),
                     const Spacer(),
                     Text(
-                      '${workspaces.length}',
+                      '${widget.workspaces.length}',
                       style: TextStyle(
                         color: colors.textMuted,
                         fontSize: 12,
@@ -91,28 +192,34 @@ class RemodexDrawer extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Expanded(
-                  child: ListView(
+                  child: ListView.builder(
+                    controller: _workspaceScrollController,
                     padding: EdgeInsets.zero,
-                    children: [
-                      if (workspaces.isEmpty)
-                        const _WorkspaceLine(
+                    itemCount: widget.workspaces.isEmpty
+                        ? 1
+                        : widget.workspaces.length,
+                    itemBuilder: (context, index) {
+                      if (widget.workspaces.isEmpty) {
+                        return const _WorkspaceLine(
                           name: '暂无工作区',
                           path: '连接 Bridge 后同步',
-                        )
-                      else
-                        ...workspaces.map(
-                          (workspace) => _WorkspaceLine(
-                            name: workspace.name,
-                            path: workspace.path,
-                            active: selectedWorkspace?.name == workspace.name,
-                            onTap: () => onSelectWorkspace(workspace),
-                          ),
-                        ),
-                    ],
+                        );
+                      }
+                      final workspace = widget.workspaces[index];
+                      return _WorkspaceLine(
+                        name: workspace.name,
+                        path: workspace.path,
+                        active: _isSelectedWorkspace(workspace),
+                        onTap: () => widget.onSelectWorkspace(workspace),
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(height: 14),
-                _BottomDock(onPairing: onPairing, onSettings: onSettings),
+                _BottomDock(
+                  onPairing: widget.onPairing,
+                  onSettings: widget.onSettings,
+                ),
                 const SizedBox(height: 12),
                 Center(
                   child: Text(

@@ -126,12 +126,14 @@ class SessionEvent {
     required this.text,
     this.time,
     this.usage,
+    this.attachments = const [],
   });
 
   final String kind;
   final String text;
   final DateTime? time;
   final TokenUsage? usage;
+  final List<EventAttachment> attachments;
 
   factory SessionEvent.fromJson(Map<String, dynamic> json) {
     return SessionEvent(
@@ -141,6 +143,30 @@ class SessionEvent {
       usage: json['usage'] is Map
           ? TokenUsage.fromJson((json['usage'] as Map).cast<String, dynamic>())
           : null,
+      attachments: ((json['attachments'] as List?) ?? const [])
+          .whereType<Map>()
+          .map((item) => EventAttachment.fromJson(item.cast<String, dynamic>()))
+          .toList(),
+    );
+  }
+}
+
+class EventAttachment {
+  const EventAttachment({
+    required this.type,
+    required this.mime,
+    required this.dataUrl,
+  });
+
+  final String type;
+  final String mime;
+  final String dataUrl;
+
+  factory EventAttachment.fromJson(Map<String, dynamic> json) {
+    return EventAttachment(
+      type: json['type'] as String? ?? '',
+      mime: json['mime'] as String? ?? '',
+      dataUrl: json['dataUrl'] as String? ?? json['data_url'] as String? ?? '',
     );
   }
 }

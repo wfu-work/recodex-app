@@ -29,6 +29,7 @@ class BridgeController extends GetxController {
   final selectedWorkspace = Rxn<WorkspaceInfo>();
   final gitSnapshot = Rxn<GitSnapshot>();
   final composerContext = ComposerContext.fallback.obs;
+  final permissionMode = '默认权限'.obs;
   final currentSessionId = RxnString();
   final timelineSessionRunning = false.obs;
   final timelineRevision = 0.obs;
@@ -44,6 +45,7 @@ class BridgeController extends GetxController {
   String? _requestedEventsPrompt;
   String? _storedWorkspaceName;
   String? _storedWorkspacePath;
+  final _sessionLifecycles = <String, _SessionLifecycle>{};
   final _notifiedTerminalSessions = <String>{};
 
   bool get canUseWorkspace =>
@@ -170,6 +172,10 @@ class BridgeController extends GetxController {
     composerContext.value = composerContext.value.copyWith(
       reasoningEffort: effort,
     );
+  }
+
+  void setPermissionMode(String mode) {
+    permissionMode.value = mode;
   }
 
   void interrupt() {
@@ -316,11 +322,14 @@ class BridgeController extends GetxController {
           gitStatus(includeDiff: true);
           _loadLatestSessionEventsForSelectedWorkspace(force: true);
         case 'session.list.result':
-          sessions.assignAll(
-            ((map['sessions'] as List?) ?? const []).whereType<Map>().map(
-              (item) => SessionRecord.fromJson(item.cast<String, dynamic>()),
-            ),
-          );
+          final nextSessions = ((map['sessions'] as List?) ?? const [])
+              .whereType<Map>()
+              .map(
+                (item) => SessionRecord.fromJson(item.cast<String, dynamic>()),
+              )
+              .toList();
+          _syncSessionCompletionNotifications(nextSessions);
+          sessions.assignAll(nextSessions);
           _loadLatestSessionEventsForSelectedWorkspace(
             force: _liveTimelineTimer != null,
           );
@@ -337,6 +346,7 @@ class BridgeController extends GetxController {
           _pendingSessionStart = false;
           currentSessionId.value = record.id;
           timelineSessionRunning.value = true;
+          _markSessionRunningForNotification(record.id);
           _requestedEventsSessionId = record.id;
           _requestedEventsPrompt = record.prompt;
           sessions.insert(0, record);
@@ -356,10 +366,10 @@ class BridgeController extends GetxController {
           final doneSessionId =
               map['sessionId'] as String? ?? currentSessionId.value;
           if (doneSessionId != null && doneSessionId.isNotEmpty) {
-            _notifiedTerminalSessions.add(doneSessionId);
+            _markSessionTerminal(doneSessionId);
           }
           unawaited(
-            _notifySessionFinished(
+            _notifySessionFinishedOnce(
               status: TaskNotificationStatus.completed,
               sessionId: doneSessionId,
             ),
@@ -378,22 +388,36 @@ class BridgeController extends GetxController {
             ),
             _requestedEventsPrompt,
           );
-          final mergedEvents = _mergeLiveEvents(loadedEvents);
+          final effectiveEvents = _effectiveLoadedEventsForSession(
+            sessionId: sessionId,
+            loadedEvents: loadedEvents,
+          );
+          final shouldShowRunning = _shouldTreatLoadedSessionAsRunning(
+            sessionId: sessionId,
+            loadedEvents: effectiveEvents,
+          );
+          final displayEvents = shouldShowRunning
+              ? _withSyncedRunningEvent(effectiveEvents)
+              : effectiveEvents;
+          final mergedEvents = _mergeLiveEvents(displayEvents);
           if (!_hasSameTimelineEvents(events, mergedEvents)) {
             events.assignAll(mergedEvents);
             _bumpTimelineRevision();
           }
-          if (_hasTerminalEvent(loadedEvents)) {
+          final terminalEvent = _latestTerminalEvent(effectiveEvents);
+          if (terminalEvent != null) {
             unawaited(
               _notifyTerminalEventsIfNeeded(
                 sessionId: sessionId,
-                events: loadedEvents,
+                events: effectiveEvents,
               ),
             );
             currentSessionId.value = null;
             timelineSessionRunning.value = false;
             _pendingSessionStart = false;
-          } else if (sessionId == currentSessionId.value) {
+          } else if (shouldShowRunning) {
+            _markSessionRunningForNotification(sessionId);
+            currentSessionId.value = sessionId;
             timelineSessionRunning.value = true;
           }
         case 'session.error':
@@ -416,10 +440,10 @@ class BridgeController extends GetxController {
           final errorSessionId =
               map['sessionId'] as String? ?? currentSessionId.value;
           if (errorSessionId != null && errorSessionId.isNotEmpty) {
-            _notifiedTerminalSessions.add(errorSessionId);
+            _markSessionTerminal(errorSessionId);
           }
           unawaited(
-            _notifySessionFinished(
+            _notifySessionFinishedOnce(
               status: TaskNotificationStatus.failed,
               sessionId: errorSessionId,
               errorMessage: message,
@@ -432,10 +456,10 @@ class BridgeController extends GetxController {
           final interruptedSessionId =
               map['sessionId'] as String? ?? currentSessionId.value;
           if (interruptedSessionId != null && interruptedSessionId.isNotEmpty) {
-            _notifiedTerminalSessions.add(interruptedSessionId);
+            _markSessionTerminal(interruptedSessionId);
           }
           unawaited(
-            _notifySessionFinished(
+            _notifySessionFinishedOnce(
               status: TaskNotificationStatus.interrupted,
               sessionId: interruptedSessionId,
             ),
@@ -512,6 +536,96 @@ class BridgeController extends GetxController {
     }
   }
 
+  void _syncSessionCompletionNotifications(List<SessionRecord> nextSessions) {
+    for (final session in nextSessions) {
+      final status = session.status.toLowerCase();
+      if (status == 'running') {
+        _markSessionRunningForNotification(session.id);
+        continue;
+      }
+      if (!_isTerminalSessionStatus(status)) {
+        continue;
+      }
+      final wasRunning =
+          _shouldNotifyTerminalSession(session.id) ||
+          session.id == currentSessionId.value && timelineSessionRunning.value;
+      if (!wasRunning) {
+        continue;
+      }
+      _markSessionTerminal(session.id);
+      unawaited(
+        _notifySessionFinishedOnce(
+          status: _notificationStatusForSessionStatus(status),
+          sessionId: session.id,
+          notificationKey: _notificationKeyForSession(session),
+          workspaceName: _workspaceNameForSession(session.workspace),
+          prompt: session.prompt,
+        ),
+      );
+    }
+  }
+
+  void _markSessionRunningForNotification(String? sessionId) {
+    if (sessionId == null || sessionId.isEmpty) return;
+    final lifecycle = _sessionLifecycle(sessionId);
+    lifecycle.observedRunning = true;
+    lifecycle.visibleRunning = true;
+    lifecycle.terminalObserved = false;
+  }
+
+  bool _shouldNotifyTerminalSession(String? sessionId) {
+    if (sessionId == null || sessionId.isEmpty) return false;
+    final lifecycle = _sessionLifecycles[sessionId];
+    if (lifecycle == null || lifecycle.terminalObserved) return false;
+    return lifecycle.observedRunning || lifecycle.visibleRunning;
+  }
+
+  void _markSessionTerminal(String? sessionId) {
+    if (sessionId == null || sessionId.isEmpty) return;
+    final lifecycle = _sessionLifecycle(sessionId);
+    lifecycle.terminalObserved = true;
+    lifecycle.observedRunning = false;
+    lifecycle.visibleRunning = false;
+  }
+
+  _SessionLifecycle _sessionLifecycle(String sessionId) {
+    return _sessionLifecycles.putIfAbsent(sessionId, _SessionLifecycle.new);
+  }
+
+  String _notificationKeyForSession(SessionRecord session) {
+    final updatedAt = session.updatedAt.trim();
+    if (updatedAt.isEmpty) return session.id;
+    return '${session.id}:$updatedAt';
+  }
+
+  bool _isTerminalSessionStatus(String status) {
+    return status == 'done' ||
+        status == 'completed' ||
+        status == 'complete' ||
+        status == 'error' ||
+        status == 'failed' ||
+        status == 'interrupted';
+  }
+
+  TaskNotificationStatus _notificationStatusForSessionStatus(String status) {
+    return switch (status) {
+      'error' || 'failed' => TaskNotificationStatus.failed,
+      'interrupted' => TaskNotificationStatus.interrupted,
+      _ => TaskNotificationStatus.completed,
+    };
+  }
+
+  String _workspaceNameForSession(String workspace) {
+    final normalized = _normalizeWorkspaceKey(workspace);
+    for (final item in workspaces) {
+      if (_normalizeWorkspaceKey(item.path) == normalized ||
+          _normalizeWorkspaceKey(item.name) == normalized) {
+        return item.name.isNotEmpty ? item.name : item.path;
+      }
+    }
+    return _lastPathSegment(normalized);
+  }
+
   void _loadLatestSessionEventsForSelectedWorkspace({bool force = false}) {
     if (!connected.value) return;
     if (_pendingSessionStart) return;
@@ -554,6 +668,7 @@ class BridgeController extends GetxController {
     final requestedRunning =
         _requestedEventsSessionId == latest.id && timelineSessionRunning.value;
     if (latest.status == 'running') {
+      _markSessionRunningForNotification(latest.id);
       currentSessionId.value = latest.id;
       timelineSessionRunning.value = true;
     } else if (!requestedRunning) {
@@ -668,8 +783,105 @@ class BridgeController extends GetxController {
     return merged;
   }
 
+  List<SessionEvent> _effectiveLoadedEventsForSession({
+    required String sessionId,
+    required List<SessionEvent> loadedEvents,
+  }) {
+    final record = _sessionById(sessionId);
+    if (record?.status != 'running') {
+      return loadedEvents;
+    }
+    return _withoutStaleTerminalEventsAfterLastUser(loadedEvents);
+  }
+
+  List<SessionEvent> _withoutStaleTerminalEventsAfterLastUser(
+    List<SessionEvent> source,
+  ) {
+    var lastUserIndex = -1;
+    for (var index = 0; index < source.length; index += 1) {
+      if (source[index].kind == 'user') {
+        lastUserIndex = index;
+      }
+    }
+    if (lastUserIndex < 0) {
+      return source;
+    }
+    final next = <SessionEvent>[];
+    var hasAnswerAfterLastUser = false;
+    for (var index = 0; index < source.length; index += 1) {
+      final event = source[index];
+      final afterLastUser = index > lastUserIndex;
+      if (afterLastUser &&
+          _isTerminalEventKind(event.kind) &&
+          !hasAnswerAfterLastUser) {
+        continue;
+      }
+      if (afterLastUser &&
+          (event.kind == 'assistant' ||
+              event.kind == 'git_change' ||
+              event.kind == 'tool_call')) {
+        hasAnswerAfterLastUser = true;
+      }
+      next.add(event);
+    }
+    return next;
+  }
+
+  bool _shouldTreatLoadedSessionAsRunning({
+    required String sessionId,
+    required List<SessionEvent> loadedEvents,
+  }) {
+    final record = _sessionById(sessionId);
+    if (record?.status == 'running' &&
+        _latestMeaningfulEventIsUser(loadedEvents)) {
+      return true;
+    }
+    if (_latestTerminalEvent(loadedEvents) != null) return false;
+    if (record == null) {
+      return sessionId == currentSessionId.value &&
+          timelineSessionRunning.value;
+    }
+    if (record.status == 'running') return true;
+    return false;
+  }
+
+  bool _latestMeaningfulEventIsUser(List<SessionEvent> source) {
+    for (final event in source.reversed) {
+      if (event.kind == 'token_usage') continue;
+      if (_isLiveStatusEvent(event)) continue;
+      return event.kind == 'user';
+    }
+    return false;
+  }
+
+  List<SessionEvent> _withSyncedRunningEvent(List<SessionEvent> source) {
+    if (source.isNotEmpty && _isLiveStatusEvent(source.last)) {
+      return source;
+    }
+    return [
+      ...source,
+      const SessionEvent(kind: 'running', text: '正在同步电脑端 Codex 执行...'),
+    ];
+  }
+
+  SessionRecord? _sessionById(String sessionId) {
+    for (final session in sessions) {
+      if (session.id == sessionId) return session;
+    }
+    return null;
+  }
+
   bool _isLiveStatusEvent(SessionEvent event) {
     return event.kind == 'running' || event.kind == 'tool_call';
+  }
+
+  bool _isTerminalEventKind(String kind) {
+    final normalized = kind.toLowerCase();
+    return normalized == 'done' ||
+        normalized == 'interrupted' ||
+        normalized == 'error' ||
+        normalized.contains('complete') ||
+        normalized.contains('completed');
   }
 
   bool _containsSimilarEvent(List<SessionEvent> source, SessionEvent event) {
@@ -688,68 +900,117 @@ class BridgeController extends GetxController {
     for (var index = 0; index < current.length; index += 1) {
       final a = current[index];
       final b = next[index];
-      if (a.kind != b.kind || a.text != b.text) return false;
+      if (a.kind != b.kind ||
+          a.text != b.text ||
+          a.attachments.length != b.attachments.length) {
+        return false;
+      }
+      for (
+        var attachmentIndex = 0;
+        attachmentIndex < a.attachments.length;
+        attachmentIndex += 1
+      ) {
+        if (a.attachments[attachmentIndex].dataUrl !=
+            b.attachments[attachmentIndex].dataUrl) {
+          return false;
+        }
+      }
     }
     return true;
   }
 
-  bool _hasTerminalEvent(Iterable<SessionEvent> source) {
-    return source.any((event) {
+  SessionEvent? _latestTerminalEvent(List<SessionEvent> source) {
+    for (final event in source.reversed) {
       final kind = event.kind.toLowerCase();
-      return kind == 'done' ||
+      if (kind == 'token_usage') continue;
+      if (kind == 'running' || kind == 'tool_call') return null;
+      if (kind == 'user' || kind == 'assistant' || kind == 'git_change') {
+        return null;
+      }
+      if (kind == 'done' ||
           kind == 'interrupted' ||
           kind == 'error' ||
           kind.contains('complete') ||
-          kind.contains('completed');
-    });
+          kind.contains('completed')) {
+        return event;
+      }
+      if (event.text.trim().isNotEmpty) return null;
+    }
+    return null;
   }
 
   Future<void> _notifyTerminalEventsIfNeeded({
     required String sessionId,
     required List<SessionEvent> events,
   }) async {
-    if (sessionId.isEmpty || !_notifiedTerminalSessions.add(sessionId)) return;
-    SessionEvent? terminal;
-    for (final event in events.reversed) {
-      final kind = event.kind.toLowerCase();
-      if (kind == 'done' ||
-          kind == 'interrupted' ||
-          kind == 'error' ||
-          kind.contains('complete') ||
-          kind.contains('completed')) {
-        terminal = event;
-        break;
-      }
-    }
+    if (sessionId.isEmpty) return;
+    final terminal = _latestTerminalEvent(events);
     if (terminal == null) return;
+    _markSessionTerminal(sessionId);
     final kind = terminal.kind.toLowerCase();
     final status = kind == 'error'
         ? TaskNotificationStatus.failed
         : kind == 'interrupted'
         ? TaskNotificationStatus.interrupted
         : TaskNotificationStatus.completed;
-    await _notifySessionFinished(
+    await _notifySessionFinishedOnce(
       status: status,
       sessionId: sessionId,
+      notificationKey: _notificationKeyForTerminalEvent(sessionId, terminal),
       errorMessage: status == TaskNotificationStatus.failed
           ? terminal.text
           : null,
     );
   }
 
+  Future<void> _notifySessionFinishedOnce({
+    required TaskNotificationStatus status,
+    required String? sessionId,
+    String? notificationKey,
+    String? workspaceName,
+    String? prompt,
+    String? errorMessage,
+  }) async {
+    final dedupeKey = notificationKey ?? sessionId;
+    if (dedupeKey != null &&
+        dedupeKey.isNotEmpty &&
+        !_notifiedTerminalSessions.add(dedupeKey)) {
+      return;
+    }
+    await _notifySessionFinished(
+      status: status,
+      sessionId: sessionId,
+      workspaceName: workspaceName,
+      prompt: prompt,
+      errorMessage: errorMessage,
+    );
+  }
+
+  String _notificationKeyForTerminalEvent(
+    String sessionId,
+    SessionEvent terminal,
+  ) {
+    final timeKey = terminal.time?.toIso8601String() ?? '';
+    if (timeKey.isNotEmpty) return '$sessionId:$timeKey';
+    final promptKey = _currentPrompt();
+    if (promptKey.isNotEmpty) return '$sessionId:$promptKey';
+    return sessionId;
+  }
+
   Future<void> _notifySessionFinished({
     required TaskNotificationStatus status,
     required String? sessionId,
+    String? workspaceName,
+    String? prompt,
     String? errorMessage,
   }) async {
     if (!Get.isRegistered<TaskNotificationController>()) return;
     final workspace = selectedWorkspace.value;
-    final prompt = _currentPrompt();
     await Get.find<TaskNotificationController>().notifySessionTerminal(
       status: status,
       sessionId: sessionId,
-      workspaceName: workspace?.name ?? workspace?.path ?? '',
-      prompt: prompt,
+      workspaceName: workspaceName ?? workspace?.name ?? workspace?.path ?? '',
+      prompt: prompt ?? _currentPrompt(),
       errorMessage: errorMessage,
     );
   }
@@ -926,4 +1187,10 @@ class BridgeController extends GetxController {
     }
     return next;
   }
+}
+
+class _SessionLifecycle {
+  bool observedRunning = false;
+  bool visibleRunning = false;
+  bool terminalObserved = false;
 }

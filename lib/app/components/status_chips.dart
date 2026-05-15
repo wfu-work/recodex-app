@@ -3,37 +3,73 @@ import 'package:flutter/material.dart';
 import '../theme/recodex_theme.dart';
 
 class DiffChip extends StatelessWidget {
-  const DiffChip({required this.added, required this.removed, super.key});
+  const DiffChip({
+    required this.changedFiles,
+    required this.added,
+    required this.removed,
+    super.key,
+  });
 
+  final int changedFiles;
   final int added;
   final int removed;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
+    final isClean = changedFiles == 0 && added == 0 && removed == 0;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
       decoration: BoxDecoration(
         color: colors.surfaceOverlay,
         borderRadius: BorderRadius.circular(999),
         border: Border.all(color: colors.glassBorder),
       ),
-      child: Text.rich(
-        TextSpan(
-          children: [
-            TextSpan(
-              text: '+$added',
-              style: TextStyle(color: colors.icon),
+      child: isClean
+          ? Text(
+              'Clean',
+              style: TextStyle(
+                color: colors.success,
+                fontSize: 15,
+                fontWeight: FontWeight.w900,
+              ),
+            )
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '$changedFiles changed',
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                    height: 1.05,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: '+$added',
+                        style: TextStyle(color: colors.success),
+                      ),
+                      TextSpan(
+                        text: '  -$removed',
+                        style: TextStyle(color: colors.error),
+                      ),
+                    ],
+                  ),
+                  style: TextStyle(
+                    color: colors.textMuted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                    height: 1.05,
+                  ),
+                ),
+              ],
             ),
-            const TextSpan(text: '  '),
-            TextSpan(
-              text: '-$removed',
-              style: TextStyle(color: colors.error),
-            ),
-          ],
-        ),
-        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-      ),
     );
   }
 }

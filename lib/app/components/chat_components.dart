@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -19,6 +21,12 @@ class AssistantBubble extends StatelessWidget {
     final isUser = event.kind == 'user';
     final isError = event.kind == 'error';
     final text = _cleanEventText(event);
+    final imageAttachments = event.attachments
+        .where(
+          (attachment) =>
+              attachment.type == 'image' && attachment.dataUrl.isNotEmpty,
+        )
+        .toList();
     final bubbleColor = isUser
         ? colors.userBubble
         : isError
@@ -39,19 +47,210 @@ class AssistantBubble extends StatelessWidget {
           ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
-            child: SelectableText(
-              text.isEmpty ? '暂无输出' : text,
-              style: TextStyle(
-                fontSize: _scaledFontSize(16, fontScale),
-                height: 1.62,
-                color: isError ? colors.error : colors.text,
-                fontWeight: isUser ? FontWeight.w500 : FontWeight.w500,
+            child: Column(
+              crossAxisAlignment: isUser
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (imageAttachments.isNotEmpty) ...[
+                  _EventImageGrid(attachments: imageAttachments),
+                  if (text.isNotEmpty) const SizedBox(height: 14),
+                ],
+                if (text.isNotEmpty || imageAttachments.isEmpty)
+                  SelectableText(
+                    text.isEmpty ? '暂无输出' : text,
+                    style: TextStyle(
+                      fontSize: _scaledFontSize(16, fontScale),
+                      height: 1.62,
+                      color: isError ? colors.error : colors.text,
+                      fontWeight: isUser ? FontWeight.w500 : FontWeight.w500,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EventImageGrid extends StatelessWidget {
+  const _EventImageGrid({required this.attachments});
+
+  final List<EventAttachment> attachments;
+
+  @override
+  Widget build(BuildContext context) {
+    final images = attachments
+        .map(_EventImageData.tryParse)
+        .whereType<_EventImageData>()
+        .toList();
+    if (images.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final gap = images.length == 1 ? 0.0 : 8.0;
+        final itemWidth = images.length == 1
+            ? constraints.maxWidth
+            : (constraints.maxWidth - gap) / 2;
+        return Wrap(
+          alignment: WrapAlignment.end,
+          spacing: gap,
+          runSpacing: 8,
+          children: [
+            for (final image in images)
+              _EventImageTile(image: image, width: itemWidth),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _EventImageTile extends StatelessWidget {
+  const _EventImageTile({required this.image, required this.width});
+
+  final _EventImageData image;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final height = width > 260 ? 172.0 : 128.0;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Material(
+        color: colors.surfaceOverlay,
+        child: InkWell(
+          onTap: () => _showEventImagePreview(context, image),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border.all(color: colors.glassBorder),
+            ),
+            child: SizedBox(
+              width: width,
+              height: height,
+              child: Image.memory(
+                image.bytes,
+                fit: BoxFit.contain,
+                gaplessPlayback: true,
+                errorBuilder: (context, error, stackTrace) {
+                  return Center(
+                    child: Icon(
+                      Icons.broken_image_outlined,
+                      color: colors.textMuted,
+                      size: 22,
+                    ),
+                  );
+                },
               ),
             ),
           ),
         ),
       ),
     );
+  }
+}
+
+void _showEventImagePreview(BuildContext context, _EventImageData image) {
+  showDialog<void>(
+    context: context,
+    barrierColor: Colors.black.withValues(alpha: 0.82),
+    builder: (context) => _EventImagePreviewDialog(image: image),
+  );
+}
+
+class _EventImagePreviewDialog extends StatelessWidget {
+  const _EventImagePreviewDialog({required this.image});
+
+  final _EventImageData image;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    return Dialog.fullscreen(
+      backgroundColor: Colors.transparent,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => Navigator.of(context).pop(),
+              child: const SizedBox.expand(),
+            ),
+          ),
+          Positioned.fill(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                16,
+                media.padding.top + 56,
+                16,
+                media.padding.bottom + 34,
+              ),
+              child: Center(
+                child: GestureDetector(
+                  onTap: () {},
+                  child: InteractiveViewer(
+                    minScale: 0.8,
+                    maxScale: 5,
+                    child: Image.memory(
+                      image.bytes,
+                      fit: BoxFit.contain,
+                      gaplessPlayback: true,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: media.padding.top + 12,
+            right: 16,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.36),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white.withValues(alpha: 0.20)),
+              ),
+              child: IconButton(
+                tooltip: '关闭',
+                icon: const Icon(Icons.close, color: Colors.white),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EventImageData {
+  const _EventImageData({required this.bytes});
+
+  final Uint8List bytes;
+
+  static _EventImageData? tryParse(EventAttachment attachment) {
+    final dataUrl = attachment.dataUrl.trim();
+    final commaIndex = dataUrl.indexOf(',');
+    if (!dataUrl.startsWith('data:image/') || commaIndex < 0) {
+      return null;
+    }
+    final metadata = dataUrl.substring(0, commaIndex);
+    if (!metadata.contains(';base64')) {
+      return null;
+    }
+    try {
+      return _EventImageData(
+        bytes: base64Decode(dataUrl.substring(commaIndex + 1)),
+      );
+    } on FormatException {
+      return null;
+    }
   }
 }
 
@@ -116,6 +315,7 @@ class AssistantAnswerBlock extends StatelessWidget {
     final colors = context.recodexColors;
     final textBuffer = StringBuffer();
     final children = <Widget>[];
+    final gitSummaries = <GitChangeSummary>[];
     var hasTerminalEvent = false;
     SessionEvent? latestLiveEvent;
 
@@ -168,13 +368,7 @@ class AssistantAnswerBlock extends StatelessWidget {
       final gitSummary = GitChangeSummary.tryParse(event.text);
       if (gitSummary != null) {
         flushText();
-        children.add(
-          _GitChangePanel(
-            summary: gitSummary,
-            onUndo: onUndoGitChanges,
-            onFileTap: onGitFileTap,
-          ),
-        );
+        gitSummaries.add(gitSummary);
         continue;
       }
       final text = _cleanEventText(event);
@@ -186,7 +380,23 @@ class AssistantAnswerBlock extends StatelessWidget {
       textBuffer.write(text);
     }
     flushText();
+    final mergedGitSummary = _mergeGitSummaries(gitSummaries);
+    if (mergedGitSummary != null) {
+      if (children.isNotEmpty) {
+        children.add(const SizedBox(height: 18));
+      }
+      children.add(
+        _GitChangePanel(
+          summary: mergedGitSummary,
+          onUndo: onUndoGitChanges,
+          onFileTap: onGitFileTap,
+        ),
+      );
+    }
     if (!completed && !hasTerminalEvent && latestLiveEvent != null) {
+      if (children.isNotEmpty) {
+        children.add(const SizedBox(height: 18));
+      }
       children.add(_LiveActivityRow.fromEvent(latestLiveEvent));
     }
 
@@ -893,6 +1103,7 @@ class _GitChangePanel extends StatelessWidget {
         ? const Color(0xff17181c).withValues(alpha: 0.86)
         : colors.assistantBubble.withValues(alpha: 0.78);
     final rowDivider = colors.textMuted.withValues(alpha: isDark ? 0.14 : 0.12);
+    final fileCountLabel = '已编辑 ${summary.files.length} 个文件';
     return DecoratedBox(
       decoration: BoxDecoration(
         color: panelColor,
@@ -910,49 +1121,62 @@ class _GitChangePanel extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(18, 12, 12, 12),
+            padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
             child: Row(
               children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: colors.surfaceOverlay.withValues(alpha: 0.74),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: colors.glassBorder.withValues(alpha: 0.78),
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Icon(
+                      Icons.difference_outlined,
+                      size: 18,
+                      color: colors.icon,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Flexible(
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
                         child: Text(
-                          '${summary.files.length} 个文件',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                          fileCountLabel,
                           style: TextStyle(
-                            color: colors.textMuted,
-                            fontSize: _scaledFontSize(16.5, fontScale),
-                            fontWeight: FontWeight.w600,
+                            color: colors.text,
+                            fontSize: _scaledFontSize(16, fontScale),
+                            fontWeight: FontWeight.w900,
+                            height: 1.1,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      _DeltaText(
-                        added: summary.added,
-                        removed: summary.removed,
+                      const SizedBox(height: 5),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: _DeltaText(
+                          added: summary.added,
+                          removed: summary.removed,
+                        ),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
-                _GitActionButton(
-                  icon: Icons.undo,
-                  tooltip: '撤销',
-                  onPressed: onUndo,
-                ),
-                _GitActionButton(
-                  icon: Icons.north_east,
-                  tooltip: '审核',
-                  onPressed: summary.files.isEmpty ? null : () {},
-                ),
-                _GitActionButton(
-                  icon: Icons.open_in_full,
-                  tooltip: '展开',
-                  onPressed: summary.files.isEmpty ? null : () {},
-                ),
+                if (onUndo != null)
+                  _GitActionButton(
+                    icon: Icons.undo,
+                    tooltip: '撤销',
+                    onPressed: onUndo,
+                  ),
               ],
             ),
           ),
@@ -1031,6 +1255,30 @@ class GitChangeSummary {
   }
 }
 
+GitChangeSummary? _mergeGitSummaries(List<GitChangeSummary> summaries) {
+  if (summaries.isEmpty) return null;
+  final filesByPath = <String, GitFileChange>{};
+  for (final summary in summaries) {
+    for (final file in summary.files) {
+      final key = _normalizePath(file.path);
+      final existing = filesByPath[key];
+      filesByPath[key] = GitFileChange(
+        path: existing?.path ?? file.path,
+        added: (existing?.added ?? 0) + file.added,
+        removed: (existing?.removed ?? 0) + file.removed,
+      );
+    }
+  }
+  final files = filesByPath.values.toList()
+    ..sort((a, b) => _baseName(a.path).compareTo(_baseName(b.path)));
+  if (files.isEmpty) return null;
+  return GitChangeSummary(
+    files: files,
+    added: files.fold<int>(0, (sum, file) => sum + file.added),
+    removed: files.fold<int>(0, (sum, file) => sum + file.removed),
+  );
+}
+
 class _GitActionButton extends StatelessWidget {
   const _GitActionButton({
     required this.icon,
@@ -1080,43 +1328,36 @@ class _GitFileRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
     final fileName = _baseName(file.path);
     final content = Padding(
-      padding: const EdgeInsets.fromLTRB(24, 14, 16, 14),
+      padding: const EdgeInsets.fromLTRB(18, 14, 16, 14),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          Icon(
+            Icons.description_outlined,
+            size: 18,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(width: 10),
           Expanded(
-            child: Text.rich(
-              TextSpan(
-                children: [
-                  TextSpan(text: fileName.isEmpty ? file.path : fileName),
-                  const TextSpan(text: '  '),
-                  TextSpan(
-                    text: '+${file.added}',
-                    style: TextStyle(color: colors.success),
-                  ),
-                  const TextSpan(text: ' '),
-                  TextSpan(
-                    text: '-${file.removed}',
-                    style: TextStyle(color: colors.error),
-                  ),
-                ],
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: colors.text,
-                fontSize: _scaledFontSize(15.5, fontScale),
-                fontWeight: FontWeight.w900,
-                height: 1.12,
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                fileName.isEmpty ? file.path : fileName,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontSize: _scaledFontSize(15.5, fontScale),
+                  fontWeight: FontWeight.w900,
+                  height: 1.12,
+                ),
               ),
             ),
           ),
-          const SizedBox(width: 10),
-          Icon(Icons.expand_more, size: 22, color: colors.textMuted),
+          const SizedBox(width: 14),
+          _DeltaText(added: file.added, removed: file.removed),
         ],
       ),
     );
@@ -1165,20 +1406,26 @@ class ComposerBar extends StatelessWidget {
     required this.controller,
     required this.enabled,
     required this.context,
+    required this.permissionMode,
     required this.onSend,
     required this.onModelChanged,
     required this.onReasoningChanged,
+    required this.onPermissionModeChanged,
     required this.onVoicePressed,
     this.listening = false,
     super.key,
   });
 
+  static const List<String> permissionModes = ['默认权限', '自动审查', '完全访问权限'];
+
   final TextEditingController controller;
   final bool enabled;
   final ComposerContext context;
+  final String permissionMode;
   final VoidCallback onSend;
   final ValueChanged<String> onModelChanged;
   final ValueChanged<String> onReasoningChanged;
+  final ValueChanged<String> onPermissionModeChanged;
   final VoidCallback onVoicePressed;
   final bool listening;
 
@@ -1339,13 +1586,11 @@ class ComposerBar extends StatelessWidget {
                 ],
               ),
               const SizedBox(width: 10),
-              _ContextPill(
+              _PermissionModePill(
                 icon: Icons.shield_outlined,
-                label: this.context.requireConfirmGitWrite
-                    ? 'Confirm'
-                    : 'Trusted',
-                warning: this.context.requireConfirmGitWrite,
-                trailing: Icons.keyboard_arrow_down,
+                value: permissionMode,
+                values: permissionModes,
+                onChanged: onPermissionModeChanged,
               ),
               const SizedBox(width: 18),
               _ContextPill(
@@ -1593,6 +1838,55 @@ class _ContextPill extends StatelessWidget {
   }
 }
 
+class _PermissionModePill extends StatelessWidget {
+  const _PermissionModePill({
+    required this.icon,
+    required this.value,
+    required this.values,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String value;
+  final List<String> values;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = values.contains(value) ? value : values.first;
+    return PopupMenuButton<String>(
+      initialValue: selected,
+      onSelected: onChanged,
+      itemBuilder: (context) => values
+          .map(
+            (item) => PopupMenuItem<String>(
+              value: item,
+              child: Row(
+                children: [
+                  Icon(
+                    item == selected
+                        ? Icons.check_circle
+                        : Icons.radio_button_unchecked,
+                    size: 18,
+                    color: context.recodexColors.textMuted,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(item),
+                ],
+              ),
+            ),
+          )
+          .toList(),
+      child: _ContextPill(
+        icon: icon,
+        label: selected,
+        warning: selected == '完全访问权限',
+        trailing: Icons.keyboard_arrow_down,
+      ),
+    );
+  }
+}
+
 class _ContextMenuPill extends StatelessWidget {
   const _ContextMenuPill({
     required this.icon,
@@ -1692,12 +1986,19 @@ List<InlineSpan> _inlineSpans(BuildContext context, String text) {
   final isDark = Theme.of(context).brightness == Brightness.dark;
   final spans = <InlineSpan>[];
   final matches = RegExp(
-    r'`([^`]+)`|((?:/|[A-Za-z]:\\)[^\s，。；、]+(?::\d+)?)',
+    r'\[([^\]]+)\]\(((?:/|[A-Za-z]:\\)[^)]+)\)|`([^`]+)`|((?:/|[A-Za-z]:\\)[^\s，。；、]+(?::\d+)?)',
   ).allMatches(text).toList();
   var cursor = 0;
   for (final match in matches) {
     if (match.start > cursor) {
       spans.add(TextSpan(text: text.substring(cursor, match.start)));
+    }
+    final markdownLabel = match.group(1);
+    final markdownTarget = match.group(2);
+    if (markdownTarget != null) {
+      spans.add(_fileLinkSpan(context, markdownTarget, markdownLabel));
+      cursor = match.end;
+      continue;
     }
     spans.add(
       WidgetSpan(
@@ -1712,7 +2013,7 @@ List<InlineSpan> _inlineSpans(BuildContext context, String text) {
             borderRadius: BorderRadius.circular(7),
           ),
           child: Text(
-            match.group(1) ?? match.group(2) ?? '',
+            match.group(3) ?? match.group(4) ?? '',
             style: TextStyle(
               color: colors.text,
               fontFamily: 'Menlo',
@@ -1737,6 +2038,48 @@ List<InlineSpan> _inlineSpans(BuildContext context, String text) {
     spans.add(TextSpan(text: text.substring(cursor)));
   }
   return spans.isEmpty ? [TextSpan(text: text)] : spans;
+}
+
+InlineSpan _fileLinkSpan(BuildContext context, String target, String? label) {
+  final color = Theme.of(context).colorScheme.primary;
+  final parsed = _parseFileLinkTarget(target);
+  final fallbackName = _baseName(parsed.path);
+  final labelName = (label ?? '').trim();
+  final fileName = labelName.isEmpty || labelName.startsWith('/')
+      ? fallbackName
+      : labelName;
+  final suffix = parsed.line == null ? '' : ' (line ${parsed.line})';
+  return WidgetSpan(
+    alignment: PlaceholderAlignment.middle,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.description_outlined, size: 16, color: color),
+          const SizedBox(width: 4),
+          Text(
+            '$fileName$suffix',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: color,
+              fontSize: 15.5,
+              fontWeight: FontWeight.w500,
+              height: 1.1,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+({String path, String? line}) _parseFileLinkTarget(String target) {
+  final trimmed = target.trim();
+  final match = RegExp(r'^(.*):(\d+)$').firstMatch(trimmed);
+  if (match == null) return (path: trimmed, line: null);
+  return (path: match.group(1) ?? trimmed, line: match.group(2));
 }
 
 bool _isModifiedFilesHeader(String line) {

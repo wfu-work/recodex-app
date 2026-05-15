@@ -172,8 +172,9 @@ class _MainPageState extends State<MainPage> {
                   child: HomeHeader(
                     title: _workspaceTitle,
                     subtitle: _workspaceSubtitle,
-                    added: _changedFilesAdded,
-                    removed: _changedFilesRemoved,
+                    changedFiles: _gitChangeOverview.changedFiles,
+                    added: _gitChangeOverview.addedLines,
+                    removed: _gitChangeOverview.removedLines,
                     backgroundProgress: _headerBackgroundProgress,
                     topPadding: topInset,
                     onRefreshGit: controller.canUseWorkspace
@@ -201,9 +202,11 @@ class _MainPageState extends State<MainPage> {
                           controller: _promptController,
                           enabled: controller.canUseWorkspace,
                           context: controller.composerContext.value,
+                          permissionMode: controller.permissionMode.value,
                           onSend: _sendPrompt,
                           onModelChanged: controller.setComposerModel,
                           onReasoningChanged: controller.setReasoningEffort,
+                          onPermissionModeChanged: controller.setPermissionMode,
                           onVoicePressed: _toggleVoiceInput,
                         ),
                       ),
@@ -261,11 +264,8 @@ class _MainPageState extends State<MainPage> {
     return path;
   }
 
-  int get _changedFilesAdded =>
-      parseChangedFileCounts(controller.gitSnapshot.value).$1;
-
-  int get _changedFilesRemoved =>
-      parseChangedFileCounts(controller.gitSnapshot.value).$2;
+  GitChangeOverview get _gitChangeOverview =>
+      parseGitChangeOverview(controller.gitSnapshot.value);
 
   GitChangeSummary? get _gitChangeSummary {
     final snapshot = controller.gitSnapshot.value;

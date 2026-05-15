@@ -8,6 +8,7 @@ class HomeHeader extends StatelessWidget {
   const HomeHeader({
     required this.title,
     required this.subtitle,
+    required this.changedFiles,
     required this.added,
     required this.removed,
     required this.backgroundProgress,
@@ -18,6 +19,7 @@ class HomeHeader extends StatelessWidget {
 
   final String title;
   final String subtitle;
+  final int changedFiles;
   final int added;
   final int removed;
   final double backgroundProgress;
@@ -63,7 +65,7 @@ class HomeHeader extends StatelessWidget {
         ],
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(36, topPadding + 12, 24, 20),
+        padding: EdgeInsets.fromLTRB(36, topPadding + 12, 24, 8),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -108,7 +110,11 @@ class HomeHeader extends StatelessWidget {
             const SizedBox(width: 12),
             GestureDetector(
               onTap: onRefreshGit,
-              child: DiffChip(added: added, removed: removed),
+              child: DiffChip(
+                changedFiles: changedFiles,
+                added: added,
+                removed: removed,
+              ),
             ),
           ],
         ),
