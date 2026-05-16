@@ -13,7 +13,7 @@ class BridgeController extends GetxController {
 
   final baseUrl = 'http://127.0.0.1:8765'.obs;
   final deviceName = 'Flutter phone'.obs;
-  final deviceId = 'flutter_${DateTime.now().millisecondsSinceEpoch}'.obs;
+  final deviceId = ''.obs;
   final deviceKey = ''.obs;
   final pairingToken = ''.obs;
   final connectionLabel = 'offline'.obs;
@@ -41,6 +41,7 @@ class BridgeController extends GetxController {
   int _messageSeq = 0;
   bool _manualDisconnect = false;
   bool _pendingSessionStart = false;
+  final _credentialsLoaded = Completer<void>();
   String? _requestedEventsSessionId;
   String? _requestedEventsPrompt;
   String? _storedWorkspaceName;
@@ -70,6 +71,7 @@ class BridgeController extends GetxController {
     required String token,
     required String inputDeviceName,
   }) async {
+    await _ensureCredentialsLoaded();
     _manualDisconnect = false;
     _reconnectTimer?.cancel();
     busy.value = true;
@@ -1041,6 +1043,7 @@ class BridgeController extends GetxController {
   }
 
   Future<void> _loadStoredCredentials() async {
+    var shouldAutoConnect = false;
     try {
       final storedBaseUrl = await _storage.read(key: 'recodex_base_url');
       final storedDeviceName = await _storage.read(key: 'recodex_device_name');
@@ -1064,6 +1067,7 @@ class BridgeController extends GetxController {
       if (storedDeviceId != null && storedDeviceId.isNotEmpty) {
         deviceId.value = storedDeviceId;
       } else {
+        deviceId.value = _newDeviceId();
         await _storage.write(key: 'recodex_device_id', value: deviceId.value);
       }
       if (storedDeviceKey != null && storedDeviceKey.isNotEmpty) {
@@ -1072,12 +1076,35 @@ class BridgeController extends GetxController {
       if (storedPairingToken != null && storedPairingToken.isNotEmpty) {
         pairingToken.value = storedPairingToken;
       }
-      if (deviceKey.value.isNotEmpty || pairingToken.value.isNotEmpty) {
-        unawaited(_autoConnect());
-      }
+      shouldAutoConnect =
+          deviceKey.value.isNotEmpty || pairingToken.value.isNotEmpty;
     } catch (_) {
       // Tests and unsupported desktop targets may not have a secure storage backend.
+      if (deviceId.value.isEmpty) {
+        deviceId.value = _newDeviceId();
+      }
+    } finally {
+      if (!_credentialsLoaded.isCompleted) {
+        _credentialsLoaded.complete();
+      }
     }
+
+    if (shouldAutoConnect) {
+      unawaited(_autoConnect());
+    }
+  }
+
+  Future<void> _ensureCredentialsLoaded() async {
+    if (!_credentialsLoaded.isCompleted) {
+      await _credentialsLoaded.future;
+    }
+    if (deviceId.value.isEmpty) {
+      deviceId.value = _newDeviceId();
+    }
+  }
+
+  String _newDeviceId() {
+    return 'flutter_${DateTime.now().millisecondsSinceEpoch}';
   }
 
   Future<void> _storeConnectionHints() async {
