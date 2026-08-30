@@ -2,129 +2,118 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:recodex/app/services/relay_protocol.dart';
+
+/// Protocol v1 smoke test. The Connect Token must have been issued for the
+/// supplied app endpoint public key (the private seed is never logged).
 Future<void> main(List<String> args) async {
-  final runSession = args.contains('--session');
-  final baseUrl = args.firstWhere(
-    (arg) => !arg.startsWith('--'),
-    orElse: () => 'http://127.0.0.1:8765',
-  );
-  final pairing = await _getJson(Uri.parse('$baseUrl/pairing'));
-  final token = pairing['token'] as String? ?? '';
-  if (token.isEmpty) {
-    throw StateError('Pairing token is empty.');
+  final relayUrl = _arg(args, 'relay');
+  final spaceId = _arg(args, 'space');
+  final token = _arg(args, 'token');
+  final endpointId = _arg(args, 'endpoint');
+  final targetDeviceId = _arg(args, 'target');
+  final seedText = _arg(args, 'seed');
+  if ([
+    relayUrl,
+    spaceId,
+    token,
+    endpointId,
+    targetDeviceId,
+    seedText,
+  ].any((value) => value == null || value.isEmpty)) {
+    throw ArgumentError(
+      'usage: flutter pub run tool/bridge_smoke.dart '
+      '--relay=wss://host/v1/connect --space=space --token=token '
+      '--endpoint=app_id --target=host_id --seed=base64url-ed25519-seed',
+    );
   }
 
-  final wsUrl = baseUrl.replaceFirst(RegExp('^http'), 'ws');
-  final socket = await WebSocket.connect('$wsUrl/ws');
-  var seq = 0;
+  final relay = relayUrl!;
+  final space = spaceId!;
+  final connectToken = token!;
+  final appEndpoint = endpointId!;
+  final hostEndpoint = targetDeviceId!;
+  final seed = seedText!;
+
+  final keyPair = await RelayProtocol.keyPairFromSeed(
+    RelayProtocol.decodeBase64Url(seed),
+  );
+  final socket = await WebSocket.connect(relay);
   final messages = StreamIterator<String>(
     socket.map((raw) => raw as String).timeout(const Duration(seconds: 8)),
   );
-
   Future<Map<String, dynamic>> next({
     Duration timeout = const Duration(seconds: 8),
   }) async {
     final hasMessage = await messages.moveNext().timeout(timeout);
-    if (!hasMessage) {
-      throw StateError('WebSocket closed before the next message.');
-    }
-    return jsonDecode(messages.current) as Map<String, dynamic>;
+    if (!hasMessage) throw StateError('Relay 在下一帧之前关闭连接');
+    final decoded = jsonDecode(messages.current);
+    if (decoded is! Map) throw StateError('Relay 返回了非对象帧');
+    return Map<String, dynamic>.from(decoded);
   }
 
-  void send(String type, Map<String, dynamic> payload) {
-    seq += 1;
-    socket.add(
-      jsonEncode({'type': type, 'id': 'smoke_$seq', 'payload': payload}),
-    );
-  }
-
-  final hello = await next();
-  _expect(hello['type'] == 'bridge.hello', 'expected bridge.hello');
-
-  send('auth.hello', {
-    'deviceId': 'smoke_dart',
-    'deviceName': 'Dart Smoke',
-    'token': token,
-  });
-  final auth = await next();
-  _expect(auth['type'] == 'auth.ok', 'expected auth.ok, got ${auth['type']}');
-
-  send('workspace.list', {});
-  final workspacesResult = await next();
-  _expect(
-    workspacesResult['type'] == 'workspace.list.result',
-    'expected workspace.list.result',
+  socket.add(
+    jsonEncode(
+      await RelayProtocol.connectHello(
+        keyPair: keyPair,
+        spaceId: space,
+        endpointId: appEndpoint,
+        endpointType: 'app',
+        endpointName: 'Dart Protocol Smoke',
+        token: connectToken,
+      ),
+    ),
   );
-  final workspacePayload = workspacesResult['payload'] as Map<String, dynamic>;
-  final workspaces = (workspacePayload['workspaces'] as List?) ?? const [];
-
-  send('device.list', {});
-  final devicesResult = await next();
+  final welcome = await next();
   _expect(
-    devicesResult['type'] == 'device.list.result',
-    'expected device.list.result',
+    welcome['type'] == 'connect.welcome',
+    'expected connect.welcome, got ${welcome['type']}',
   );
 
-  var sessionChecked = false;
-  if (workspaces.isNotEmpty) {
-    final workspace = (workspaces.first as Map).cast<String, dynamic>();
-    send('git.status', {'workspace': workspace['name']});
-    final gitResult = await next();
-    _expect(
-      gitResult['type'] == 'git.status.result',
-      'expected git.status.result',
-    );
-
-    if (runSession) {
-      send('session.start', {
-        'workspace': workspace['name'],
-        'prompt': 'Reply with exactly: recodex-smoke-ok',
-      });
-      var done = false;
-      while (!done) {
-        final message = await next(timeout: const Duration(seconds: 120));
-        switch (message['type']) {
-          case 'session.created':
-          case 'session.event':
-            break;
-          case 'session.done':
-            done = true;
-          case 'session.error':
-            throw StateError('session failed: ${message['payload']}');
-          default:
-            break;
-        }
-      }
-      sessionChecked = true;
+  final requestId = RelayProtocol.randomId('smoke');
+  socket.add(
+    jsonEncode(
+      RelayProtocol.command(
+        requestId: requestId,
+        spaceId: space,
+        deviceId: appEndpoint,
+        targetDeviceId: hostEndpoint,
+        sequence: 1,
+        command: {'type': 'host.get_status'},
+      ),
+    ),
+  );
+  Map<String, dynamic>? result;
+  while (result == null) {
+    final frame = await next();
+    final payload = RelayProtocol.unwrapProductMessage(frame);
+    if (payload?['type'] == 'codex.command.result' &&
+        payload?['requestId'] == requestId) {
+      result = payload;
     }
   }
-
+  _expect(
+    result['success'] == true,
+    'host.get_status failed: ${result['error']}',
+  );
   await socket.close();
   await messages.cancel();
   stdout.writeln(
     jsonEncode({
       'ok': true,
-      'workspaces': workspaces.length,
+      'protocolVersion': 1,
       'authed': true,
-      'gitChecked': workspaces.isNotEmpty,
-      'sessionChecked': sessionChecked,
+      'hostStatus': result['result'],
     }),
   );
 }
 
-Future<Map<String, dynamic>> _getJson(Uri uri) async {
-  final client = HttpClient();
-  try {
-    final request = await client.getUrl(uri);
-    final response = await request.close();
-    final body = await response.transform(utf8.decoder).join();
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw HttpException(body, uri: uri);
-    }
-    return jsonDecode(body) as Map<String, dynamic>;
-  } finally {
-    client.close();
+String? _arg(List<String> args, String name) {
+  final prefix = '--$name=';
+  for (final arg in args) {
+    if (arg.startsWith(prefix)) return arg.substring(prefix.length);
   }
+  return null;
 }
 
 void _expect(bool condition, String message) {

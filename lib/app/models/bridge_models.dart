@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 class WorkspaceInfo {
   const WorkspaceInfo({required this.name, required this.path});
 
@@ -10,80 +8,6 @@ class WorkspaceInfo {
     return WorkspaceInfo(
       name: json['name'] as String? ?? '',
       path: json['path'] as String? ?? '',
-    );
-  }
-}
-
-class PairingInfo {
-  const PairingInfo({
-    required this.baseUrl,
-    required this.token,
-    required this.pairingUri,
-  });
-
-  final String baseUrl;
-  final String token;
-  final String pairingUri;
-
-  factory PairingInfo.fromJson(Map<String, dynamic> json) {
-    final baseUrl = json['baseUrl'] as String? ?? '';
-    final token = json['token'] as String? ?? '';
-    return PairingInfo(
-      baseUrl: baseUrl,
-      token: token,
-      pairingUri:
-          json['pairingUri'] as String? ??
-          Uri(
-            scheme: 'recodex',
-            host: 'pair',
-            queryParameters: {'baseUrl': baseUrl, 'token': token},
-          ).toString(),
-    );
-  }
-
-  static PairingInfo? tryParse(String raw) {
-    final trimmed = raw.trim();
-    try {
-      if (trimmed.startsWith('{')) {
-        return PairingInfo.fromJson(
-          jsonDecode(trimmed) as Map<String, dynamic>,
-        );
-      }
-      final uri = Uri.parse(trimmed);
-      if (uri.scheme == 'recodex' && uri.host == 'pair') {
-        final baseUrl = uri.queryParameters['baseUrl'] ?? '';
-        final token = uri.queryParameters['token'] ?? '';
-        if (baseUrl.isEmpty || token.isEmpty) return null;
-        return PairingInfo(baseUrl: baseUrl, token: token, pairingUri: trimmed);
-      }
-      if ((uri.scheme == 'http' || uri.scheme == 'https') &&
-          uri.path.endsWith('/pairing')) {
-        final origin = '${uri.scheme}://${uri.authority}';
-        return PairingInfo(baseUrl: origin, token: '', pairingUri: trimmed);
-      }
-    } catch (_) {
-      return null;
-    }
-    return null;
-  }
-}
-
-class DeviceInfo {
-  const DeviceInfo({
-    required this.id,
-    required this.name,
-    required this.lastSeen,
-  });
-
-  final String id;
-  final String name;
-  final String lastSeen;
-
-  factory DeviceInfo.fromJson(Map<String, dynamic> json) {
-    return DeviceInfo(
-      id: json['id'] as String? ?? '',
-      name: json['name'] as String? ?? 'Device',
-      lastSeen: json['lastSeen'] as String? ?? '',
     );
   }
 }

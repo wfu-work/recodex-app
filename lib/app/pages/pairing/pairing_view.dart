@@ -17,21 +17,40 @@ class PairingPage extends StatefulWidget {
 class _PairingPageState extends State<PairingPage> {
   final BridgeController controller = Get.find();
   late final TextEditingController _baseUrlController;
+  late final TextEditingController _spaceIdController;
+  late final TextEditingController _targetDeviceController;
+  late final TextEditingController _endpointIdController;
   late final TextEditingController _tokenController;
+  late final TextEditingController _grantController;
   bool _showToken = false;
-  String _pairingStatus = '';
 
   @override
   void initState() {
     super.initState();
     _baseUrlController = TextEditingController(text: controller.baseUrl.value);
-    _tokenController = TextEditingController();
+    _spaceIdController = TextEditingController(text: controller.spaceId.value);
+    _targetDeviceController = TextEditingController(
+      text: controller.targetDeviceId.value,
+    );
+    _endpointIdController = TextEditingController(
+      text: controller.deviceId.value,
+    );
+    _tokenController = TextEditingController(
+      text: controller.pairingToken.value,
+    );
+    _grantController = TextEditingController(
+      text: controller.endpointGrant.value,
+    );
   }
 
   @override
   void dispose() {
     _baseUrlController.dispose();
+    _spaceIdController.dispose();
+    _targetDeviceController.dispose();
+    _endpointIdController.dispose();
     _tokenController.dispose();
+    _grantController.dispose();
     super.dispose();
   }
 
@@ -69,12 +88,33 @@ class _PairingPageState extends State<PairingPage> {
                           const SizedBox(height: 34),
                           _PairingCard(
                             icon: Icons.router_outlined,
-                            title: 'Bridge 连接',
+                            title: 'Relay 连接',
                             children: [
                               _TextSettingRow(
-                                title: 'Bridge 地址',
-                                subtitle: '本机或局域网网桥',
+                                title: 'Relay 地址',
+                                subtitle: 'Relay Protocol v1 /v1/connect',
                                 controller: _baseUrlController,
+                                onSubmitted: (_) => _connect(),
+                              ),
+                              const SizedBox(height: 24),
+                              _TextSettingRow(
+                                title: 'Space ID',
+                                subtitle: '与 Relay Connect Token 一致',
+                                controller: _spaceIdController,
+                                onSubmitted: (_) => _connect(),
+                              ),
+                              const SizedBox(height: 24),
+                              _TextSettingRow(
+                                title: '目标 Codex 主机 Endpoint',
+                                subtitle: '插件配置中的 host deviceId',
+                                controller: _targetDeviceController,
+                                onSubmitted: (_) => _connect(),
+                              ),
+                              const SizedBox(height: 24),
+                              _TextSettingRow(
+                                title: '本机 App Endpoint',
+                                subtitle: '需与 Relay Token 的 endpointId 完全一致',
+                                controller: _endpointIdController,
                                 onSubmitted: (_) => _connect(),
                               ),
                               const SizedBox(height: 24),
@@ -84,15 +124,9 @@ class _PairingPageState extends State<PairingPage> {
                                 error: lastError,
                               ),
                               const SizedBox(height: 30),
-                              _PairingActionRow(
-                                status: _pairingStatus,
-                                busy: busy,
-                                onFetchPairing: _fetchPairing,
-                              ),
-                              const SizedBox(height: 12),
                               _PairingHint(
                                 text:
-                                    '真机连接时 Bridge 地址应使用电脑局域网地址，例如 http://192.168.x.x:8765。',
+                                    'Relay 地址示例：wss://relay.example.com/v1/connect；公网 Relay 必须使用 WSS。',
                                 error: false,
                               ),
                             ],
@@ -108,11 +142,24 @@ class _PairingPageState extends State<PairingPage> {
                                 onToggleToken: () =>
                                     setState(() => _showToken = !_showToken),
                               ),
+                              const SizedBox(height: 18),
+                              _TextSettingRow(
+                                title: 'Endpoint Grant',
+                                subtitle: '可选，用于 Token 到期后自动续期',
+                                controller: _grantController,
+                                onSubmitted: (_) => _connect(),
+                              ),
+                              const SizedBox(height: 18),
+                              _PairingHint(
+                                text:
+                                    '本机 Endpoint ID：${controller.deviceId.value}\nEndpoint 公钥：${controller.endpointPublicKey.value.isEmpty ? '连接时生成' : controller.endpointPublicKey.value}',
+                                error: false,
+                              ),
                               const SizedBox(height: 22),
                               Align(
                                 alignment: Alignment.centerRight,
                                 child: BluePillButton(
-                                  label: busy ? '连接中' : '连接 Bridge',
+                                  label: busy ? '连接中' : '连接 Relay',
                                   icon: busy ? Icons.sync : Icons.qr_code_2,
                                   onPressed: busy ? null : _connect,
                                 ),
@@ -221,75 +268,10 @@ class _PairingPageState extends State<PairingPage> {
       inputBaseUrl: _baseUrlController.text,
       token: _tokenController.text,
       inputDeviceName: controller.deviceName.value,
-    );
-  }
-
-  Future<void> _fetchPairing() async {
-    setState(() => _pairingStatus = '正在获取配对信息...');
-    final info = await controller.fetchPairing(_baseUrlController.text);
-    if (!mounted) return;
-    if (info == null) {
-      setState(() {
-        _pairingStatus = controller.lastError.value.isEmpty
-            ? '获取失败，请检查 Bridge 地址和后台是否启动。'
-            : '获取失败：${controller.lastError.value}';
-      });
-      return;
-    }
-    _baseUrlController.text = info.baseUrl;
-    _tokenController.text = info.token;
-    setState(() {
-      _showToken = true;
-      _pairingStatus = info.token.isEmpty
-          ? '未获取到令牌，请重启或刷新 Bridge 配对窗口。'
-          : '已获取新令牌。';
-    });
-  }
-}
-
-class _PairingActionRow extends StatelessWidget {
-  const _PairingActionRow({
-    required this.status,
-    required this.busy,
-    required this.onFetchPairing,
-  });
-
-  final String status;
-  final bool busy;
-  final VoidCallback onFetchPairing;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final compact = constraints.maxWidth < 460;
-        final statusText = _PairingHint(
-          text: status,
-          error: status.contains('失败'),
-        );
-        final button = BluePillButton(
-          label: busy ? '获取中' : '获取配对信息',
-          icon: busy ? Icons.sync : Icons.link,
-          onPressed: busy ? null : onFetchPairing,
-        );
-        if (compact) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              statusText,
-              const SizedBox(height: 12),
-              Align(alignment: Alignment.centerRight, child: button),
-            ],
-          );
-        }
-        return Row(
-          children: [
-            Expanded(child: statusText),
-            const SizedBox(width: 16),
-            button,
-          ],
-        );
-      },
+      inputSpaceId: _spaceIdController.text,
+      inputTargetDeviceId: _targetDeviceController.text,
+      inputEndpointId: _endpointIdController.text,
+      inputEndpointGrant: _grantController.text,
     );
   }
 }
@@ -326,7 +308,7 @@ class _PairingHero extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  connected ? 'Bridge 已连接' : '连接你的本地 Bridge',
+                  connected ? 'Relay 已连接' : '连接你的 Codex 主机',
                   style: const TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.w900,
@@ -334,7 +316,7 @@ class _PairingHero extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  '完成配对后，App 会保存设备密钥并自动重连。',
+                  'App 使用 Ed25519 Endpoint proof 接入 Relay，与桌面插件通过 codex.v1 通信。',
                   style: TextStyle(
                     color: Color(0xff747878),
                     fontSize: 14,
@@ -438,13 +420,16 @@ class _TokenSettingRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _ResponsiveSettingRow(
-      label: const _SettingLabel(title: '配对令牌', subtitle: 'Bridge 生成的短期令牌'),
+      label: const _SettingLabel(
+        title: 'App Connect Token',
+        subtitle: 'Relay 为本机 App Endpoint 签发的短期令牌',
+      ),
       field: TextField(
         controller: controller,
         obscureText: !showToken,
         textAlign: TextAlign.center,
         decoration: InputDecoration(
-          hintText: '输入配对令牌',
+          hintText: '输入 Connect Token',
           suffixIcon: IconButton(
             tooltip: showToken ? '隐藏令牌' : '显示令牌',
             onPressed: onToggleToken,

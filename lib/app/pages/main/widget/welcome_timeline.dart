@@ -25,12 +25,12 @@ class WelcomeTimeline extends StatelessWidget {
         ? '重连中'
         : '待命';
     final title = connected
-        ? 'Bridge 已连接，已加载 $workspaceCount 个工作区'
+        ? 'Relay 已连接，已加载 $workspaceCount 个工作区'
         : connectionLabel == 'connecting' || connectionLabel == 'auth'
-        ? '正在连接本地 Bridge'
+        ? '正在连接 Relay'
         : connectionLabel == 'reconnecting'
-        ? '正在重新连接本地 Bridge'
-        : '等待本地 Bridge 连接';
+        ? '正在重新连接 Relay'
+        : '等待 Relay 连接';
     final icon = connected
         ? Icons.check_circle_outline
         : connectionLabel == 'connecting' ||

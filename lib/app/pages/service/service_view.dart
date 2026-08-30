@@ -30,20 +30,20 @@ class ServicePage extends StatelessWidget {
                     icon: controller.connected.value
                         ? Icons.cloud_done_outlined
                         : Icons.cloud_off,
-                    title: 'Bridge 服务',
+                    title: 'Relay 连接',
                     subtitle: controller.connected.value ? '在线' : '未连接',
                     trailing: _StatusDot(connected: controller.connected.value),
                   ),
                   _DividerLine(),
                   _ServiceTile(
                     icon: Icons.link_outlined,
-                    title: '服务地址',
+                    title: 'Relay 地址',
                     subtitle: controller.baseUrl.value,
                   ),
                   _DividerLine(),
                   _ServiceTile(
                     icon: Icons.info_outline,
-                    title: '连接状态',
+                    title: '协议状态',
                     subtitle: controller.connectionLabel.value,
                   ),
                 ],
@@ -76,20 +76,20 @@ class ServicePage extends StatelessWidget {
               ),
               const SizedBox(height: 18),
               _ServiceGroup(
-                title: '设备',
+                title: 'Endpoint',
                 children: [
-                  _ServiceTile(
-                    icon: Icons.devices_outlined,
-                    title: '已授权设备',
-                    subtitle: '${controller.devices.length} 台',
-                  ),
-                  _DividerLine(),
                   _ServiceTile(
                     icon: controller.hasDeviceKey
                         ? Icons.verified_user_outlined
                         : Icons.no_encryption_outlined,
-                    title: '设备密钥',
-                    subtitle: controller.hasDeviceKey ? '已保存' : '未保存',
+                    title: '本机 App Endpoint',
+                    subtitle: controller.deviceId.value,
+                  ),
+                  _DividerLine(),
+                  _ServiceTile(
+                    icon: Icons.key_outlined,
+                    title: 'Endpoint 私钥',
+                    subtitle: controller.hasDeviceKey ? '已保存在安全存储' : '未生成',
                     trailing: TextButton(
                       onPressed: controller.clearStoredCredentials,
                       child: const Text('清除'),
@@ -153,7 +153,7 @@ class _StatusHero extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  connected ? 'Bridge 在线' : 'Bridge 未连接',
+                  connected ? 'Relay 在线' : 'Relay 未连接',
                   style: TextStyle(
                     color: colors.text,
                     fontSize: 20,
@@ -162,7 +162,7 @@ class _StatusHero extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  connected ? '可以接收手机端任务' : '检查后台服务或重新配对',
+                  connected ? '可以操作远程 Codex 主机' : '检查 Relay 地址和 Endpoint 凭证',
                   style: TextStyle(
                     color: colors.textMuted,
                     fontWeight: FontWeight.w700,

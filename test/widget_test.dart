@@ -8,7 +8,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Recodex', skipOffstage: false), findsOneWidget);
-    expect(find.text('等待本地 Bridge 连接', skipOffstage: false), findsOneWidget);
+    expect(find.text('等待 Relay 连接', skipOffstage: false), findsOneWidget);
     expect(
       find.text(
         'Ask anything... @files, \$skills, /commands',

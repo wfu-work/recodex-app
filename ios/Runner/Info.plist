@@ -31,10 +31,8 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
-	<key>NSCameraUsageDescription</key>
-	<string>Scan the Recodex bridge pairing QR code.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to your local Recodex bridge on the LAN.</string>
+	<string>Connect to a local Recodex Relay on the LAN.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

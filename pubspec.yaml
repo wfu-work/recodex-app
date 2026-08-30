@@ -1,5 +1,5 @@
 name: recodex
-description: "Mobile remote controller for a local Codex bridge."
+description: "Mobile Codex controller connected through Relay Protocol v1."
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 # The following defines the version and build number for your application.
@@ -31,10 +31,9 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   flutter_secure_storage: ^10.2.0
-  mobile_scanner: ^7.2.0
-  qr_flutter: ^4.1.0
   get: ^4.7.3
   flutter_local_notifications: ^21.0.0
+  cryptography: ^2.7.0
 
 dev_dependencies:
   flutter_test:

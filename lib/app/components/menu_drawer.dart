@@ -162,7 +162,7 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                         ),
                         ConnectionDot(
                           connected: widget.connected,
-                          label: widget.connected ? '已连接到本地链接' : '未连接',
+                          label: widget.connected ? '已连接到 Relay' : '未连接',
                         ),
                       ],
                     ),
@@ -202,7 +202,7 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                       if (widget.workspaces.isEmpty) {
                         return const _WorkspaceLine(
                           name: '暂无工作区',
-                          path: '连接 Bridge 后同步',
+                          path: '连接 Relay 后同步',
                         );
                       }
                       final workspace = widget.workspaces[index];
