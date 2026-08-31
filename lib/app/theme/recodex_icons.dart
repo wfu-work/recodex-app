@@ -21,6 +21,7 @@ abstract final class RecodexIcons {
   static const IconData chevronDown = LucideIcons.chevronDown300;
   static const IconData circle = LucideIcons.circle300;
   static const IconData close = LucideIcons.x300;
+  static const IconData copy = LucideIcons.copy300;
   static const IconData cloudDone = LucideIcons.cloudCheck300;
   static const IconData cloudOff = LucideIcons.cloudOff300;
   static const IconData darkMode = LucideIcons.moon300;

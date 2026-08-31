@@ -12,6 +12,17 @@ class WorkspaceInfo {
   }
 }
 
+/// The endpoint identity material shown while creating a Relay pairing.
+///
+/// The private seed is only kept in memory until the user saves the pairing;
+/// the public key can be copied into relay-web when issuing a connection token.
+class EndpointKeyMaterial {
+  const EndpointKeyMaterial({required this.deviceKey, required this.publicKey});
+
+  final String deviceKey;
+  final String publicKey;
+}
+
 /// A saved Relay connection.  Tokens and the endpoint private key live in
 /// this model so the controller can persist the complete profile in secure
 /// storage and restore it atomically.

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:recodex/app/pages/settings/notification_settings_view.dart';
-import 'package:recodex/app/pages/settings/theme_controller.dart';
 import 'package:recodex/app/routes/app_pages.dart';
 import 'package:recodex/app/services/task_notification_controller.dart';
 import 'package:recodex/app/theme/recodex_theme.dart';
@@ -10,7 +9,6 @@ import 'package:recodex/app/theme/recodex_theme.dart';
 void main() {
   setUp(() {
     Get.testMode = true;
-    Get.put(ThemeController(), permanent: true);
     Get.put(TaskNotificationController(), permanent: true);
   });
 

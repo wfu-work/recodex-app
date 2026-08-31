@@ -7,7 +7,10 @@ import '../pages/main/main_view.dart';
 import '../pages/pairing/pairing_view.dart';
 import '../pages/service/service_view.dart';
 import '../pages/settings/settings_view.dart';
+import '../pages/settings/connection_settings_view.dart';
 import '../pages/settings/notification_settings_view.dart';
+import '../pages/settings/security_settings_view.dart';
+import '../pages/settings/task_settings_view.dart';
 import '../pages/settings/theme_settings_view.dart';
 
 part 'app_routes.dart';
@@ -31,6 +34,21 @@ class AppPages {
     GetPage(
       name: _Paths.settings,
       page: () => const SettingsPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
+      name: _Paths.connectionSettings,
+      page: () => const ConnectionSettingsPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
+      name: _Paths.taskSettings,
+      page: () => const TaskSettingsPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
+      name: _Paths.securitySettings,
+      page: () => const SecuritySettingsPage(),
       preventDuplicates: true,
     ),
     GetPage(

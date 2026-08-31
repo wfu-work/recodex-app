@@ -220,6 +220,10 @@ class RelayProtocol {
     String? turnId,
   }) {
     final payload = <String, dynamic>{
+      // Product messages have their own protocol version in addition to the
+      // transport envelope version. The relay plugin validates this field
+      // after unwrapping `stream.message`.
+      'version': version,
       'type': 'codex.command',
       'requestId': requestId,
       'spaceId': spaceId,

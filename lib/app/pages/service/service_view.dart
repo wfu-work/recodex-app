@@ -37,7 +37,7 @@ class ServicePage extends StatelessWidget {
                   _DividerLine(),
                   _ServiceTile(
                     icon: RecodexIcons.link,
-                    title: 'Relay 地址',
+                    title: 'Relay 连接地址',
                     subtitle: controller.baseUrl.value,
                   ),
                   _DividerLine(),
@@ -46,6 +46,33 @@ class ServicePage extends StatelessWidget {
                     title: '协议状态',
                     subtitle: controller.connectionLabel.value,
                   ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _ServiceGroup(
+                title: '诊断',
+                children: [
+                  _ServiceTile(
+                    icon: RecodexIcons.network,
+                    title: '测试 Relay 连接',
+                    subtitle: controller.activePairing == null
+                        ? '请先创建一个配对'
+                        : '验证当前地址、令牌和接入端凭证',
+                    trailing: TextButton(
+                      onPressed: controller.activePairing == null
+                          ? null
+                          : () => _testConnection(context, controller),
+                      child: const Text('测试'),
+                    ),
+                  ),
+                  if (controller.lastError.value.isNotEmpty) ...[
+                    _DividerLine(),
+                    _ServiceTile(
+                      icon: RecodexIcons.warning,
+                      title: '最近错误',
+                      subtitle: controller.lastError.value,
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 18),
@@ -76,19 +103,19 @@ class ServicePage extends StatelessWidget {
               ),
               const SizedBox(height: 18),
               _ServiceGroup(
-                title: 'Endpoint',
+                title: '接入端',
                 children: [
                   _ServiceTile(
                     icon: controller.hasDeviceKey
                         ? RecodexIcons.verified
                         : RecodexIcons.shieldOff,
-                    title: '本机 App Endpoint',
+                    title: '本机接入端 ID',
                     subtitle: controller.deviceId.value,
                   ),
                   _DividerLine(),
                   _ServiceTile(
                     icon: RecodexIcons.key,
-                    title: 'Endpoint 私钥',
+                    title: '接入端私钥',
                     subtitle: controller.hasDeviceKey ? '已保存在安全存储' : '未生成',
                     trailing: TextButton(
                       onPressed: controller.clearStoredCredentials,
@@ -97,22 +124,34 @@ class ServicePage extends StatelessWidget {
                   ),
                 ],
               ),
-              if (controller.lastError.value.isNotEmpty) ...[
-                const SizedBox(height: 18),
-                _ServiceGroup(
-                  title: '错误',
-                  children: [
-                    _ServiceTile(
-                      icon: RecodexIcons.warning,
-                      title: '最近错误',
-                      subtitle: controller.lastError.value,
-                    ),
-                  ],
-                ),
-              ],
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Future<void> _testConnection(
+    BuildContext context,
+    BridgeController controller,
+  ) async {
+    final profile = controller.activePairing;
+    if (profile == null) return;
+    final error = await controller.testConnection(
+      inputBaseUrl: profile.baseUrl,
+      token: profile.pairingToken,
+      inputDeviceName: profile.deviceName,
+      inputSpaceId: profile.spaceId,
+      inputTargetDeviceId: profile.targetDeviceId,
+      inputEndpointId: profile.deviceId,
+      inputEndpointType: profile.endpointType,
+      inputDeviceKey: profile.deviceKey,
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(error ?? '连接测试成功，Relay 已接受当前配置。'),
+        duration: const Duration(seconds: 3),
       ),
     );
   }
@@ -162,7 +201,7 @@ class _StatusHero extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  connected ? '可以操作远程 Codex 主机' : '检查 Relay 地址和 Endpoint 凭证',
+                  connected ? '可以操作远程 Codex 主机' : '检查 Relay 连接地址和接入端凭证',
                   style: TextStyle(
                     color: colors.textMuted,
                     fontWeight: FontWeight.w700,

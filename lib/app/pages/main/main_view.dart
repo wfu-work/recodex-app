@@ -8,6 +8,7 @@ import '../../components/menu_drawer.dart';
 import '../../models/bridge_models.dart';
 import '../../routes/app_pages.dart';
 import '../pairing/pairing_view.dart';
+import '../settings/settings_preferences_controller.dart';
 import '../settings/theme_controller.dart';
 import 'bridge_controller.dart';
 import 'git_diff_view.dart';
@@ -57,6 +58,9 @@ class _MainPageState extends State<MainPage> {
   Widget build(BuildContext context) {
     return Obx(() {
       Get.find<ThemeController>().fontScale.value;
+      final compactTimeline = Get.isRegistered<SettingsPreferencesController>()
+          ? Get.find<SettingsPreferencesController>().compactTimeline.value
+          : false;
       if (controller.events.isNotEmpty ||
           controller.currentSessionId.value != null) {
         _scheduleScrollToLatest(_timelineSignature);
@@ -137,7 +141,7 @@ class _MainPageState extends State<MainPage> {
                         sliver: SliverList.separated(
                           itemCount: _timelineCount,
                           separatorBuilder: (context, index) =>
-                              const SizedBox(height: 26),
+                              SizedBox(height: compactTimeline ? 14 : 26),
                           itemBuilder: (context, index) {
                             if (controller.events.isEmpty) {
                               return WelcomeTimeline(

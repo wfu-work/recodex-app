@@ -96,12 +96,17 @@ class ConnectionDot extends StatelessWidget {
           color: connected ? colors.success : colors.textMuted,
         ),
         const SizedBox(width: 6),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: colors.textMuted,
-            fontWeight: FontWeight.w700,
+        Flexible(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+            style: TextStyle(
+              fontSize: 12,
+              color: colors.textMuted,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
       ],

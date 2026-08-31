@@ -9,6 +9,7 @@ import 'package:get/get.dart';
 import '../../models/bridge_models.dart';
 import '../../services/relay_protocol.dart';
 import '../../services/task_notification_controller.dart';
+import '../settings/settings_preferences_controller.dart';
 
 class BridgeController extends GetxController {
   static const _storage = FlutterSecureStorage();
@@ -114,6 +115,32 @@ class BridgeController extends GetxController {
     );
   }
 
+  /// Creates (or restores) the Ed25519 identity for a pairing editor.
+  ///
+  /// This deliberately does not write to secure storage. The caller can show
+  /// the public key immediately, let the user copy it into relay-web, and only
+  /// persist the private seed together with the pairing after an explicit save.
+  Future<EndpointKeyMaterial> prepareEndpointKey({String? deviceKey}) async {
+    SimpleKeyPair pair;
+    final encodedSeed = deviceKey?.trim() ?? '';
+    if (encodedSeed.isNotEmpty) {
+      try {
+        pair = await RelayProtocol.keyPairFromSeed(
+          RelayProtocol.decodeBase64Url(encodedSeed),
+        );
+      } catch (_) {
+        pair = await RelayProtocol.newKeyPair();
+      }
+    } else {
+      pair = await RelayProtocol.newKeyPair();
+    }
+    final seed = await pair.extractPrivateKeyBytes();
+    return EndpointKeyMaterial(
+      deviceKey: RelayProtocol.encodeBase64Url(seed),
+      publicKey: await RelayProtocol.publicKey(pair),
+    );
+  }
+
   PairingProfile _profileFromState({required String name, String? id}) {
     final previous = id == null ? activePairing : pairingById(id);
     return PairingProfile(
@@ -216,6 +243,7 @@ class BridgeController extends GetxController {
   void onInit() {
     super.onInit();
     unawaited(_loadStoredCredentials());
+    unawaited(_applySavedTaskPreferences());
   }
 
   @override
@@ -257,6 +285,9 @@ class BridgeController extends GetxController {
     selectedWorkspace.value = null;
     gitSnapshot.value = null;
     composerContext.value = ComposerContext.fallback;
+    if (Get.isRegistered<SettingsPreferencesController>()) {
+      applyTaskPreferences(Get.find<SettingsPreferencesController>());
+    }
     currentSessionId.value = null;
     timelineSessionRunning.value = false;
     timelineRevision.value += 1;
@@ -402,7 +433,7 @@ class BridgeController extends GetxController {
           deviceId.value.isEmpty ||
           (pairingToken.value.isEmpty && endpointGrant.value.isEmpty)) {
         throw StateError(
-          'Relay 配置不完整：需要 Relay URL、Space ID、App Endpoint ID、目标 Bridge ID，以及 Connect Token 或 Endpoint Grant',
+          'Relay 配置不完整：需要 Relay 连接地址、空间 ID、本机接入端 ID、目标主机接入端 ID，以及连接令牌或接入端授权凭证',
         );
       }
       _keyPair ??= await _loadOrCreateKeyPair();
@@ -447,6 +478,111 @@ class BridgeController extends GetxController {
       _scheduleReconnect();
     } finally {
       busy.value = false;
+    }
+  }
+
+  /// Checks a Relay pairing without changing the active profile or opening a
+  /// persistent app connection. This is used by the pairing editor so users
+  /// can verify the endpoint credentials before saving them.
+  ///
+  /// Returns `null` when the Relay accepts the handshake, otherwise a
+  /// user-facing error message. The endpoint key is supplied by the editor's
+  /// in-memory draft and is never written to secure storage here.
+  Future<String?> testConnection({
+    required String inputBaseUrl,
+    required String token,
+    required String inputDeviceName,
+    required String inputSpaceId,
+    required String inputTargetDeviceId,
+    required String inputEndpointId,
+    required String inputEndpointType,
+    required String inputDeviceKey,
+  }) async {
+    WebSocket? socket;
+    StreamSubscription<dynamic>? subscription;
+    Timer? timeout;
+    final result = Completer<String?>();
+
+    void complete(String? error) {
+      if (!result.isCompleted) result.complete(error);
+    }
+
+    try {
+      final normalizedBaseUrl = _normalizeRelayUrl(inputBaseUrl);
+      final nextSpaceId = inputSpaceId.trim();
+      final nextTargetDeviceId = inputTargetDeviceId.trim();
+      final nextEndpointId = inputEndpointId.trim();
+      final nextEndpointType = inputEndpointType.trim().isEmpty
+          ? 'app'
+          : inputEndpointType.trim();
+      final connectToken = token.trim();
+      final encodedKey = inputDeviceKey.trim();
+      if (nextSpaceId.isEmpty ||
+          nextTargetDeviceId.isEmpty ||
+          nextEndpointId.isEmpty) {
+        return '请先填写空间 ID、目标主机接入端 ID 和本机接入端 ID。';
+      }
+      if (connectToken.isEmpty) {
+        return '请先填写连接令牌；接入端授权凭证用于后续自动续期。';
+      }
+      if (encodedKey.isEmpty) {
+        return '接入端公钥尚未生成，请稍后再试。';
+      }
+
+      final keyPair = await RelayProtocol.keyPairFromSeed(
+        RelayProtocol.decodeBase64Url(encodedKey),
+      );
+      socket = await WebSocket.connect(
+        normalizedBaseUrl,
+      ).timeout(const Duration(seconds: 10));
+      subscription = socket.listen(
+        (raw) {
+          try {
+            final decoded = _decodeTextMessage(raw);
+            final type = decoded['type'] as String? ?? '';
+            if (type == 'relay.error') {
+              final code = decoded['code'] as String? ?? 'relay.error';
+              final message = decoded['message'] as String? ?? 'Relay 拒绝了连接';
+              complete('$code：$message');
+              return;
+            }
+            if (type != 'connect.welcome') return;
+            RelayProtocol.validateWelcome(decoded);
+            if (decoded['spaceId'] != nextSpaceId ||
+                decoded['endpointId'] != nextEndpointId) {
+              complete('Relay 返回的空间 ID 或接入端 ID 与当前配置不一致。');
+              return;
+            }
+            complete(null);
+          } catch (error) {
+            complete(error.toString());
+          }
+        },
+        onError: (Object error) => complete(error.toString()),
+        onDone: () => complete('Relay 在认证完成前关闭了连接。'),
+        cancelOnError: false,
+      );
+      final hello = await RelayProtocol.connectHello(
+        keyPair: keyPair,
+        spaceId: nextSpaceId,
+        endpointId: nextEndpointId,
+        endpointType: nextEndpointType,
+        endpointName: inputDeviceName.trim().isEmpty
+            ? 'Flutter phone'
+            : inputDeviceName.trim(),
+        token: connectToken,
+      );
+      socket.add(jsonEncode(hello));
+      timeout = Timer(const Duration(seconds: 10), () {
+        complete('Relay 认证超时，请检查地址、令牌和网络连接。');
+      });
+      return await result.future;
+    } catch (error) {
+      return error.toString();
+    } finally {
+      timeout?.cancel();
+      await subscription?.cancel();
+      await socket?.close();
     }
   }
 
@@ -521,6 +657,27 @@ class BridgeController extends GetxController {
 
   void setPermissionMode(String mode) {
     permissionMode.value = mode;
+  }
+
+  /// Applies task defaults loaded from the settings page to the active
+  /// composer. The remote host may still provide its own capability list;
+  /// these values only select the user's preferred defaults.
+  void applyTaskPreferences(SettingsPreferencesController preferences) {
+    final model = preferences.defaultModel.value;
+    final selectedModel = model == '自动选择' || model.trim().isEmpty
+        ? composerContext.value.models.isEmpty
+              ? composerContext.value.model
+              : composerContext.value.models.first
+        : model;
+    composerContext.value = composerContext.value.copyWith(
+      model: selectedModel,
+      reasoningEffort: preferences.defaultReasoningEffort.value,
+      requireConfirmGitWrite: preferences.confirmSensitiveActions.value,
+      approvalPolicy: _approvalPolicyFor(
+        preferences.defaultPermissionMode.value,
+      ),
+    );
+    permissionMode.value = preferences.defaultPermissionMode.value;
   }
 
   void interrupt() {
@@ -978,6 +1135,7 @@ class BridgeController extends GetxController {
           SessionEvent(kind: 'assistant', text: _extractText(data)),
         );
       case 'reasoning.delta':
+        if (!_showReasoningEvents) break;
         _appendSessionEvent(
           SessionEvent(kind: 'reasoning', text: _extractText(data)),
         );
@@ -1558,6 +1716,10 @@ class BridgeController extends GetxController {
 
   Future<void> _loadStoredCredentials() async {
     var shouldAutoConnect = false;
+    final preferences = Get.isRegistered<SettingsPreferencesController>()
+        ? Get.find<SettingsPreferencesController>()
+        : null;
+    if (preferences != null) await preferences.ready;
     try {
       // Remove the private key used by the deleted legacy Bridge protocol.
       await _storage.delete(key: 'recodex_device_key');
@@ -1606,7 +1768,9 @@ class BridgeController extends GetxController {
       final selectedProfile = activePairing;
       if (selectedProfile != null) {
         await _applyPairing(selectedProfile);
-        shouldAutoConnect = selectedProfile.isComplete;
+        shouldAutoConnect =
+            selectedProfile.isComplete &&
+            (preferences?.autoConnect.value ?? true);
       } else {
         deviceId.value = _newDeviceId();
       }
@@ -1624,6 +1788,26 @@ class BridgeController extends GetxController {
     if (shouldAutoConnect) {
       unawaited(_autoConnect());
     }
+  }
+
+  Future<void> _applySavedTaskPreferences() async {
+    if (!Get.isRegistered<SettingsPreferencesController>()) return;
+    final preferences = Get.find<SettingsPreferencesController>();
+    await preferences.ready;
+    applyTaskPreferences(preferences);
+  }
+
+  bool get _showReasoningEvents {
+    if (!Get.isRegistered<SettingsPreferencesController>()) return true;
+    return Get.find<SettingsPreferencesController>().showReasoning.value;
+  }
+
+  String _approvalPolicyFor(String mode) {
+    return switch (mode) {
+      '完全访问权限' => 'never',
+      '自动审查' => 'on-failure',
+      _ => 'on-request',
+    };
   }
 
   Future<PairingProfile?> _readLegacyPairing() async {
@@ -1786,6 +1970,15 @@ class BridgeController extends GetxController {
 
   WorkspaceInfo? _restoreSelectedWorkspace() {
     if (workspaces.isEmpty) return null;
+    final defaultWorkspacePath =
+        Get.isRegistered<SettingsPreferencesController>()
+        ? Get.find<SettingsPreferencesController>().defaultWorkspacePath.value
+        : '';
+    if (defaultWorkspacePath.trim().isNotEmpty) {
+      for (final workspace in workspaces) {
+        if (workspace.path == defaultWorkspacePath) return workspace;
+      }
+    }
     final storedName = _storedWorkspaceName?.trim() ?? '';
     final storedPath = _storedWorkspacePath?.trim() ?? '';
     for (final workspace in workspaces) {
@@ -1864,7 +2057,11 @@ class BridgeController extends GetxController {
   }
 
   void _scheduleReconnect() {
+    final preferences = Get.isRegistered<SettingsPreferencesController>()
+        ? Get.find<SettingsPreferencesController>()
+        : null;
     if (_manualDisconnect ||
+        preferences != null && !preferences.autoReconnect.value ||
         (pairingToken.value.isEmpty && endpointGrant.value.isEmpty) ||
         spaceId.value.isEmpty ||
         targetDeviceId.value.isEmpty ||
@@ -1874,8 +2071,13 @@ class BridgeController extends GetxController {
     connectionLabel.value = 'reconnecting';
     _reconnectTimer = Timer(const Duration(seconds: 3), () {
       _reconnectTimer = null;
+      final currentPreferences =
+          Get.isRegistered<SettingsPreferencesController>()
+          ? Get.find<SettingsPreferencesController>()
+          : null;
       if (!_manualDisconnect &&
           !connected.value &&
+          (currentPreferences?.autoReconnect.value ?? true) &&
           (pairingToken.value.isNotEmpty || endpointGrant.value.isNotEmpty) &&
           spaceId.value.isNotEmpty &&
           targetDeviceId.value.isNotEmpty) {
@@ -1911,14 +2113,14 @@ class BridgeController extends GetxController {
       }
     }
     if (pairingToken.value.isEmpty) {
-      throw StateError('缺少 Connect Token');
+      throw StateError('缺少连接令牌');
     }
     return pairingToken.value;
   }
 
   Future<void> _refreshConnectToken() async {
     if (_keyPair == null || endpointGrant.value.isEmpty) {
-      throw StateError('缺少 Endpoint Grant 或 Endpoint 私钥');
+      throw StateError('缺少接入端授权凭证或接入端私钥');
     }
     final relay = Uri.parse(baseUrl.value);
     if (relay.scheme == 'ws' && !_isLoopbackHost(relay.host)) {
@@ -2007,13 +2209,13 @@ class BridgeController extends GetxController {
     }
     final uri = Uri.parse(next);
     if (!uri.hasAuthority || uri.query.isNotEmpty || uri.fragment.isNotEmpty) {
-      throw FormatException('Relay URL 必须是无 query/hash 的 WebSocket 地址');
+      throw FormatException('Relay 连接地址必须是无 query/hash 的 WebSocket 地址');
     }
     final normalized = uri.path.isEmpty || uri.path == '/'
         ? uri.replace(path: '/v1/connect')
         : uri;
     if (normalized.path != '/v1/connect') {
-      throw FormatException('Relay URL 必须使用 /v1/connect');
+      throw FormatException('Relay 连接地址必须使用 /v1/connect');
     }
     if (normalized.scheme == 'ws' && !_isLoopbackHost(normalized.host)) {
       throw FormatException('非本机 Relay 必须使用 wss:// 加密连接');

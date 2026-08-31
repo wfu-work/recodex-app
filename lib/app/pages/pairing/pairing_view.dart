@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
@@ -30,10 +31,16 @@ class _PairingPageState extends State<PairingPage> {
   late final TextEditingController _spaceIdController;
   late final TextEditingController _targetDeviceController;
   late final TextEditingController _endpointIdController;
+  late final TextEditingController _publicKeyController;
   late final TextEditingController _tokenController;
   late final TextEditingController _grantController;
   bool _showToken = false;
   bool _saving = false;
+  bool _testing = false;
+  bool _preparingKey = false;
+  String _draftDeviceKey = '';
+  String _activeDraftId = '';
+  Future<void>? _keyPreparation;
   _PairingPageMode _mode = _PairingPageMode.list;
   PairingProfile? _editingProfile;
 
@@ -45,6 +52,7 @@ class _PairingPageState extends State<PairingPage> {
     _spaceIdController = TextEditingController();
     _targetDeviceController = TextEditingController();
     _endpointIdController = TextEditingController();
+    _publicKeyController = TextEditingController();
     _tokenController = TextEditingController();
     _grantController = TextEditingController();
     final args = Get.arguments;
@@ -62,6 +70,7 @@ class _PairingPageState extends State<PairingPage> {
     _spaceIdController.dispose();
     _targetDeviceController.dispose();
     _endpointIdController.dispose();
+    _publicKeyController.dispose();
     _tokenController.dispose();
     _grantController.dispose();
     super.dispose();
@@ -205,29 +214,29 @@ class _PairingPageState extends State<PairingPage> {
                       title: 'Relay 连接',
                       children: [
                         _TextSettingRow(
-                          title: 'Relay 地址',
-                          subtitle: 'Relay Protocol v1 /v1/connect',
+                          title: 'Relay 连接地址',
+                          subtitle: 'Relay 协议 v1 /v1/connect',
                           controller: _baseUrlController,
                           onSubmitted: (_) => _savePairing(),
                         ),
                         const SizedBox(height: 20),
                         _TextSettingRow(
-                          title: 'Space ID',
-                          subtitle: '与 Relay Connect Token 一致',
+                          title: '空间 ID',
+                          subtitle: '与连接令牌中的空间 ID 一致',
                           controller: _spaceIdController,
                           onSubmitted: (_) => _savePairing(),
                         ),
                         const SizedBox(height: 20),
                         _TextSettingRow(
-                          title: '目标 Codex 主机 Endpoint',
-                          subtitle: '插件配置中的 host deviceId',
+                          title: '目标主机接入端 ID',
+                          subtitle: '桌面插件登记的主机接入端 ID',
                           controller: _targetDeviceController,
                           onSubmitted: (_) => _savePairing(),
                         ),
                         const SizedBox(height: 20),
                         _TextSettingRow(
-                          title: '本机 App Endpoint',
-                          subtitle: '需与 Relay Token 的 endpointId 完全一致',
+                          title: '本机接入端 ID',
+                          subtitle: '需与连接令牌中的接入端 ID 完全一致',
                           controller: _endpointIdController,
                           onSubmitted: (_) => _savePairing(),
                         ),
@@ -240,7 +249,7 @@ class _PairingPageState extends State<PairingPage> {
                         const SizedBox(height: 30),
                         const _PairingHint(
                           text:
-                              'Relay 地址示例：wss://relay.example.com/v1/connect；公网 Relay 必须使用 WSS。',
+                              'Relay 连接地址示例：wss://relay.example.com/v1/connect；公网 Relay 必须使用 WSS。',
                           error: false,
                         ),
                       ],
@@ -248,8 +257,14 @@ class _PairingPageState extends State<PairingPage> {
                     const SizedBox(height: 22),
                     _PairingCard(
                       icon: RecodexIcons.key,
-                      title: '令牌认证',
+                      title: '连接认证',
                       children: [
+                        _PublicKeySettingRow(
+                          controller: _publicKeyController,
+                          onCopy: _copyPublicKey,
+                          preparing: _preparingKey,
+                        ),
+                        const SizedBox(height: 18),
                         _TokenSettingRow(
                           controller: _tokenController,
                           showToken: _showToken,
@@ -258,31 +273,70 @@ class _PairingPageState extends State<PairingPage> {
                         ),
                         const SizedBox(height: 18),
                         _TextSettingRow(
-                          title: 'Endpoint Grant',
-                          subtitle: '可选，用于 Token 到期后自动续期',
+                          title: '接入端授权凭证',
+                          subtitle: '可选，用于连接令牌到期后自动续期',
                           controller: _grantController,
                           keyboardType: TextInputType.text,
                           onSubmitted: (_) => _savePairing(),
                         ),
                         const SizedBox(height: 18),
                         _PairingHint(
-                          text:
-                              '本机 Endpoint ID：${_endpointIdController.text}\nEndpoint 公钥：${controller.endpointPublicKey.value.isEmpty ? '连接时生成' : controller.endpointPublicKey.value}',
+                          text: '私钥只保存在本机；Relay 仅登记上方的 Ed25519 公钥和连接令牌哈希。',
                           error: false,
                         ),
                         const SizedBox(height: 22),
                         Align(
                           alignment: Alignment.centerRight,
-                          child: BluePillButton(
-                            label: _saving
-                                ? '保存中'
-                                : busy
-                                ? '连接中'
-                                : '保存并连接',
-                            icon: _saving || busy
-                                ? RecodexIcons.sync
-                                : RecodexIcons.qrCode,
-                            onPressed: _saving || busy ? null : _savePairing,
+                          child: Wrap(
+                            alignment: WrapAlignment.end,
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed:
+                                    _testing || _saving || busy || _preparingKey
+                                    ? null
+                                    : _testConnection,
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Theme.of(
+                                    context,
+                                  ).colorScheme.primary,
+                                  side: BorderSide(
+                                    color: Theme.of(context).colorScheme.primary
+                                        .withValues(alpha: 0.55),
+                                  ),
+                                  minimumSize: const Size(0, 58),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 20,
+                                  ),
+                                  shape: const StadiumBorder(),
+                                ),
+                                icon: _testing
+                                    ? const SizedBox.square(
+                                        dimension: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(RecodexIcons.network),
+                                label: Text(_testing ? '测试中' : '测试连接'),
+                              ),
+                              BluePillButton(
+                                label: _saving
+                                    ? '保存中'
+                                    : busy
+                                    ? '连接中'
+                                    : _preparingKey
+                                    ? '生成密钥中'
+                                    : '保存并连接',
+                                icon: _saving || busy
+                                    ? RecodexIcons.sync
+                                    : RecodexIcons.qrCode,
+                                onPressed: _saving || busy || _preparingKey
+                                    ? null
+                                    : _savePairing,
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -296,7 +350,7 @@ class _PairingPageState extends State<PairingPage> {
                           _ServiceInfoGrid(
                             items: [
                               _ServiceInfoItem(
-                                label: 'Bridge 版本',
+                                label: '网关版本',
                                 value: serviceContext.bridgeVersion.isEmpty
                                     ? '未知'
                                     : serviceContext.bridgeVersion,
@@ -310,7 +364,7 @@ class _PairingPageState extends State<PairingPage> {
                                 icon: RecodexIcons.terminal,
                               ),
                               _ServiceInfoItem(
-                                label: 'API Key',
+                                label: 'API 密钥',
                                 value: serviceContext.apiKeyConfigured
                                     ? '已配置'
                                     : '未配置',
@@ -383,15 +437,109 @@ class _PairingPageState extends State<PairingPage> {
     final next = profile ?? controller.createDraftPairing();
     _editingProfile = profile;
     _mode = _PairingPageMode.editor;
+    _activeDraftId = next.id;
+    _draftDeviceKey = next.deviceKey;
+    _preparingKey = true;
     _nameController.text = next.name;
     _baseUrlController.text = next.baseUrl;
     _spaceIdController.text = next.spaceId;
     _targetDeviceController.text = next.targetDeviceId;
     _endpointIdController.text = next.deviceId;
+    _publicKeyController.text = next.endpointPublicKey;
     _tokenController.text = next.pairingToken;
     _grantController.text = next.endpointGrant;
     _showToken = false;
     if (mounted) setState(() {});
+    _keyPreparation = _prepareEndpointKey(next);
+  }
+
+  Future<void> _prepareEndpointKey(PairingProfile profile) async {
+    try {
+      final material = await controller.prepareEndpointKey(
+        deviceKey: profile.deviceKey,
+      );
+      if (!mounted ||
+          _mode != _PairingPageMode.editor ||
+          _activeDraftId != profile.id) {
+        return;
+      }
+      _draftDeviceKey = material.deviceKey;
+      _publicKeyController.text = material.publicKey;
+    } catch (error) {
+      if (mounted &&
+          _mode == _PairingPageMode.editor &&
+          _activeDraftId == profile.id) {
+        controller.lastError.value = '生成接入端公钥失败：$error';
+      }
+    } finally {
+      if (mounted &&
+          _mode == _PairingPageMode.editor &&
+          _activeDraftId == profile.id) {
+        setState(() => _preparingKey = false);
+      }
+    }
+  }
+
+  Future<void> _copyPublicKey() async {
+    final value = _publicKeyController.text.trim();
+    if (value.isEmpty || _preparingKey) return;
+    await Clipboard.setData(ClipboardData(text: value));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Ed25519 公钥已复制'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Future<void> _testConnection() async {
+    if (_testing || _saving || _preparingKey) return;
+    final keyPreparation = _keyPreparation;
+    if (keyPreparation != null) await keyPreparation;
+    if (!mounted || _draftDeviceKey.isEmpty) {
+      controller.lastError.value = '接入端公钥尚未生成，请稍后再试。';
+      return;
+    }
+    final spaceId = _spaceIdController.text.trim();
+    final targetDeviceId = _targetDeviceController.text.trim();
+    final endpointId = _endpointIdController.text.trim();
+    final token = _tokenController.text.trim();
+    if (spaceId.isEmpty || targetDeviceId.isEmpty || endpointId.isEmpty) {
+      controller.lastError.value = '请先填写空间 ID、目标主机接入端 ID 和本机接入端 ID。';
+      return;
+    }
+    if (token.isEmpty) {
+      controller.lastError.value = '请先填写连接令牌；接入端授权凭证用于后续自动续期。';
+      return;
+    }
+    setState(() => _testing = true);
+    controller.lastError.value = '';
+    try {
+      final error = await controller.testConnection(
+        inputBaseUrl: _baseUrlController.text,
+        token: token,
+        inputDeviceName: controller.deviceName.value,
+        inputSpaceId: spaceId,
+        inputTargetDeviceId: targetDeviceId,
+        inputEndpointId: endpointId,
+        inputEndpointType: controller.endpointType.value,
+        inputDeviceKey: _draftDeviceKey,
+      );
+      if (!mounted) return;
+      if (error == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('连接测试成功，Relay 已接受当前配置。'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      } else {
+        controller.lastError.value = error;
+      }
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
   }
 
   void _newPairing() => _openEditor(null);
@@ -406,10 +554,16 @@ class _PairingPageState extends State<PairingPage> {
 
   Future<void> _savePairing() async {
     if (_saving) return;
+    final keyPreparation = _keyPreparation;
+    if (keyPreparation != null) await keyPreparation;
+    if (_draftDeviceKey.isEmpty || _publicKeyController.text.trim().isEmpty) {
+      controller.lastError.value = '接入端公钥尚未生成，请稍后再试。';
+      return;
+    }
     final name = _nameController.text.trim();
     final target = _targetDeviceController.text.trim();
     if (name.isEmpty && target.isEmpty) {
-      controller.lastError.value = '请填写配对名称或目标 Codex 主机 Endpoint。';
+      controller.lastError.value = '请填写配对名称或目标主机接入端 ID。';
       return;
     }
     final base = _editingProfile ?? controller.createDraftPairing();
@@ -419,6 +573,8 @@ class _PairingPageState extends State<PairingPage> {
       spaceId: _spaceIdController.text,
       targetDeviceId: target,
       deviceId: _endpointIdController.text,
+      deviceKey: _draftDeviceKey,
+      endpointPublicKey: _publicKeyController.text.trim(),
       pairingToken: _tokenController.text,
       endpointGrant: _grantController.text,
     );
@@ -626,7 +782,7 @@ class _PairingListTile extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '${profile.spaceId.isEmpty ? '未填写 Space ID' : profile.spaceId} · ${profile.targetDeviceId.isEmpty ? '未填写主机' : profile.targetDeviceId}',
+                        '${profile.spaceId.isEmpty ? '未填写空间 ID' : profile.spaceId} · ${profile.targetDeviceId.isEmpty ? '未填写主机接入端 ID' : profile.targetDeviceId}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: colors.textMuted, fontSize: 12),
@@ -719,7 +875,7 @@ class _PairingHero extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'App 使用 Ed25519 Endpoint proof 接入 Relay，与桌面插件通过 codex.v1 通信。',
+                  '客户端使用 Ed25519 接入端证明连接 Relay，与桌面插件通过 codex.v1 通信。',
                   style: TextStyle(
                     color: colors.textMuted,
                     fontSize: 12,
@@ -878,8 +1034,8 @@ class _TokenSettingRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return _ResponsiveSettingRow(
       label: const _SettingLabel(
-        title: 'App Connect Token',
-        subtitle: 'Relay 为本机 App Endpoint 签发的短期令牌',
+        title: '连接令牌',
+        subtitle: 'Relay 为本机客户端签发的短期连接凭证',
       ),
       field: TextField(
         controller: controller,
@@ -892,13 +1048,59 @@ class _TokenSettingRow extends StatelessWidget {
         ),
         decoration: _pairingInputDecoration(
           context,
-          hintText: '输入 Connect Token',
+          hintText: '输入连接令牌',
           suffixIcon: IconButton(
             tooltip: showToken ? '隐藏令牌' : '显示令牌',
             onPressed: onToggleToken,
             icon: Icon(
               showToken ? RecodexIcons.visibilityOff : RecodexIcons.visibility,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PublicKeySettingRow extends StatelessWidget {
+  const _PublicKeySettingRow({
+    required this.controller,
+    required this.onCopy,
+    required this.preparing,
+  });
+
+  final TextEditingController controller;
+  final VoidCallback onCopy;
+  final bool preparing;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ResponsiveSettingRow(
+      label: const _SettingLabel(
+        title: 'Ed25519 公钥',
+        subtitle: '本机生成的接入端公钥，用于在 relay-web 签发连接令牌',
+      ),
+      field: TextField(
+        controller: controller,
+        readOnly: true,
+        textAlign: TextAlign.left,
+        maxLines: 2,
+        minLines: 1,
+        style: TextStyle(
+          color: context.recodexColors.icon,
+          fontSize: 13,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.15,
+        ),
+        decoration: _pairingInputDecoration(
+          context,
+          hintText: preparing ? '正在生成公钥…' : '公钥生成失败，请重试',
+          suffixIcon: IconButton(
+            tooltip: '复制公钥',
+            onPressed: preparing || controller.text.trim().isEmpty
+                ? null
+                : onCopy,
+            icon: const Icon(RecodexIcons.copy),
           ),
         ),
       ),
@@ -1044,7 +1246,7 @@ class _ConnectionStatusRow extends StatelessWidget {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const _SettingLabel(title: '连接状态', subtitle: 'Bridge 实时状态'),
+              const _SettingLabel(title: '连接状态', subtitle: '网关实时状态'),
               const SizedBox(height: 12),
               badge,
             ],
@@ -1055,7 +1257,7 @@ class _ConnectionStatusRow extends StatelessWidget {
           children: [
             const SizedBox(
               width: 180,
-              child: _SettingLabel(title: '连接状态', subtitle: 'Bridge 实时状态'),
+              child: _SettingLabel(title: '连接状态', subtitle: '网关实时状态'),
             ),
             const SizedBox(width: 22),
             Expanded(child: badge),

@@ -8,6 +8,7 @@ import '../../routes/app_pages.dart';
 import '../../services/task_notification_controller.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
+import 'settings_preferences_controller.dart';
 import 'theme_controller.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -21,6 +22,10 @@ class _SettingsPageState extends State<SettingsPage> {
   final BridgeController controller = Get.find();
   final ThemeController themeController = Get.find();
   final TaskNotificationController notificationController = Get.find();
+  final SettingsPreferencesController preferences =
+      Get.isRegistered<SettingsPreferencesController>()
+      ? Get.find<SettingsPreferencesController>()
+      : Get.put(SettingsPreferencesController(), permanent: true);
 
   @override
   Widget build(BuildContext context) {
@@ -63,6 +68,51 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 18),
               _SettingsGroup(
+                title: '连接与配对',
+                children: [
+                  _SettingsTile(
+                    icon: controller.connected.value
+                        ? RecodexIcons.cloudDone
+                        : RecodexIcons.cloudOff,
+                    title: '配对管理',
+                    subtitle: controller.pairings.isEmpty
+                        ? '还没有保存的配对'
+                        : '${controller.pairings.length} 个配对 · 当前：${controller.activePairing?.displayName ?? '未选择'}',
+                    trailingIcon: RecodexIcons.chevronRight,
+                    onTap: () => _openPage(Routes.connectionSettings),
+                  ),
+                  _DividerLine(),
+                  _SettingsTile(
+                    icon: RecodexIcons.sync,
+                    title: '自动连接',
+                    subtitle: preferences.autoConnect.value
+                        ? '启动时连接默认配对'
+                        : '启动时保持手动连接',
+                    trailing: Switch(
+                      value: preferences.autoConnect.value,
+                      onChanged: preferences.setAutoConnect,
+                    ),
+                    trailingIcon: RecodexIcons.chevronRight,
+                    onTap: () => _openPage(Routes.connectionSettings),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _SettingsGroup(
+                title: '任务与工作区',
+                children: [
+                  _SettingsTile(
+                    icon: RecodexIcons.terminal,
+                    title: '任务偏好',
+                    subtitle:
+                        '${preferences.defaultModel.value} · ${_reasoningLabel(preferences.defaultReasoningEffort.value)}',
+                    trailingIcon: RecodexIcons.chevronRight,
+                    onTap: () => _openPage(Routes.taskSettings),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _SettingsGroup(
                 title: '通知',
                 children: [
                   _SettingsTile(
@@ -91,7 +141,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 18),
               _SettingsGroup(
-                title: '服务',
+                title: '服务与诊断',
                 children: [
                   _SettingsTile(
                     icon: controller.connected.value
@@ -99,8 +149,8 @@ class _SettingsPageState extends State<SettingsPage> {
                         : RecodexIcons.cloudOff,
                     title: '服务状态',
                     subtitle: controller.connected.value
-                        ? 'Bridge 在线'
-                        : 'Bridge 未连接',
+                        ? 'Relay 在线'
+                        : 'Relay 未连接',
                     trailing: _StatusDot(connected: controller.connected.value),
                     trailingIcon: RecodexIcons.chevronRight,
                     onTap: () => _openPage(Routes.service),
@@ -109,7 +159,24 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 18),
               _SettingsGroup(
-                title: '关于',
+                title: '数据与安全',
+                children: [
+                  _SettingsTile(
+                    icon: controller.hasDeviceKey
+                        ? RecodexIcons.verified
+                        : RecodexIcons.shieldOff,
+                    title: '凭证与隐私',
+                    subtitle: controller.hasDeviceKey
+                        ? '本机凭证已受安全存储保护'
+                        : '管理本机密钥、令牌和脱敏配置',
+                    trailingIcon: RecodexIcons.chevronRight,
+                    onTap: () => _openPage(Routes.securitySettings),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _SettingsGroup(
+                title: '关于与帮助',
                 children: [
                   _SettingsTile(
                     icon: RecodexIcons.info,
@@ -119,11 +186,13 @@ class _SettingsPageState extends State<SettingsPage> {
                     onTap: () => _openPage(Routes.about),
                   ),
                   _DividerLine(),
-                  const _SettingsTile(
+                  _SettingsTile(
                     icon: RecodexIcons.updates,
                     title: '检测更新',
                     subtitle: '当前版本 v1.0.4',
                     trailingText: '已是最新',
+                    trailingIcon: RecodexIcons.chevronRight,
+                    onTap: _showUpdateInfo,
                   ),
                 ],
               ),
@@ -140,6 +209,25 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _openPage(String route) {
     Get.toNamed(route);
+  }
+
+  void _showUpdateInfo() {
+    Get.dialog(
+      AlertDialog(
+        title: const Text('检测更新'),
+        content: const Text('当前已是最新版本 v1.0.4。\n\n后续版本会通过应用内通知提醒你。'),
+        actions: [TextButton(onPressed: Get.back, child: const Text('知道了'))],
+      ),
+    );
+  }
+
+  String _reasoningLabel(String value) {
+    return switch (value) {
+      'low' => '低强度',
+      'high' => '高强度',
+      'xhigh' => '极高强度',
+      _ => '中等强度',
+    };
   }
 }
 

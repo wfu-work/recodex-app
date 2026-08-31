@@ -61,6 +61,7 @@ void main() {
       'from': 'app-1',
     });
     expect(payload?['type'], 'codex.command');
+    expect(payload?['version'], RelayProtocol.version);
     expect(payload?['deviceId'], 'app-1');
     expect(payload?['targetDeviceId'], 'host-1');
     expect((payload?['command'] as Map)['type'], 'host.get_status');
