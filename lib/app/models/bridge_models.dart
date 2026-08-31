@@ -210,6 +210,23 @@ class SessionRecord {
   final String createdAt;
   final String updatedAt;
 
+  /// A stable label for compact task navigation. Codex may not provide a
+  /// title for older threads, so fall back to the first prompt and finally
+  /// the thread id instead of rendering an empty row.
+  String get displayTitle {
+    final value = prompt.trim();
+    if (value.isNotEmpty) return value;
+    return id.trim().isEmpty ? '未命名任务' : id;
+  }
+
+  bool get isRunning {
+    final value = status.trim().toLowerCase();
+    return value == 'running' ||
+        value == 'active' ||
+        value == 'in_progress' ||
+        value == 'inprogress';
+  }
+
   factory SessionRecord.fromJson(Map<String, dynamic> json) {
     return SessionRecord(
       id: json['id'] as String? ?? '',
@@ -221,8 +238,15 @@ class SessionRecord {
     );
   }
 
-  DateTime get updatedAtDate =>
-      DateTime.tryParse(updatedAt) ?? DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime get updatedAtDate {
+    final raw = int.tryParse(updatedAt);
+    if (raw != null) {
+      final milliseconds = raw.abs() < 100000000000 ? raw * 1000 : raw;
+      return DateTime.fromMillisecondsSinceEpoch(milliseconds);
+    }
+    return DateTime.tryParse(updatedAt) ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+  }
 }
 
 class SessionEvent {
@@ -330,6 +354,7 @@ class ComposerContext {
     required this.transport,
     required this.model,
     required this.models,
+    required this.modelLabels,
     required this.reasoningEffort,
     required this.reasoningEfforts,
     required this.approvalPolicy,
@@ -345,6 +370,13 @@ class ComposerContext {
   final String transport;
   final String model;
   final List<String> models;
+
+  /// Human-readable names keyed by the model identifier sent to Codex.
+  ///
+  /// The App Server exposes both a stable `model` value and a presentation
+  /// `displayName`. Keeping them separate means the picker can show the same
+  /// names as Codex while turn/start still receives the canonical identifier.
+  final Map<String, String> modelLabels;
   final String reasoningEffort;
   final List<String> reasoningEfforts;
   final String approvalPolicy;
@@ -360,6 +392,7 @@ class ComposerContext {
     String? transport,
     String? model,
     List<String>? models,
+    Map<String, String>? modelLabels,
     String? reasoningEffort,
     List<String>? reasoningEfforts,
     String? approvalPolicy,
@@ -375,6 +408,7 @@ class ComposerContext {
       transport: transport ?? this.transport,
       model: model ?? this.model,
       models: models ?? this.models,
+      modelLabels: modelLabels ?? this.modelLabels,
       reasoningEffort: reasoningEffort ?? this.reasoningEffort,
       reasoningEfforts: reasoningEfforts ?? this.reasoningEfforts,
       approvalPolicy: approvalPolicy ?? this.approvalPolicy,
@@ -389,13 +423,43 @@ class ComposerContext {
     );
   }
 
+  String modelLabel(String value) => modelLabels[value] ?? value;
+
   factory ComposerContext.fromJson(Map<String, dynamic> json) {
+    final parsedModels = <String>[];
+    final parsedLabels = <String, String>{};
+    final rawModels = json['models'];
+    if (rawModels is List) {
+      for (final raw in rawModels) {
+        String? id;
+        String? label;
+        if (raw is Map) {
+          final map = raw.cast<Object?, Object?>();
+          id = map['model']?.toString().trim();
+          if (id == null || id.isEmpty) id = map['id']?.toString().trim();
+          label = map['displayName']?.toString().trim();
+          if (map['hidden'] == true) continue;
+        } else {
+          id = raw?.toString().trim();
+        }
+        if (id == null || id.isEmpty || parsedModels.contains(id)) continue;
+        parsedModels.add(id);
+        parsedLabels[id] = label == null || label.isEmpty ? id : label;
+      }
+    }
+    final rawLabels = json['modelLabels'];
+    if (rawLabels is Map) {
+      for (final entry in rawLabels.entries) {
+        final key = entry.key?.toString().trim() ?? '';
+        final value = entry.value?.toString().trim() ?? '';
+        if (key.isNotEmpty && value.isNotEmpty) parsedLabels[key] = value;
+      }
+    }
     return ComposerContext(
       transport: json['transport'] as String? ?? 'Local',
-      model: json['model'] as String? ?? 'gpt-5.5',
-      models: ((json['models'] as List?) ?? const ['gpt-5.5'])
-          .whereType<String>()
-          .toList(),
+      model: json['model'] as String? ?? '',
+      models: parsedModels,
+      modelLabels: parsedLabels,
       reasoningEffort: json['reasoningEffort'] as String? ?? 'medium',
       reasoningEfforts:
           ((json['reasoningEfforts'] as List?) ??
@@ -420,8 +484,9 @@ class ComposerContext {
 
   static const fallback = ComposerContext(
     transport: 'Local',
-    model: 'gpt-5.5',
-    models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2'],
+    model: '',
+    models: [],
+    modelLabels: {},
     reasoningEffort: 'medium',
     reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
     approvalPolicy: 'on-request',

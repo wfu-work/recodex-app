@@ -44,6 +44,10 @@ class BridgeController extends GetxController {
   final sessions = <SessionRecord>[].obs;
   final events = <SessionEvent>[].obs;
   final selectedWorkspace = Rxn<WorkspaceInfo>();
+
+  /// The task currently shown in the main conversation view. This is kept
+  /// separate from [currentSessionId], which is also used for an active turn.
+  final selectedSessionId = RxnString();
   final gitSnapshot = Rxn<GitSnapshot>();
   final composerContext = ComposerContext.fallback.obs;
   final permissionMode = '默认权限'.obs;
@@ -289,6 +293,7 @@ class BridgeController extends GetxController {
       applyTaskPreferences(Get.find<SettingsPreferencesController>());
     }
     currentSessionId.value = null;
+    selectedSessionId.value = null;
     timelineSessionRunning.value = false;
     timelineRevision.value += 1;
     relaySessionId.value = '';
@@ -596,6 +601,7 @@ class BridgeController extends GetxController {
     await _closeSocket();
     connected.value = false;
     connectionLabel.value = 'offline';
+    _clearRemoteModels();
     _hadOnlineConnection = false;
   }
 
@@ -619,6 +625,7 @@ class BridgeController extends GetxController {
     unawaited(_storeSelectedWorkspace(workspace));
     gitSnapshot.value = null;
     currentSessionId.value = null;
+    selectedSessionId.value = null;
     timelineSessionRunning.value = false;
     _requestedEventsSessionId = null;
     _requestedEventsPrompt = null;
@@ -627,6 +634,40 @@ class BridgeController extends GetxController {
     refreshContext();
     gitStatus(includeDiff: true);
     _loadLatestSessionEventsForSelectedWorkspace(force: true);
+  }
+
+  /// Selects a task from the sidebar and loads its persisted conversation.
+  ///
+  /// Codex keeps thread metadata and thread content as separate resources.
+  /// The list response is therefore only used to paint the sidebar; the
+  /// explicit read below hydrates the main conversation for the selected
+  /// thread.
+  void selectSession(SessionRecord session) {
+    if (session.id.trim().isEmpty) return;
+
+    final workspace = _workspaceForSession(session.workspace);
+    if (workspace != null &&
+        !_sameWorkspace(selectedWorkspace.value, workspace)) {
+      selectedWorkspace.value = workspace;
+      unawaited(_storeSelectedWorkspace(workspace));
+      gitSnapshot.value = null;
+      refreshContext();
+      gitStatus(includeDiff: true);
+    }
+
+    selectedSessionId.value = session.id;
+    currentSessionId.value = session.id;
+    timelineSessionRunning.value = session.isRunning;
+    _requestedEventsSessionId = session.id;
+    _requestedEventsPrompt = session.prompt;
+    events.clear();
+    _bumpTimelineRevision();
+
+    if (!connected.value) {
+      lastError.value = '尚未连接 Relay，无法加载任务对话。';
+      return;
+    }
+    _sendCommand('thread.read', {}, threadId: session.id);
   }
 
   void startSession(String prompt) {
@@ -640,6 +681,7 @@ class BridgeController extends GetxController {
     timelineSessionRunning.value = true;
     _pendingSessionStart = true;
     _pendingPrompt = trimmedPrompt;
+    selectedSessionId.value = null;
     _sendCommand('thread.create', {
       if (workspace.path.trim().isNotEmpty) 'cwd': workspace.path,
     });
@@ -707,6 +749,8 @@ class BridgeController extends GetxController {
   }
 
   void refreshContext() {
+    _clearRemoteModels();
+    _sendCommand('model.list', {'includeHidden': false, 'limit': 100});
     _sendCommand('host.get_status', {});
   }
 
@@ -845,12 +889,14 @@ class BridgeController extends GetxController {
         Get.find<TaskNotificationController>().notifyRelayReconnected(),
       );
     }
+    _clearRemoteModels();
     _pendingCommands.clear();
     unawaited(_storeConnectionHints());
     _sendCommand('sync.request', {
       if (_lastIncomingSequence > 0) 'lastSequence': _lastIncomingSequence,
     });
     _sendCommand('thread.list', {'limit': 100});
+    _sendCommand('model.list', {'includeHidden': false, 'limit': 100});
     _sendCommand('host.get_status', {});
   }
 
@@ -910,6 +956,8 @@ class BridgeController extends GetxController {
         _applySyncResult(result);
       case 'thread.list':
         _applyThreadListResult(result);
+      case 'model.list':
+        _applyModelListResult(result);
       case 'thread.create':
         _handleThreadCreated(result);
       case 'thread.read':
@@ -958,6 +1006,11 @@ class BridgeController extends GetxController {
     ).map(_sessionFromThread).whereType<SessionRecord>().toList();
     _syncSessionCompletionNotifications(next);
     sessions.assignAll(next);
+    final selectedId = selectedSessionId.value;
+    if (selectedId != null &&
+        !next.any((session) => session.id == selectedId)) {
+      selectedSessionId.value = null;
+    }
     _deriveWorkspaces(next);
     selectedWorkspace.value ??= _restoreSelectedWorkspace();
     selectedWorkspace.value ??= _defaultWorkspace();
@@ -1010,11 +1063,20 @@ class BridgeController extends GetxController {
 
   String _threadStatus(Map<String, dynamic> thread) {
     final status = thread['status'];
-    if (status is String) return status.toLowerCase();
+    if (status is String) return _normalizeThreadStatus(status);
     if (status is Map) {
-      return _readString(status['type'])?.toLowerCase() ?? 'done';
+      return _normalizeThreadStatus(_readString(status['type']) ?? 'done');
     }
     return thread['active'] == true ? 'running' : 'done';
+  }
+
+  String _normalizeThreadStatus(String value) {
+    final normalized = value.trim().toLowerCase();
+    return normalized == 'active' || normalized == 'inprogress'
+        ? 'running'
+        : normalized == 'idle' || normalized == 'notloaded'
+        ? 'done'
+        : normalized;
   }
 
   void _handleThreadCreated(Object? value) {
@@ -1031,6 +1093,7 @@ class BridgeController extends GetxController {
     if (record.id.isEmpty) return;
     _pendingSessionStart = false;
     currentSessionId.value = record.id;
+    selectedSessionId.value = record.id;
     timelineSessionRunning.value = true;
     _markSessionRunningForNotification(record.id);
     _requestedEventsSessionId = record.id;
@@ -1042,10 +1105,12 @@ class BridgeController extends GetxController {
     final prompt = _pendingPrompt;
     _pendingPrompt = null;
     if (prompt != null && prompt.isNotEmpty) {
+      final context = composerContext.value;
       _sendCommand('turn.start', {
         'text': prompt,
         if ((selectedWorkspace.value?.path ?? '').trim().isNotEmpty)
           'cwd': selectedWorkspace.value!.path,
+        if (context.model.trim().isNotEmpty) 'model': context.model,
       }, threadId: record.id);
     }
   }
@@ -1059,15 +1124,24 @@ class BridgeController extends GetxController {
     if (sessionId != _requestedEventsSessionId) return;
     final loaded = <SessionEvent>[];
     final prompt = _requestedEventsPrompt;
+    var promptWasAdded = false;
     if (prompt != null && prompt.trim().isNotEmpty) {
       loaded.add(SessionEvent(kind: 'user', text: prompt.trim()));
+      promptWasAdded = true;
     }
     for (final turn in _asList(thread['turns'])) {
       final turnMap = _asMap(turn);
       if (turnMap == null) continue;
       for (final item in _asList(turnMap['items'])) {
         final event = _eventFromCodexItem(item);
-        if (event != null) loaded.add(event);
+        if (event == null) continue;
+        if (promptWasAdded &&
+            event.kind == 'user' &&
+            event.text.trim() == prompt!.trim()) {
+          promptWasAdded = false;
+          continue;
+        }
+        loaded.add(event);
       }
     }
     if (loaded.isEmpty) return;
@@ -1084,7 +1158,9 @@ class BridgeController extends GetxController {
     final type = (_readString(item['type']) ?? '').toLowerCase();
     final text = _extractText(item);
     if (text.isEmpty && type.isEmpty) return null;
-    final kind = type.contains('message') || type.contains('text')
+    final kind = type == 'usermessage' || type.contains('user_message')
+        ? 'user'
+        : type.contains('message') || type.contains('text')
         ? 'assistant'
         : type.contains('command') || type.contains('tool')
         ? 'tool_call'
@@ -1103,6 +1179,12 @@ class BridgeController extends GetxController {
         _readString(message['threadId']) ??
         _readString(data['threadId']) ??
         currentSessionId.value;
+    if (threadId != null &&
+        threadId.isNotEmpty &&
+        selectedSessionId.value != null &&
+        threadId != selectedSessionId.value) {
+      return;
+    }
     if (threadId != null &&
         threadId.isNotEmpty &&
         currentSessionId.value == null) {
@@ -1224,6 +1306,70 @@ class BridgeController extends GetxController {
     }
   }
 
+  void _applyModelListResult(Object? value) {
+    final map = _asMap(value);
+    final rawModels = map == null ? value : (map['data'] ?? map['models']);
+    final models = <String>[];
+    final labels = <String, String>{};
+    var remoteDefault = '';
+
+    for (final raw in _asList(rawModels)) {
+      final model = _asMap(raw);
+      if (model != null && model['hidden'] == true) continue;
+      final id = model == null
+          ? _readString(raw)
+          : (_readString(model['model']) ?? _readString(model['id']));
+      if (id == null || models.contains(id)) continue;
+      models.add(id);
+      labels[id] = model == null
+          ? id
+          : (_readString(model['displayName']) ?? id);
+      if (model?['isDefault'] == true) remoteDefault = id;
+    }
+
+    // Keep the App Server's default first so the existing "自动选择"
+    // preference resolves to the same model as the official picker even when
+    // the server does not order its response by default status.
+    if (remoteDefault.isNotEmpty &&
+        (models.isEmpty || models.first != remoteDefault)) {
+      models.remove(remoteDefault);
+      models.insert(0, remoteDefault);
+    }
+
+    final current = composerContext.value.model;
+    final selected = models.contains(current)
+        ? current
+        : remoteDefault.isNotEmpty
+        ? remoteDefault
+        : models.isEmpty
+        ? ''
+        : models.first;
+    composerContext.value = composerContext.value.copyWith(
+      model: selected,
+      models: models,
+      modelLabels: labels,
+    );
+
+    // A model saved from an older host may no longer exist remotely. Do not
+    // keep sending that stale identifier after the real list has arrived.
+    if (Get.isRegistered<SettingsPreferencesController>()) {
+      final preferences = Get.find<SettingsPreferencesController>();
+      final configured = preferences.defaultModel.value;
+      if (configured != '自动选择' && !models.contains(configured)) {
+        preferences.setDefaultModel('自动选择');
+      }
+      applyTaskPreferences(preferences);
+    }
+  }
+
+  void _clearRemoteModels() {
+    composerContext.value = composerContext.value.copyWith(
+      model: '',
+      models: const [],
+      modelLabels: const {},
+    );
+  }
+
   void _sendCommand(
     String type,
     Map<String, dynamic> command, {
@@ -1302,8 +1448,10 @@ class BridgeController extends GetxController {
 
   String _dateString(Object? value) {
     if (value is num) {
+      final raw = value.toInt();
+      final milliseconds = raw.abs() < 100000000000 ? raw * 1000 : raw;
       return DateTime.fromMillisecondsSinceEpoch(
-        value.toInt(),
+        milliseconds,
       ).toUtc().toIso8601String();
     }
     return _readString(value) ?? '';
@@ -1327,10 +1475,15 @@ class BridgeController extends GetxController {
       }
       if (value is List) {
         final text = value
-            .whereType<Map>()
-            .map((item) => _extractText(Map<String, dynamic>.from(item)))
+            .map((item) {
+              if (item is String) return item.trim();
+              if (item is Map) {
+                return _extractText(Map<String, dynamic>.from(item));
+              }
+              return '';
+            })
             .where((item) => item.isNotEmpty)
-            .join();
+            .join('\n');
         if (text.isNotEmpty) return text;
       }
     }
@@ -1345,6 +1498,7 @@ class BridgeController extends GetxController {
     _heartbeatTimer = null;
     connected.value = false;
     connectionLabel.value = 'offline';
+    _clearRemoteModels();
     if (wasConnected &&
         !_manualDisconnect &&
         Get.isRegistered<TaskNotificationController>()) {
@@ -1365,6 +1519,7 @@ class BridgeController extends GetxController {
     _heartbeatTimer = null;
     connected.value = false;
     connectionLabel.value = 'failed';
+    _clearRemoteModels();
     _fail(error);
     if (wasConnected &&
         !_manualDisconnect &&
@@ -1478,6 +1633,7 @@ class BridgeController extends GetxController {
     if (!connected.value) return;
     if (_pendingSessionStart) return;
     if (sessions.isEmpty) {
+      selectedSessionId.value = null;
       _requestedEventsSessionId = null;
       _requestedEventsPrompt = null;
       currentSessionId.value = null;
@@ -1492,6 +1648,7 @@ class BridgeController extends GetxController {
     final workspace = selectedWorkspace.value;
     final candidates = _timelineSessionCandidates(workspace);
     if (candidates.isEmpty) {
+      selectedSessionId.value = null;
       _requestedEventsSessionId = null;
       _requestedEventsPrompt = null;
       currentSessionId.value = null;
@@ -1506,13 +1663,24 @@ class BridgeController extends GetxController {
     final runningCandidates = candidates.where(
       (session) => session.status == 'running',
     );
+    final selectedId = selectedSessionId.value;
+    final selected = selectedId == null
+        ? null
+        : candidates.cast<SessionRecord?>().firstWhere(
+            (session) => session?.id == selectedId,
+            orElse: () => null,
+          );
     final timelineCandidates = runningCandidates.isEmpty
         ? candidates
         : runningCandidates;
-    final latest = timelineCandidates.reduce(
-      (current, next) =>
-          next.updatedAtDate.isAfter(current.updatedAtDate) ? next : current,
-    );
+    final latest =
+        selected ??
+        timelineCandidates.reduce(
+          (current, next) => next.updatedAtDate.isAfter(current.updatedAtDate)
+              ? next
+              : current,
+        );
+    selectedSessionId.value ??= latest.id;
     final requestedRunning =
         _requestedEventsSessionId == latest.id && timelineSessionRunning.value;
     if (latest.status == 'running') {
@@ -1531,6 +1699,37 @@ class BridgeController extends GetxController {
     _requestedEventsSessionId = latest.id;
     _requestedEventsPrompt = latest.prompt;
     _sendCommand('thread.read', {}, threadId: latest.id);
+  }
+
+  WorkspaceInfo? _workspaceForSession(String sessionWorkspace) {
+    final normalized = _normalizeWorkspaceKey(sessionWorkspace);
+    if (normalized.isEmpty) return null;
+    for (final workspace in workspaces) {
+      if (_normalizeWorkspaceKey(workspace.path) == normalized ||
+          _normalizeWorkspaceKey(workspace.name) == normalized) {
+        return workspace;
+      }
+    }
+    final basename = _lastPathSegment(normalized);
+    for (final workspace in workspaces) {
+      if (_lastPathSegment(_normalizeWorkspaceKey(workspace.path)) ==
+              basename ||
+          _lastPathSegment(_normalizeWorkspaceKey(workspace.name)) ==
+              basename) {
+        return workspace;
+      }
+    }
+    return null;
+  }
+
+  bool _sameWorkspace(WorkspaceInfo? left, WorkspaceInfo right) {
+    if (left == null) return false;
+    final leftPath = _normalizeWorkspaceKey(left.path);
+    final rightPath = _normalizeWorkspaceKey(right.path);
+    if (leftPath.isNotEmpty && rightPath.isNotEmpty) {
+      return leftPath == rightPath;
+    }
+    return left.name.trim() == right.name.trim();
   }
 
   List<SessionRecord> _timelineSessionCandidates(WorkspaceInfo? workspace) {

@@ -59,4 +59,45 @@ void main() {
     expect(profile.isComplete, isFalse);
     expect(profile.displayName, '未命名配对');
   });
+
+  test('SessionRecord exposes a useful sidebar title and running state', () {
+    const record = SessionRecord(
+      id: 'thread-1',
+      workspace: '/work/recodex',
+      prompt: '修复侧边栏任务读取',
+      status: 'active',
+      createdAt: '1700000000',
+      updatedAt: '1700000100',
+    );
+
+    expect(record.displayTitle, '修复侧边栏任务读取');
+    expect(record.isRunning, isTrue);
+    expect(record.updatedAtDate.year, 2023);
+  });
+
+  test('ComposerContext keeps remote model ids and display names separate', () {
+    final context = ComposerContext.fromJson({
+      'model': 'gpt-remote',
+      'models': [
+        {
+          'model': 'gpt-remote',
+          'id': 'catalog-entry',
+          'displayName': 'GPT Remote',
+          'hidden': false,
+        },
+        {'model': 'gpt-hidden', 'displayName': 'Hidden model', 'hidden': true},
+        'legacy-model',
+      ],
+    });
+
+    expect(context.models, ['gpt-remote', 'legacy-model']);
+    expect(context.modelLabel('gpt-remote'), 'GPT Remote');
+    expect(context.modelLabel('legacy-model'), 'legacy-model');
+    expect(context.model, 'gpt-remote');
+  });
+
+  test('ComposerContext fallback has no fabricated remote models', () {
+    expect(ComposerContext.fallback.models, isEmpty);
+    expect(ComposerContext.fallback.model, isEmpty);
+  });
 }

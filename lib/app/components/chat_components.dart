@@ -1522,6 +1522,7 @@ class ComposerBar extends StatelessWidget {
                             icon: RecodexIcons.fast,
                             label: this.context.model,
                             values: this.context.models,
+                            labelForValue: this.context.modelLabel,
                             onChanged: onModelChanged,
                           ),
                           const SizedBox(width: 6),
@@ -1752,7 +1753,8 @@ class _ComposerMenuButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final selected = values.firstWhere(
-      (value) => (labelForValue?.call(value) ?? value) == label,
+      (value) =>
+          value == label || (labelForValue?.call(value) ?? value) == label,
       orElse: () => values.isEmpty ? '' : values.first,
     );
     return RecodexDropdown<String>(

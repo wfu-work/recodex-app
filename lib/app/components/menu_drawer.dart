@@ -13,8 +13,11 @@ class RemodexDrawer extends StatefulWidget {
     required this.activePairing,
     required this.workspaces,
     required this.selectedWorkspace,
+    required this.sessions,
+    required this.selectedSessionId,
     required this.onSelectPairing,
     required this.onSelectWorkspace,
+    required this.onSelectSession,
     required this.onPairing,
     required this.onNewPairing,
     required this.onSettings,
@@ -26,8 +29,11 @@ class RemodexDrawer extends StatefulWidget {
   final PairingProfile? activePairing;
   final List<WorkspaceInfo> workspaces;
   final WorkspaceInfo? selectedWorkspace;
+  final List<SessionRecord> sessions;
+  final String? selectedSessionId;
   final ValueChanged<PairingProfile> onSelectPairing;
   final ValueChanged<WorkspaceInfo> onSelectWorkspace;
+  final ValueChanged<SessionRecord> onSelectSession;
   final VoidCallback onPairing;
   final VoidCallback onNewPairing;
   final VoidCallback onSettings;
@@ -40,7 +46,7 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
   static const double _workspaceRowExtent = 56;
   static const double _selectedWorkspaceTopPadding = 34;
 
-  final ScrollController _workspaceScrollController = ScrollController();
+  final ScrollController _sidebarScrollController = ScrollController();
   String? _lastScrolledWorkspaceKey;
 
   @override
@@ -61,7 +67,7 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
 
   @override
   void dispose() {
-    _workspaceScrollController.dispose();
+    _sidebarScrollController.dispose();
     super.dispose();
   }
 
@@ -110,23 +116,23 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
   }
 
   void _scrollSelectedIntoView({required bool jump}) {
-    if (!mounted || !_workspaceScrollController.hasClients) {
+    if (!mounted || !_sidebarScrollController.hasClients) {
       return;
     }
     final index = _selectedWorkspaceIndex;
     if (index < 0) {
       return;
     }
-    final position = _workspaceScrollController.position;
+    final position = _sidebarScrollController.position;
     final target = (index * _workspaceRowExtent - _selectedWorkspaceTopPadding)
         .clamp(position.minScrollExtent, position.maxScrollExtent)
         .toDouble();
 
     if (jump) {
-      _workspaceScrollController.jumpTo(target);
+      _sidebarScrollController.jumpTo(target);
       return;
     }
-    _workspaceScrollController.animateTo(
+    _sidebarScrollController.animateTo(
       target,
       duration: const Duration(milliseconds: 240),
       curve: Curves.easeOutCubic,
@@ -162,7 +168,7 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                 Row(
                   children: [
                     Text(
-                      '工作区',
+                      '项目',
                       style: TextStyle(
                         color: colors.textMuted,
                         fontSize: 12,
@@ -182,27 +188,36 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                 ),
                 const SizedBox(height: 12),
                 Expanded(
-                  child: ListView.builder(
-                    controller: _workspaceScrollController,
+                  child: ListView(
+                    controller: _sidebarScrollController,
                     padding: EdgeInsets.zero,
-                    itemCount: widget.workspaces.isEmpty
-                        ? 1
-                        : widget.workspaces.length,
-                    itemBuilder: (context, index) {
-                      if (widget.workspaces.isEmpty) {
-                        return const _WorkspaceLine(
-                          name: '暂无工作区',
-                          path: '连接 Relay 后同步',
-                        );
-                      }
-                      final workspace = widget.workspaces[index];
-                      return _WorkspaceLine(
-                        name: workspace.name,
-                        path: workspace.path,
-                        active: _isSelectedWorkspace(workspace),
-                        onTap: () => widget.onSelectWorkspace(workspace),
-                      );
-                    },
+                    children: [
+                      if (widget.workspaces.isEmpty)
+                        const _WorkspaceLine(name: '暂无项目', path: '连接 Relay 后同步')
+                      else
+                        for (final workspace in widget.workspaces)
+                          _WorkspaceLine(
+                            name: workspace.name,
+                            path: workspace.path,
+                            active: _isSelectedWorkspace(workspace),
+                            onTap: () => widget.onSelectWorkspace(workspace),
+                          ),
+                      const SizedBox(height: 22),
+                      _SidebarSectionTitle(
+                        title: '任务',
+                        count: _sessionsForSelectedWorkspace.length,
+                      ),
+                      const SizedBox(height: 8),
+                      if (_sessionsForSelectedWorkspace.isEmpty)
+                        const _EmptySessionLine()
+                      else
+                        for (final session in _sessionsForSelectedWorkspace)
+                          _SessionLine(
+                            session: session,
+                            active: session.id == widget.selectedSessionId,
+                            onTap: () => widget.onSelectSession(session),
+                          ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -227,6 +242,41 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
         ),
       ),
     );
+  }
+
+  List<SessionRecord> get _sessionsForSelectedWorkspace {
+    final selected = widget.selectedWorkspace;
+    if (selected == null) return const [];
+    final path = _normalizeWorkspaceKey(selected.path);
+    final name = _normalizeWorkspaceKey(selected.name);
+    final strict = widget.sessions.where((session) {
+      final value = _normalizeWorkspaceKey(session.workspace);
+      return (path.isNotEmpty && value == path) ||
+          (name.isNotEmpty && value == name);
+    }).toList();
+    if (strict.isNotEmpty) return strict;
+    final selectedBase = _lastPathSegment(path.isNotEmpty ? path : name);
+    if (selectedBase.isEmpty) return const [];
+    return widget.sessions
+        .where(
+          (session) =>
+              _lastPathSegment(_normalizeWorkspaceKey(session.workspace)) ==
+              selectedBase,
+        )
+        .toList();
+  }
+
+  String _normalizeWorkspaceKey(String value) {
+    var normalized = value.trim().replaceAll('\\', '/');
+    while (normalized.endsWith('/') && normalized.length > 1) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+    return normalized;
+  }
+
+  String _lastPathSegment(String value) {
+    final parts = value.split('/').where((part) => part.isNotEmpty).toList();
+    return parts.isEmpty ? value : parts.last;
   }
 }
 
@@ -441,6 +491,141 @@ class _WorkspaceLine extends StatelessWidget {
       ),
     );
   }
+}
+
+class _SidebarSectionTitle extends StatelessWidget {
+  const _SidebarSectionTitle({required this.title, required this.count});
+
+  final String title;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return Row(
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            color: colors.textMuted,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const Spacer(),
+        Text(
+          '$count',
+          style: TextStyle(
+            color: colors.textMuted,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _EmptySessionLine extends StatelessWidget {
+  const _EmptySessionLine();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
+      child: Text(
+        '当前项目暂无任务',
+        style: TextStyle(color: colors.textMuted, fontSize: 12),
+      ),
+    );
+  }
+}
+
+class _SessionLine extends StatelessWidget {
+  const _SessionLine({
+    required this.session,
+    required this.active,
+    required this.onTap,
+  });
+
+  final SessionRecord session;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final activeColor = colors.icon;
+    final statusColor = session.isRunning ? colors.icon : colors.textMuted;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: active
+            ? activeColor.withValues(alpha: 0.12)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        border: active
+            ? Border.all(color: activeColor.withValues(alpha: 0.24))
+            : null,
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Icon(
+                  session.isRunning ? RecodexIcons.sync : RecodexIcons.fileText,
+                  size: 16,
+                  color: statusColor,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      session.displayTitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.25,
+                        fontWeight: FontWeight.w800,
+                        color: active ? activeColor : colors.text,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      _sessionDateLabel(session),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 10, color: colors.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _sessionDateLabel(SessionRecord session) {
+  if (session.isRunning) return '进行中';
+  final value = session.updatedAtDate;
+  if (value.millisecondsSinceEpoch == 0) return '已完成';
+  final local = value.toLocal();
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '${local.month}/${local.day} $hour:$minute';
 }
 
 class _BottomDock extends StatelessWidget {

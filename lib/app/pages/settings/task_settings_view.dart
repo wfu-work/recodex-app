@@ -174,13 +174,13 @@ class TaskSettingsPage extends StatelessWidget {
     SettingsPreferencesController preferences,
   ) {
     final values = <String>{'自动选择', ...bridge.composerContext.value.models};
-    final selected = preferences.defaultModel.value;
-    if (selected.isNotEmpty) values.add(selected);
     return [
       for (final value in values)
         RecodexDropdownOption<String>(
           value: value,
-          label: value == '自动选择' ? value : value,
+          label: value == '自动选择'
+              ? value
+              : bridge.composerContext.value.modelLabel(value),
         ),
     ];
   }

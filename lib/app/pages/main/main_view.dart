@@ -92,11 +92,17 @@ class _MainPageState extends State<MainPage> {
               activePairing: controller.activePairing,
               workspaces: controller.workspaces,
               selectedWorkspace: controller.selectedWorkspace.value,
+              sessions: controller.sessions,
+              selectedSessionId: controller.selectedSessionId.value,
               onSelectPairing: (profile) {
                 controller.switchPairing(profile.id);
               },
               onSelectWorkspace: (workspace) {
                 controller.selectWorkspace(workspace);
+                Navigator.of(context).pop();
+              },
+              onSelectSession: (session) {
+                controller.selectSession(session);
                 Navigator.of(context).pop();
               },
               onPairing: () => _openPage(Routes.pairing),
@@ -144,6 +150,14 @@ class _MainPageState extends State<MainPage> {
                               SizedBox(height: compactTimeline ? 14 : 26),
                           itemBuilder: (context, index) {
                             if (controller.events.isEmpty) {
+                              if (controller.selectedSessionId.value != null) {
+                                return AssistantBubble(
+                                  event: const SessionEvent(
+                                    kind: 'running',
+                                    text: '正在加载任务对话...',
+                                  ),
+                                );
+                              }
                               return WelcomeTimeline(
                                 connected: controller.connected.value,
                                 connectionLabel:
