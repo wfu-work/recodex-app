@@ -12,6 +12,8 @@ import '../../services/task_notification_controller.dart';
 
 class BridgeController extends GetxController {
   static const _storage = FlutterSecureStorage();
+  static const _pairingsStorageKey = 'recodex_pairings_v2';
+  static const _activePairingStorageKey = 'recodex_active_pairing_id_v2';
 
   final baseUrl = 'ws://127.0.0.1:8788/v1/connect'.obs;
   final spaceId = ''.obs;
@@ -30,6 +32,12 @@ class BridgeController extends GetxController {
   final lastError = ''.obs;
   final connected = false.obs;
   final busy = false.obs;
+
+  /// Saved Relay connections.  The active profile is mirrored into the
+  /// connection observables below so existing screens can keep reacting to
+  /// the same data flow.
+  final pairings = <PairingProfile>[].obs;
+  final activePairingId = RxnString();
 
   final workspaces = <WorkspaceInfo>[].obs;
   final sessions = <SessionRecord>[].obs;
@@ -72,6 +80,137 @@ class BridgeController extends GetxController {
       connected.value && selectedWorkspace.value != null;
   bool get hasDeviceKey => deviceKey.value.isNotEmpty;
 
+  PairingProfile? get activePairing {
+    final id = activePairingId.value;
+    if (id == null) return null;
+    return pairingById(id);
+  }
+
+  PairingProfile? pairingById(String id) {
+    for (final profile in pairings) {
+      if (profile.id == id) return profile;
+    }
+    return null;
+  }
+
+  PairingProfile createDraftPairing() {
+    return PairingProfile(
+      id: 'pairing_${DateTime.now().microsecondsSinceEpoch}',
+      name: '',
+      baseUrl: baseUrl.value,
+      spaceId: '',
+      deviceName: deviceName.value,
+      deviceId: _newDeviceId(),
+      targetDeviceId: '',
+      endpointType: endpointType.value,
+      deviceKey: '',
+      endpointPublicKey: '',
+      pairingToken: '',
+      endpointGrant: '',
+      tokenExpiresAt: 0,
+      grantExpiresAt: 0,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+    );
+  }
+
+  PairingProfile _profileFromState({required String name, String? id}) {
+    final previous = id == null ? activePairing : pairingById(id);
+    return PairingProfile(
+      id:
+          id ??
+          previous?.id ??
+          'pairing_${DateTime.now().microsecondsSinceEpoch}',
+      name: name,
+      baseUrl: baseUrl.value,
+      spaceId: spaceId.value,
+      deviceName: deviceName.value,
+      deviceId: deviceId.value,
+      targetDeviceId: targetDeviceId.value,
+      endpointType: endpointType.value,
+      deviceKey: deviceKey.value,
+      endpointPublicKey: endpointPublicKey.value,
+      pairingToken: pairingToken.value,
+      endpointGrant: endpointGrant.value,
+      tokenExpiresAt: tokenExpiresAt.value,
+      grantExpiresAt: grantExpiresAt.value,
+      selectedWorkspaceName: _storedWorkspaceName,
+      selectedWorkspacePath: _storedWorkspacePath,
+      createdAt: previous?.createdAt,
+      updatedAt: DateTime.now().toUtc().toIso8601String(),
+    );
+  }
+
+  Future<void> upsertPairing(
+    PairingProfile profile, {
+    bool connect = true,
+  }) async {
+    await _ensureCredentialsLoaded();
+    final normalized = profile.copyWith(
+      baseUrl: _normalizeRelayUrl(profile.baseUrl),
+      name: profile.name.trim(),
+      updatedAt: DateTime.now().toUtc().toIso8601String(),
+    );
+    final index = pairings.indexWhere((item) => item.id == normalized.id);
+    if (index < 0) {
+      pairings.add(normalized);
+    } else {
+      pairings[index] = normalized;
+    }
+    activePairingId.value = normalized.id;
+    await _persistActivePairingId();
+    await disconnect(silent: true);
+    await _applyPairing(normalized);
+    _resetHostState();
+    await _persistPairings();
+    if (connect && normalized.isComplete) {
+      await _autoConnect();
+    }
+  }
+
+  Future<void> switchPairing(String id, {bool autoConnect = true}) async {
+    await _ensureCredentialsLoaded();
+    final profile = pairingById(id);
+    if (profile == null) return;
+    if (activePairingId.value == id) {
+      return;
+    }
+    if (activePairingId.value != null) {
+      await _storeConnectionHints();
+    }
+    await disconnect(silent: true);
+    activePairingId.value = id;
+    await _persistActivePairingId();
+    await _applyPairing(profile);
+    _resetHostState();
+    if (autoConnect && profile.isComplete) {
+      await _autoConnect();
+    }
+  }
+
+  Future<void> deletePairing(String id) async {
+    await _ensureCredentialsLoaded();
+    final wasActive = activePairingId.value == id;
+    pairings.removeWhere((profile) => profile.id == id);
+    if (!wasActive) {
+      await _persistPairings();
+      return;
+    }
+    await disconnect(silent: true);
+    if (pairings.isEmpty) {
+      activePairingId.value = null;
+      await _persistActivePairingId();
+      _resetToEmptyConfiguration();
+    } else {
+      final next = pairings.first;
+      activePairingId.value = next.id;
+      await _persistActivePairingId();
+      await _applyPairing(next);
+      _resetHostState();
+      if (next.isComplete) await _autoConnect();
+    }
+    await _persistPairings();
+  }
+
   @override
   void onInit() {
     super.onInit();
@@ -83,6 +222,99 @@ class BridgeController extends GetxController {
     stopLiveTimelineRefresh();
     unawaited(disconnect(silent: true));
     super.onClose();
+  }
+
+  Future<void> _applyPairing(PairingProfile profile) async {
+    baseUrl.value = _normalizeRelayUrl(profile.baseUrl);
+    spaceId.value = profile.spaceId;
+    deviceName.value = profile.deviceName.trim().isEmpty
+        ? 'Flutter phone'
+        : profile.deviceName;
+    deviceId.value = profile.deviceId.trim().isEmpty
+        ? _newDeviceId()
+        : profile.deviceId;
+    targetDeviceId.value = profile.targetDeviceId;
+    endpointType.value = profile.endpointType.trim().isEmpty
+        ? 'app'
+        : profile.endpointType;
+    deviceKey.value = profile.deviceKey;
+    endpointPublicKey.value = profile.endpointPublicKey;
+    pairingToken.value = profile.pairingToken;
+    endpointGrant.value = profile.endpointGrant;
+    tokenExpiresAt.value = profile.tokenExpiresAt;
+    grantExpiresAt.value = profile.grantExpiresAt;
+    _storedWorkspaceName = profile.selectedWorkspaceName;
+    _storedWorkspacePath = profile.selectedWorkspacePath;
+    _keyPair = null;
+  }
+
+  void _resetHostState() {
+    lastError.value = '';
+    workspaces.clear();
+    sessions.clear();
+    events.clear();
+    selectedWorkspace.value = null;
+    gitSnapshot.value = null;
+    composerContext.value = ComposerContext.fallback;
+    currentSessionId.value = null;
+    timelineSessionRunning.value = false;
+    timelineRevision.value += 1;
+    relaySessionId.value = '';
+    _outgoingSequence = 0;
+    _lastIncomingSequence = 0;
+    _pendingSessionStart = false;
+    _pendingPrompt = null;
+    _currentTurnId = null;
+    _pendingHelloRequestId = null;
+    _requestedEventsSessionId = null;
+    _requestedEventsPrompt = null;
+    _pendingCommands.clear();
+    _seenIncomingMessageIds.clear();
+    _sessionLifecycles.clear();
+    _notifiedTerminalSessions.clear();
+  }
+
+  void _resetToEmptyConfiguration() {
+    baseUrl.value = 'ws://127.0.0.1:8788/v1/connect';
+    spaceId.value = '';
+    deviceName.value = 'Flutter phone';
+    deviceId.value = _newDeviceId();
+    targetDeviceId.value = '';
+    endpointType.value = 'app';
+    deviceKey.value = '';
+    endpointPublicKey.value = '';
+    pairingToken.value = '';
+    endpointGrant.value = '';
+    tokenExpiresAt.value = 0;
+    grantExpiresAt.value = 0;
+    _storedWorkspaceName = null;
+    _storedWorkspacePath = null;
+    _keyPair = null;
+    _resetHostState();
+  }
+
+  Future<void> _persistPairings() async {
+    try {
+      await _storage.write(
+        key: _pairingsStorageKey,
+        value: jsonEncode(pairings.map((profile) => profile.toJson()).toList()),
+      );
+    } catch (_) {
+      // Keep in-memory profiles when secure storage is unavailable.
+    }
+  }
+
+  Future<void> _persistActivePairingId() async {
+    try {
+      final id = activePairingId.value;
+      if (id == null || id.isEmpty) {
+        await _storage.delete(key: _activePairingStorageKey);
+      } else {
+        await _storage.write(key: _activePairingStorageKey, value: id);
+      }
+    } catch (_) {
+      // Keep the active profile in memory when secure storage is unavailable.
+    }
   }
 
   Future<void> connect({
@@ -133,6 +365,9 @@ class BridgeController extends GetxController {
       deviceId.value = nextEndpointId;
       endpointType.value = nextEndpointType;
       if (identityChanged) {
+        _keyPair = null;
+        deviceKey.value = '';
+        endpointPublicKey.value = '';
         pairingToken.value = '';
         endpointGrant.value = '';
         tokenExpiresAt.value = 0;
@@ -331,15 +566,33 @@ class BridgeController extends GetxController {
 
   Future<void> clearStoredCredentials() async {
     await disconnect(silent: true);
-    deviceKey.value = '';
-    endpointPublicKey.value = '';
-    _keyPair = null;
+    final active = activePairing;
+    if (active != null) {
+      final cleared = active.copyWith(
+        deviceId: _newDeviceId(),
+        deviceKey: '',
+        endpointPublicKey: '',
+        pairingToken: '',
+        endpointGrant: '',
+        tokenExpiresAt: 0,
+        grantExpiresAt: 0,
+      );
+      final index = pairings.indexWhere((profile) => profile.id == active.id);
+      if (index >= 0) pairings[index] = cleared;
+      await _applyPairing(cleared);
+      _resetHostState();
+      await _persistPairings();
+    } else {
+      deviceKey.value = '';
+      endpointPublicKey.value = '';
+      _keyPair = null;
+      deviceId.value = _newDeviceId();
+      pairingToken.value = '';
+      endpointGrant.value = '';
+      tokenExpiresAt.value = 0;
+      grantExpiresAt.value = 0;
+    }
     _forceTokenRefresh = false;
-    deviceId.value = _newDeviceId();
-    pairingToken.value = '';
-    endpointGrant.value = '';
-    tokenExpiresAt.value = 0;
-    grantExpiresAt.value = 0;
     lastError.value = '';
     try {
       await _storage.delete(key: 'recodex_endpoint_private_key');
@@ -453,8 +706,7 @@ class BridgeController extends GetxController {
       tokenExpiresAt.value = 0;
       grantExpiresAt.value = 0;
       _forceTokenRefresh = false;
-      unawaited(_storage.delete(key: 'recodex_pairing_token'));
-      unawaited(_storage.delete(key: 'recodex_endpoint_grant'));
+      unawaited(_storeConnectionHints());
     }
   }
 
@@ -1275,73 +1527,55 @@ class BridgeController extends GetxController {
     try {
       // Remove the private key used by the deleted legacy Bridge protocol.
       await _storage.delete(key: 'recodex_device_key');
-      final storedBaseUrl = await _storage.read(key: 'recodex_base_url');
-      final storedSpaceId = await _storage.read(key: 'recodex_space_id');
-      final storedTargetDeviceId = await _storage.read(
-        key: 'recodex_target_device_id',
-      );
-      final storedDeviceName = await _storage.read(key: 'recodex_device_name');
-      final storedDeviceId = await _storage.read(key: 'recodex_device_id');
-      final storedDeviceKey = await _storage.read(
-        key: 'recodex_endpoint_private_key',
-      );
-      final storedPairingToken = await _storage.read(
-        key: 'recodex_pairing_token',
-      );
-      final storedEndpointGrant = await _storage.read(
-        key: 'recodex_endpoint_grant',
-      );
-      final storedTokenExpiresAt = await _storage.read(
-        key: 'recodex_token_expires_at',
-      );
-      final storedGrantExpiresAt = await _storage.read(
-        key: 'recodex_grant_expires_at',
-      );
-      _storedWorkspaceName = await _storage.read(
-        key: 'recodex_selected_workspace_name',
-      );
-      _storedWorkspacePath = await _storage.read(
-        key: 'recodex_selected_workspace_path',
-      );
-      if (storedBaseUrl != null && storedBaseUrl.isNotEmpty) {
-        baseUrl.value = _normalizeRelayUrl(storedBaseUrl);
-      }
-      if (storedSpaceId != null) spaceId.value = storedSpaceId;
-      if (storedTargetDeviceId != null) {
-        targetDeviceId.value = storedTargetDeviceId;
-      }
-      if (storedDeviceName != null && storedDeviceName.isNotEmpty) {
-        deviceName.value = storedDeviceName;
-      }
-      if (storedDeviceId != null && storedDeviceId.isNotEmpty) {
-        deviceId.value = storedDeviceId;
-      } else {
-        deviceId.value = _newDeviceId();
-        await _storage.write(key: 'recodex_device_id', value: deviceId.value);
-      }
-      if (storedDeviceKey != null && storedDeviceKey.isNotEmpty) {
+      final encodedPairings = await _storage.read(key: _pairingsStorageKey);
+      List<PairingProfile> restored = const [];
+      if (encodedPairings != null && encodedPairings.trim().isNotEmpty) {
         try {
-          final seed = RelayProtocol.decodeBase64Url(storedDeviceKey);
-          _keyPair = await RelayProtocol.keyPairFromSeed(seed);
-          deviceKey.value = storedDeviceKey;
-          endpointPublicKey.value = await RelayProtocol.publicKey(_keyPair!);
+          final decoded = jsonDecode(encodedPairings);
+          if (decoded is List) {
+            restored = decoded
+                .whereType<Map>()
+                .map(
+                  (item) =>
+                      PairingProfile.fromJson(Map<String, dynamic>.from(item)),
+                )
+                .where((profile) => profile.id.isNotEmpty)
+                .toList();
+          }
         } catch (_) {
-          deviceKey.value = '';
+          restored = const [];
         }
       }
-      if (storedPairingToken != null && storedPairingToken.isNotEmpty) {
-        pairingToken.value = storedPairingToken;
+
+      if (restored.isEmpty) {
+        final legacy = await _readLegacyPairing();
+        if (legacy != null) {
+          restored = [legacy];
+          pairings.assignAll(restored);
+          activePairingId.value = legacy.id;
+          await _persistActivePairingId();
+          await _persistPairings();
+        }
+      } else {
+        pairings.assignAll(restored);
+        final storedActiveId = await _storage.read(
+          key: _activePairingStorageKey,
+        );
+        final selected = restored.firstWhere(
+          (profile) => profile.id == storedActiveId,
+          orElse: () => restored.first,
+        );
+        activePairingId.value = selected.id;
+        await _persistActivePairingId();
       }
-      if (storedEndpointGrant != null && storedEndpointGrant.isNotEmpty) {
-        endpointGrant.value = storedEndpointGrant;
+
+      final selectedProfile = activePairing;
+      if (selectedProfile != null) {
+        await _applyPairing(selectedProfile);
+        shouldAutoConnect = selectedProfile.isComplete;
+      } else {
+        deviceId.value = _newDeviceId();
       }
-      tokenExpiresAt.value = int.tryParse(storedTokenExpiresAt ?? '') ?? 0;
-      grantExpiresAt.value = int.tryParse(storedGrantExpiresAt ?? '') ?? 0;
-      _keyPair ??= await _loadOrCreateKeyPair();
-      shouldAutoConnect =
-          (pairingToken.value.isNotEmpty || endpointGrant.value.isNotEmpty) &&
-          spaceId.value.isNotEmpty &&
-          targetDeviceId.value.isNotEmpty;
     } catch (_) {
       // Tests and unsupported desktop targets may not have a secure storage backend.
       if (deviceId.value.isEmpty) {
@@ -1356,6 +1590,69 @@ class BridgeController extends GetxController {
     if (shouldAutoConnect) {
       unawaited(_autoConnect());
     }
+  }
+
+  Future<PairingProfile?> _readLegacyPairing() async {
+    final storedBaseUrl = await _storage.read(key: 'recodex_base_url');
+    final storedSpaceId = await _storage.read(key: 'recodex_space_id');
+    final storedTargetDeviceId = await _storage.read(
+      key: 'recodex_target_device_id',
+    );
+    final storedDeviceName = await _storage.read(key: 'recodex_device_name');
+    final storedDeviceId = await _storage.read(key: 'recodex_device_id');
+    final storedDeviceKey = await _storage.read(
+      key: 'recodex_endpoint_private_key',
+    );
+    final storedPairingToken = await _storage.read(
+      key: 'recodex_pairing_token',
+    );
+    final storedEndpointGrant = await _storage.read(
+      key: 'recodex_endpoint_grant',
+    );
+    final storedTokenExpiresAt = await _storage.read(
+      key: 'recodex_token_expires_at',
+    );
+    final storedGrantExpiresAt = await _storage.read(
+      key: 'recodex_grant_expires_at',
+    );
+    final storedWorkspaceName = await _storage.read(
+      key: 'recodex_selected_workspace_name',
+    );
+    final storedWorkspacePath = await _storage.read(
+      key: 'recodex_selected_workspace_path',
+    );
+    final hasLegacyData = [
+      storedSpaceId,
+      storedTargetDeviceId,
+      storedPairingToken,
+      storedEndpointGrant,
+    ].any((value) => value != null && value.trim().isNotEmpty);
+    if (!hasLegacyData) return null;
+    return PairingProfile(
+      id: 'pairing_legacy',
+      name: '默认配对',
+      baseUrl: _normalizeRelayUrl(
+        storedBaseUrl ?? 'ws://127.0.0.1:8788/v1/connect',
+      ),
+      spaceId: storedSpaceId?.trim() ?? '',
+      deviceName: storedDeviceName?.trim().isNotEmpty == true
+          ? storedDeviceName!.trim()
+          : 'Flutter phone',
+      deviceId: storedDeviceId?.trim().isNotEmpty == true
+          ? storedDeviceId!.trim()
+          : _newDeviceId(),
+      targetDeviceId: storedTargetDeviceId?.trim() ?? '',
+      endpointType: 'app',
+      deviceKey: storedDeviceKey?.trim() ?? '',
+      endpointPublicKey: '',
+      pairingToken: storedPairingToken?.trim() ?? '',
+      endpointGrant: storedEndpointGrant?.trim() ?? '',
+      tokenExpiresAt: int.tryParse(storedTokenExpiresAt ?? '') ?? 0,
+      grantExpiresAt: int.tryParse(storedGrantExpiresAt ?? '') ?? 0,
+      selectedWorkspaceName: storedWorkspaceName,
+      selectedWorkspacePath: storedWorkspacePath,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+    );
   }
 
   Future<void> _ensureCredentialsLoaded() async {
@@ -1399,6 +1696,19 @@ class BridgeController extends GetxController {
 
   Future<void> _storeConnectionHints() async {
     try {
+      final current = activePairing;
+      if (current != null) {
+        final index = pairings.indexWhere(
+          (profile) => profile.id == current.id,
+        );
+        if (index >= 0) {
+          pairings[index] = _profileFromState(
+            name: current.name,
+            id: current.id,
+          );
+        }
+        await _persistPairings();
+      }
       await _storage.write(key: 'recodex_base_url', value: baseUrl.value);
       await _storage.write(key: 'recodex_space_id', value: spaceId.value);
       await _storage.write(
@@ -1416,12 +1726,16 @@ class BridgeController extends GetxController {
           key: 'recodex_pairing_token',
           value: pairingToken.value,
         );
+      } else {
+        await _storage.delete(key: 'recodex_pairing_token');
       }
       if (endpointGrant.value.isNotEmpty) {
         await _storage.write(
           key: 'recodex_endpoint_grant',
           value: endpointGrant.value,
         );
+      } else {
+        await _storage.delete(key: 'recodex_endpoint_grant');
       }
       await _storage.write(
         key: 'recodex_token_expires_at',
@@ -1458,6 +1772,19 @@ class BridgeController extends GetxController {
         _storedWorkspacePath = null;
         await _storage.delete(key: 'recodex_selected_workspace_name');
         await _storage.delete(key: 'recodex_selected_workspace_path');
+        final current = activePairing;
+        if (current != null) {
+          final index = pairings.indexWhere(
+            (profile) => profile.id == current.id,
+          );
+          if (index >= 0) {
+            pairings[index] = current.copyWith(
+              clearSelectedWorkspace: true,
+              updatedAt: DateTime.now().toUtc().toIso8601String(),
+            );
+          }
+          await _persistPairings();
+        }
         return;
       }
       _storedWorkspaceName = workspace.name;
@@ -1470,6 +1797,20 @@ class BridgeController extends GetxController {
         key: 'recodex_selected_workspace_path',
         value: workspace.path,
       );
+      final current = activePairing;
+      if (current != null) {
+        final index = pairings.indexWhere(
+          (profile) => profile.id == current.id,
+        );
+        if (index >= 0) {
+          pairings[index] = current.copyWith(
+            selectedWorkspaceName: workspace.name,
+            selectedWorkspacePath: workspace.path,
+            updatedAt: DateTime.now().toUtc().toIso8601String(),
+          );
+        }
+        await _persistPairings();
+      }
     } catch (_) {
       // Keep the in-memory selection for this run if secure storage is unavailable.
     }

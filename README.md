@@ -160,6 +160,69 @@ Git、设备列表和旧版 Bridge 命令不属于当前 `codex.v1` 合约，不
 
 ## 开发与验证
 
+项目根目录提供了跨平台构建入口。`make dev` 会自动识别当前操作系统并启动
+macOS、Windows 或 Linux 桌面调试版本（项目需要已配置相应 Flutter 平台）：
+
+```bash
+make dev
+```
+
+常用 Release 软件包构建命令：
+
+```bash
+make macos       # macOS .app，仅能在 macOS 执行
+make dmg         # macOS .dmg，输出到 build/packages/
+make windows     # Windows 桌面版本，仅能在 Windows 执行
+make linux       # Linux 桌面版本，仅能在 Linux 执行（需先配置 Linux 平台）
+make android     # 同时生成 APK 和 AAB
+make apk         # 仅生成 APK
+make aab         # 仅生成 Android App Bundle
+make ios         # iOS IPA，仅能在 macOS 执行且需要签名配置
+make web         # Web Release
+make build       # 构建当前操作系统的桌面版本
+make build-all   # 构建当前宿主可以支持的全部目标
+```
+
+Flutter 的桌面和 iOS 构建受宿主系统限制，无法从 macOS 直接生成 Windows
+软件包，反之亦然。额外构建参数可用变量传入，例如
+`make ios IOS_ARGS=--no-codesign` 或 `make web WEB_ARGS=--base-href=/recodex/`。
+运行 `make help` 可查看完整目标和变量列表。
+
+### Android Release 签名与混淆
+
+Release APK/AAB 必须使用独立签名证书，不再回退到 Android 调试证书。首次
+打包前先创建上传密钥（密钥和密码请自行安全备份）：
+
+```bash
+keytool -genkeypair -v \
+  -keystore android/upload-keystore.jks \
+  -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 \
+  -alias upload
+cp android/key.properties.example android/key.properties
+```
+
+随后编辑被 Git 忽略的 `android/key.properties`，填写真实密码。如果密钥文件
+不在 `android/` 目录，可以给 `storeFile` 配置绝对路径，或配置相对于
+`android/` 的路径。CI 环境无需创建该文件，可以使用以下环境变量：
+
+```text
+ANDROID_KEYSTORE_PATH
+ANDROID_STORE_PASSWORD
+ANDROID_KEY_ALIAS
+ANDROID_KEY_PASSWORD
+```
+
+`make apk` 和 `make aab` 会同时执行两层 Release 优化：Android 原生代码使用
+R8 压缩、优化和混淆，并清理未使用资源；Dart 代码使用 Flutter
+`--obfuscate`。Dart 符号分别保存在 `build/symbols/android/apk/` 和
+`build/symbols/android/aab/`，发布后必须与对应安装包一起安全归档，否则无法
+还原混淆后的 Dart 崩溃堆栈。R8 的 `mapping.txt` 位于
+`build/app/outputs/mapping/release/`，也必须和安装包及 Dart 符号一起归档。
+调试构建不会混淆；如需临时关闭 Dart 混淆，可执行
+`make apk ANDROID_OBFUSCATE=false`，R8 Release 优化仍保持启用。
+
+不使用 Makefile 时，也可以直接运行：
+
 ```bash
 flutter pub get
 flutter analyze

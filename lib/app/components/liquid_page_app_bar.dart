@@ -8,11 +8,13 @@ class LiquidPageAppBar extends StatelessWidget implements PreferredSizeWidget {
   const LiquidPageAppBar({
     required this.title,
     this.showMore = false,
+    this.onBack,
     super.key,
   });
 
   final String title;
   final bool showMore;
+  final VoidCallback? onBack;
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -24,7 +26,9 @@ class LiquidPageAppBar extends StatelessWidget implements PreferredSizeWidget {
       leadingWidth: 72,
       leading: Padding(
         padding: const EdgeInsets.only(left: 16),
-        child: _LiquidBackButton(onPressed: () => Navigator.of(context).pop()),
+        child: _LiquidBackButton(
+          onPressed: onBack ?? () => Navigator.of(context).pop(),
+        ),
       ),
       title: Text(
         title,

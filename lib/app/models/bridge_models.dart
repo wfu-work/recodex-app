@@ -12,6 +12,176 @@ class WorkspaceInfo {
   }
 }
 
+/// A saved Relay connection.  Tokens and the endpoint private key live in
+/// this model so the controller can persist the complete profile in secure
+/// storage and restore it atomically.
+class PairingProfile {
+  const PairingProfile({
+    required this.id,
+    required this.name,
+    required this.baseUrl,
+    required this.spaceId,
+    required this.deviceName,
+    required this.deviceId,
+    required this.targetDeviceId,
+    required this.endpointType,
+    required this.deviceKey,
+    required this.endpointPublicKey,
+    required this.pairingToken,
+    required this.endpointGrant,
+    required this.tokenExpiresAt,
+    required this.grantExpiresAt,
+    this.selectedWorkspaceName,
+    this.selectedWorkspacePath,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  final String id;
+  final String name;
+  final String baseUrl;
+  final String spaceId;
+  final String deviceName;
+  final String deviceId;
+  final String targetDeviceId;
+  final String endpointType;
+  final String deviceKey;
+  final String endpointPublicKey;
+  final String pairingToken;
+  final String endpointGrant;
+  final int tokenExpiresAt;
+  final int grantExpiresAt;
+  final String? selectedWorkspaceName;
+  final String? selectedWorkspacePath;
+  final String? createdAt;
+  final String? updatedAt;
+
+  bool get isComplete =>
+      baseUrl.trim().isNotEmpty &&
+      spaceId.trim().isNotEmpty &&
+      targetDeviceId.trim().isNotEmpty &&
+      deviceId.trim().isNotEmpty &&
+      (pairingToken.trim().isNotEmpty || endpointGrant.trim().isNotEmpty);
+
+  String get displayName {
+    final value = name.trim();
+    if (value.isNotEmpty) return value;
+    final target = targetDeviceId.trim();
+    return target.isEmpty ? '未命名配对' : target;
+  }
+
+  factory PairingProfile.fromJson(Map<String, dynamic> json) {
+    return PairingProfile(
+      id: _string(json['id']),
+      name: _string(json['name']),
+      baseUrl: _string(
+        json['baseUrl'],
+        fallback: 'ws://127.0.0.1:8788/v1/connect',
+      ),
+      spaceId: _string(json['spaceId']),
+      deviceName: _string(json['deviceName'], fallback: 'Flutter phone'),
+      deviceId: _string(json['deviceId']),
+      targetDeviceId: _string(json['targetDeviceId']),
+      endpointType: _string(json['endpointType'], fallback: 'app'),
+      deviceKey: _string(json['deviceKey']),
+      endpointPublicKey: _string(json['endpointPublicKey']),
+      pairingToken: _string(json['pairingToken']),
+      endpointGrant: _string(json['endpointGrant']),
+      tokenExpiresAt: _int(json['tokenExpiresAt']),
+      grantExpiresAt: _int(json['grantExpiresAt']),
+      selectedWorkspaceName: _nullableString(json['selectedWorkspaceName']),
+      selectedWorkspacePath: _nullableString(json['selectedWorkspacePath']),
+      createdAt: _nullableString(json['createdAt']),
+      updatedAt: _nullableString(json['updatedAt']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'baseUrl': baseUrl,
+    'spaceId': spaceId,
+    'deviceName': deviceName,
+    'deviceId': deviceId,
+    'targetDeviceId': targetDeviceId,
+    'endpointType': endpointType,
+    'deviceKey': deviceKey,
+    'endpointPublicKey': endpointPublicKey,
+    'pairingToken': pairingToken,
+    'endpointGrant': endpointGrant,
+    'tokenExpiresAt': tokenExpiresAt,
+    'grantExpiresAt': grantExpiresAt,
+    if (selectedWorkspaceName != null)
+      'selectedWorkspaceName': selectedWorkspaceName,
+    if (selectedWorkspacePath != null)
+      'selectedWorkspacePath': selectedWorkspacePath,
+    if (createdAt != null) 'createdAt': createdAt,
+    if (updatedAt != null) 'updatedAt': updatedAt,
+  };
+
+  PairingProfile copyWith({
+    String? id,
+    String? name,
+    String? baseUrl,
+    String? spaceId,
+    String? deviceName,
+    String? deviceId,
+    String? targetDeviceId,
+    String? endpointType,
+    String? deviceKey,
+    String? endpointPublicKey,
+    String? pairingToken,
+    String? endpointGrant,
+    int? tokenExpiresAt,
+    int? grantExpiresAt,
+    String? selectedWorkspaceName,
+    String? selectedWorkspacePath,
+    String? createdAt,
+    String? updatedAt,
+    bool clearSelectedWorkspace = false,
+  }) {
+    return PairingProfile(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      baseUrl: baseUrl ?? this.baseUrl,
+      spaceId: spaceId ?? this.spaceId,
+      deviceName: deviceName ?? this.deviceName,
+      deviceId: deviceId ?? this.deviceId,
+      targetDeviceId: targetDeviceId ?? this.targetDeviceId,
+      endpointType: endpointType ?? this.endpointType,
+      deviceKey: deviceKey ?? this.deviceKey,
+      endpointPublicKey: endpointPublicKey ?? this.endpointPublicKey,
+      pairingToken: pairingToken ?? this.pairingToken,
+      endpointGrant: endpointGrant ?? this.endpointGrant,
+      tokenExpiresAt: tokenExpiresAt ?? this.tokenExpiresAt,
+      grantExpiresAt: grantExpiresAt ?? this.grantExpiresAt,
+      selectedWorkspaceName: clearSelectedWorkspace
+          ? null
+          : selectedWorkspaceName ?? this.selectedWorkspaceName,
+      selectedWorkspacePath: clearSelectedWorkspace
+          ? null
+          : selectedWorkspacePath ?? this.selectedWorkspacePath,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  static String _string(Object? value, {String fallback = ''}) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? fallback : text;
+  }
+
+  static String? _nullableString(Object? value) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? null : text;
+  }
+
+  static int _int(Object? value) {
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+}
+
 class SessionRecord {
   const SessionRecord({
     required this.id,

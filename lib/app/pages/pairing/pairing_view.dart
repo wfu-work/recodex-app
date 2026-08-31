@@ -4,8 +4,16 @@ import 'package:get/get.dart';
 import '../../components/liquid_background.dart';
 import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
+import '../../models/bridge_models.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
+
+class PairingPageArgs {
+  const PairingPageArgs({this.createNew = false, this.pairingId});
+
+  final bool createNew;
+  final String? pairingId;
+}
 
 class PairingPage extends StatefulWidget {
   const PairingPage({super.key});
@@ -16,6 +24,7 @@ class PairingPage extends StatefulWidget {
 
 class _PairingPageState extends State<PairingPage> {
   final BridgeController controller = Get.find();
+  late final TextEditingController _nameController;
   late final TextEditingController _baseUrlController;
   late final TextEditingController _spaceIdController;
   late final TextEditingController _targetDeviceController;
@@ -23,28 +32,31 @@ class _PairingPageState extends State<PairingPage> {
   late final TextEditingController _tokenController;
   late final TextEditingController _grantController;
   bool _showToken = false;
+  bool _saving = false;
+  _PairingPageMode _mode = _PairingPageMode.list;
+  PairingProfile? _editingProfile;
 
   @override
   void initState() {
     super.initState();
-    _baseUrlController = TextEditingController(text: controller.baseUrl.value);
-    _spaceIdController = TextEditingController(text: controller.spaceId.value);
-    _targetDeviceController = TextEditingController(
-      text: controller.targetDeviceId.value,
-    );
-    _endpointIdController = TextEditingController(
-      text: controller.deviceId.value,
-    );
-    _tokenController = TextEditingController(
-      text: controller.pairingToken.value,
-    );
-    _grantController = TextEditingController(
-      text: controller.endpointGrant.value,
-    );
+    _nameController = TextEditingController();
+    _baseUrlController = TextEditingController();
+    _spaceIdController = TextEditingController();
+    _targetDeviceController = TextEditingController();
+    _endpointIdController = TextEditingController();
+    _tokenController = TextEditingController();
+    _grantController = TextEditingController();
+    final args = Get.arguments;
+    if (args is PairingPageArgs && (args.createNew || args.pairingId != null)) {
+      _openEditor(
+        args.createNew ? null : controller.pairingById(args.pairingId!),
+      );
+    }
   }
 
   @override
   void dispose() {
+    _nameController.dispose();
     _baseUrlController.dispose();
     _spaceIdController.dispose();
     _targetDeviceController.dispose();
@@ -62,216 +74,592 @@ class _PairingPageState extends State<PairingPage> {
       final lastError = controller.lastError.value;
       final busy = controller.busy.value;
       final serviceContext = controller.composerContext.value;
+      final title = _mode == _PairingPageMode.list
+          ? '配对'
+          : (_editingProfile == null ? '新建配对' : '编辑配对');
       return LiquidBackground(
         child: Scaffold(
           backgroundColor: Colors.transparent,
-          appBar: const LiquidPageAppBar(title: '配对'),
-          body: LayoutBuilder(
-            builder: (context, constraints) {
-              final horizontalPadding = constraints.maxWidth >= 720
-                  ? 48.0
-                  : 24.0;
-              return ListView(
-                padding: EdgeInsets.fromLTRB(
-                  horizontalPadding,
-                  32,
-                  horizontalPadding,
-                  40,
-                ),
-                children: [
-                  Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 760),
-                      child: Column(
-                        children: [
-                          _PairingHero(connected: connected),
-                          const SizedBox(height: 34),
-                          _PairingCard(
-                            icon: Icons.router_outlined,
-                            title: 'Relay 连接',
-                            children: [
-                              _TextSettingRow(
-                                title: 'Relay 地址',
-                                subtitle: 'Relay Protocol v1 /v1/connect',
-                                controller: _baseUrlController,
-                                onSubmitted: (_) => _connect(),
-                              ),
-                              const SizedBox(height: 24),
-                              _TextSettingRow(
-                                title: 'Space ID',
-                                subtitle: '与 Relay Connect Token 一致',
-                                controller: _spaceIdController,
-                                onSubmitted: (_) => _connect(),
-                              ),
-                              const SizedBox(height: 24),
-                              _TextSettingRow(
-                                title: '目标 Codex 主机 Endpoint',
-                                subtitle: '插件配置中的 host deviceId',
-                                controller: _targetDeviceController,
-                                onSubmitted: (_) => _connect(),
-                              ),
-                              const SizedBox(height: 24),
-                              _TextSettingRow(
-                                title: '本机 App Endpoint',
-                                subtitle: '需与 Relay Token 的 endpointId 完全一致',
-                                controller: _endpointIdController,
-                                onSubmitted: (_) => _connect(),
-                              ),
-                              const SizedBox(height: 24),
-                              _ConnectionStatusRow(
-                                connected: connected,
-                                label: connectionLabel,
-                                error: lastError,
-                              ),
-                              const SizedBox(height: 30),
-                              _PairingHint(
-                                text:
-                                    'Relay 地址示例：wss://relay.example.com/v1/connect；公网 Relay 必须使用 WSS。',
-                                error: false,
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 34),
-                          _PairingCard(
-                            icon: Icons.key_outlined,
-                            title: '令牌认证',
-                            children: [
-                              _TokenSettingRow(
-                                controller: _tokenController,
-                                showToken: _showToken,
-                                onToggleToken: () =>
-                                    setState(() => _showToken = !_showToken),
-                              ),
-                              const SizedBox(height: 18),
-                              _TextSettingRow(
-                                title: 'Endpoint Grant',
-                                subtitle: '可选，用于 Token 到期后自动续期',
-                                controller: _grantController,
-                                onSubmitted: (_) => _connect(),
-                              ),
-                              const SizedBox(height: 18),
-                              _PairingHint(
-                                text:
-                                    '本机 Endpoint ID：${controller.deviceId.value}\nEndpoint 公钥：${controller.endpointPublicKey.value.isEmpty ? '连接时生成' : controller.endpointPublicKey.value}',
-                                error: false,
-                              ),
-                              const SizedBox(height: 22),
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: BluePillButton(
-                                  label: busy ? '连接中' : '连接 Relay',
-                                  icon: busy ? Icons.sync : Icons.qr_code_2,
-                                  onPressed: busy ? null : _connect,
-                                ),
-                              ),
-                            ],
-                          ),
-                          if (connected) ...[
-                            const SizedBox(height: 34),
-                            _PairingCard(
-                              icon: Icons.terminal,
-                              title: '远程 Codex',
-                              children: [
-                                _ServiceInfoGrid(
-                                  items: [
-                                    _ServiceInfoItem(
-                                      label: 'Bridge 版本',
-                                      value:
-                                          serviceContext.bridgeVersion.isEmpty
-                                          ? '未知'
-                                          : serviceContext.bridgeVersion,
-                                      icon: Icons.hub_outlined,
-                                    ),
-                                    _ServiceInfoItem(
-                                      label: 'Codex 版本',
-                                      value: serviceContext.codexVersion.isEmpty
-                                          ? '未检测到'
-                                          : serviceContext.codexVersion,
-                                      icon: Icons.terminal,
-                                    ),
-                                    _ServiceInfoItem(
-                                      label: 'API Key',
-                                      value: serviceContext.apiKeyConfigured
-                                          ? '已配置'
-                                          : '未配置',
-                                      icon: serviceContext.apiKeyConfigured
-                                          ? Icons.key
-                                          : Icons.key_off_outlined,
-                                      positive: serviceContext.apiKeyConfigured,
-                                    ),
-                                    _ServiceInfoItem(
-                                      label: '默认模型',
-                                      value: serviceContext.model,
-                                      icon: Icons.memory_outlined,
-                                    ),
-                                    _ServiceInfoItem(
-                                      label: '今日用量',
-                                      value: _formatTokenCount(
-                                        serviceContext.usage.todayTokens,
-                                      ),
-                                      icon: Icons.today_outlined,
-                                    ),
-                                    _ServiceInfoItem(
-                                      label: '本月用量',
-                                      value: _formatTokenCount(
-                                        serviceContext.usage.monthTokens,
-                                      ),
-                                      icon: Icons.calendar_month_outlined,
-                                    ),
-                                    _ServiceInfoItem(
-                                      label: '估算费用',
-                                      value: serviceContext.usage.rateConfigured
-                                          ? _formatCost(
-                                              serviceContext.usage.monthCost,
-                                            )
-                                          : '未配置费率',
-                                      icon: Icons.payments_outlined,
-                                    ),
-                                    _ServiceInfoItem(
-                                      label: '最近更新',
-                                      value: _formatUsageTime(
-                                        serviceContext.usage.lastUpdated,
-                                      ),
-                                      icon: Icons.update,
-                                    ),
-                                    _ServiceInfoItem(
-                                      label: '用量读取',
-                                      value: serviceContext.usage.canReadUsage
-                                          ? '可读取'
-                                          : '不可读取',
-                                      icon: serviceContext.usage.canReadUsage
-                                          ? Icons.check_circle_outline
-                                          : Icons.error_outline,
-                                      positive:
-                                          serviceContext.usage.canReadUsage,
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            },
+          appBar: LiquidPageAppBar(
+            title: title,
+            onBack: _mode == _PairingPageMode.editor
+                ? _showList
+                : () => Navigator.of(context).pop(),
           ),
+          body: _mode == _PairingPageMode.list
+              ? _buildPairingList(context)
+              : _buildEditor(
+                  context,
+                  connected: connected,
+                  connectionLabel: connectionLabel,
+                  lastError: lastError,
+                  busy: busy,
+                  serviceContext: serviceContext,
+                ),
         ),
       );
     });
   }
 
-  void _connect() {
-    controller.connect(
-      inputBaseUrl: _baseUrlController.text,
-      token: _tokenController.text,
-      inputDeviceName: controller.deviceName.value,
-      inputSpaceId: _spaceIdController.text,
-      inputTargetDeviceId: _targetDeviceController.text,
-      inputEndpointId: _endpointIdController.text,
-      inputEndpointGrant: _grantController.text,
+  Widget _buildPairingList(BuildContext context) {
+    final horizontalPadding = MediaQuery.sizeOf(context).width >= 720
+        ? 48.0
+        : 24.0;
+    final profiles = controller.pairings.toList(growable: false);
+    final activeId = controller.activePairingId.value;
+    return ListView(
+      padding: EdgeInsets.fromLTRB(
+        horizontalPadding,
+        22,
+        horizontalPadding,
+        32,
+      ),
+      children: [
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _PairingListHero(
+                  count: profiles.length,
+                  connected: controller.connected.value,
+                ),
+                const SizedBox(height: 20),
+                if (profiles.isEmpty)
+                  _EmptyPairingCard(onCreate: _newPairing)
+                else ...[
+                  for (final profile in profiles) ...[
+                    _PairingListTile(
+                      profile: profile,
+                      active: profile.id == activeId,
+                      connected:
+                          profile.id == activeId && controller.connected.value,
+                      busy: profile.id == activeId && controller.busy.value,
+                      onSelect: () => controller.switchPairing(profile.id),
+                      onEdit: () => _openEditor(profile),
+                      onDelete: () => _confirmDelete(profile),
+                    ),
+                    const SizedBox(height: 14),
+                  ],
+                  const SizedBox(height: 6),
+                  BluePillButton(
+                    label: '新建配对',
+                    icon: Icons.add,
+                    onPressed: _newPairing,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEditor(
+    BuildContext context, {
+    required bool connected,
+    required String connectionLabel,
+    required String lastError,
+    required bool busy,
+    required ComposerContext serviceContext,
+  }) {
+    final horizontalPadding = MediaQuery.sizeOf(context).width >= 720
+        ? 48.0
+        : 24.0;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return ListView(
+          padding: EdgeInsets.fromLTRB(
+            horizontalPadding,
+            22,
+            horizontalPadding,
+            32,
+          ),
+          children: [
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 760),
+                child: Column(
+                  children: [
+                    _PairingHero(connected: connected),
+                    const SizedBox(height: 22),
+                    _PairingCard(
+                      icon: Icons.label_outline,
+                      title: '配对信息',
+                      children: [
+                        _TextSettingRow(
+                          title: '配对名称',
+                          subtitle: '用于在侧边栏和列表中识别这台主机',
+                          controller: _nameController,
+                          keyboardType: TextInputType.text,
+                          onSubmitted: (_) => _savePairing(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+                    _PairingCard(
+                      icon: Icons.router_outlined,
+                      title: 'Relay 连接',
+                      children: [
+                        _TextSettingRow(
+                          title: 'Relay 地址',
+                          subtitle: 'Relay Protocol v1 /v1/connect',
+                          controller: _baseUrlController,
+                          onSubmitted: (_) => _savePairing(),
+                        ),
+                        const SizedBox(height: 20),
+                        _TextSettingRow(
+                          title: 'Space ID',
+                          subtitle: '与 Relay Connect Token 一致',
+                          controller: _spaceIdController,
+                          onSubmitted: (_) => _savePairing(),
+                        ),
+                        const SizedBox(height: 20),
+                        _TextSettingRow(
+                          title: '目标 Codex 主机 Endpoint',
+                          subtitle: '插件配置中的 host deviceId',
+                          controller: _targetDeviceController,
+                          onSubmitted: (_) => _savePairing(),
+                        ),
+                        const SizedBox(height: 20),
+                        _TextSettingRow(
+                          title: '本机 App Endpoint',
+                          subtitle: '需与 Relay Token 的 endpointId 完全一致',
+                          controller: _endpointIdController,
+                          onSubmitted: (_) => _savePairing(),
+                        ),
+                        const SizedBox(height: 20),
+                        _ConnectionStatusRow(
+                          connected: connected,
+                          label: connectionLabel,
+                          error: lastError,
+                        ),
+                        const SizedBox(height: 30),
+                        const _PairingHint(
+                          text:
+                              'Relay 地址示例：wss://relay.example.com/v1/connect；公网 Relay 必须使用 WSS。',
+                          error: false,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+                    _PairingCard(
+                      icon: Icons.key_outlined,
+                      title: '令牌认证',
+                      children: [
+                        _TokenSettingRow(
+                          controller: _tokenController,
+                          showToken: _showToken,
+                          onToggleToken: () =>
+                              setState(() => _showToken = !_showToken),
+                        ),
+                        const SizedBox(height: 18),
+                        _TextSettingRow(
+                          title: 'Endpoint Grant',
+                          subtitle: '可选，用于 Token 到期后自动续期',
+                          controller: _grantController,
+                          keyboardType: TextInputType.text,
+                          onSubmitted: (_) => _savePairing(),
+                        ),
+                        const SizedBox(height: 18),
+                        _PairingHint(
+                          text:
+                              '本机 Endpoint ID：${_endpointIdController.text}\nEndpoint 公钥：${controller.endpointPublicKey.value.isEmpty ? '连接时生成' : controller.endpointPublicKey.value}',
+                          error: false,
+                        ),
+                        const SizedBox(height: 22),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: BluePillButton(
+                            label: _saving
+                                ? '保存中'
+                                : busy
+                                ? '连接中'
+                                : '保存并连接',
+                            icon: _saving || busy
+                                ? Icons.sync
+                                : Icons.qr_code_2,
+                            onPressed: _saving || busy ? null : _savePairing,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (connected) ...[
+                      const SizedBox(height: 22),
+                      _PairingCard(
+                        icon: Icons.terminal,
+                        title: '远程 Codex',
+                        children: [
+                          _ServiceInfoGrid(
+                            items: [
+                              _ServiceInfoItem(
+                                label: 'Bridge 版本',
+                                value: serviceContext.bridgeVersion.isEmpty
+                                    ? '未知'
+                                    : serviceContext.bridgeVersion,
+                                icon: Icons.hub_outlined,
+                              ),
+                              _ServiceInfoItem(
+                                label: 'Codex 版本',
+                                value: serviceContext.codexVersion.isEmpty
+                                    ? '未检测到'
+                                    : serviceContext.codexVersion,
+                                icon: Icons.terminal,
+                              ),
+                              _ServiceInfoItem(
+                                label: 'API Key',
+                                value: serviceContext.apiKeyConfigured
+                                    ? '已配置'
+                                    : '未配置',
+                                icon: serviceContext.apiKeyConfigured
+                                    ? Icons.key
+                                    : Icons.key_off_outlined,
+                                positive: serviceContext.apiKeyConfigured,
+                              ),
+                              _ServiceInfoItem(
+                                label: '默认模型',
+                                value: serviceContext.model,
+                                icon: Icons.memory_outlined,
+                              ),
+                              _ServiceInfoItem(
+                                label: '今日用量',
+                                value: _formatTokenCount(
+                                  serviceContext.usage.todayTokens,
+                                ),
+                                icon: Icons.today_outlined,
+                              ),
+                              _ServiceInfoItem(
+                                label: '本月用量',
+                                value: _formatTokenCount(
+                                  serviceContext.usage.monthTokens,
+                                ),
+                                icon: Icons.calendar_month_outlined,
+                              ),
+                              _ServiceInfoItem(
+                                label: '估算费用',
+                                value: serviceContext.usage.rateConfigured
+                                    ? _formatCost(
+                                        serviceContext.usage.monthCost,
+                                      )
+                                    : '未配置费率',
+                                icon: Icons.payments_outlined,
+                              ),
+                              _ServiceInfoItem(
+                                label: '最近更新',
+                                value: _formatUsageTime(
+                                  serviceContext.usage.lastUpdated,
+                                ),
+                                icon: Icons.update,
+                              ),
+                              _ServiceInfoItem(
+                                label: '用量读取',
+                                value: serviceContext.usage.canReadUsage
+                                    ? '可读取'
+                                    : '不可读取',
+                                icon: serviceContext.usage.canReadUsage
+                                    ? Icons.check_circle_outline
+                                    : Icons.error_outline,
+                                positive: serviceContext.usage.canReadUsage,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _openEditor(PairingProfile? profile) {
+    final next = profile ?? controller.createDraftPairing();
+    _editingProfile = profile;
+    _mode = _PairingPageMode.editor;
+    _nameController.text = next.name;
+    _baseUrlController.text = next.baseUrl;
+    _spaceIdController.text = next.spaceId;
+    _targetDeviceController.text = next.targetDeviceId;
+    _endpointIdController.text = next.deviceId;
+    _tokenController.text = next.pairingToken;
+    _grantController.text = next.endpointGrant;
+    _showToken = false;
+    if (mounted) setState(() {});
+  }
+
+  void _newPairing() => _openEditor(null);
+
+  void _showList() {
+    if (!mounted) return;
+    setState(() {
+      _mode = _PairingPageMode.list;
+      _editingProfile = null;
+    });
+  }
+
+  Future<void> _savePairing() async {
+    if (_saving) return;
+    final name = _nameController.text.trim();
+    final target = _targetDeviceController.text.trim();
+    if (name.isEmpty && target.isEmpty) {
+      controller.lastError.value = '请填写配对名称或目标 Codex 主机 Endpoint。';
+      return;
+    }
+    final base = _editingProfile ?? controller.createDraftPairing();
+    final profile = base.copyWith(
+      name: name.isEmpty ? target : name,
+      baseUrl: _baseUrlController.text,
+      spaceId: _spaceIdController.text,
+      targetDeviceId: target,
+      deviceId: _endpointIdController.text,
+      pairingToken: _tokenController.text,
+      endpointGrant: _grantController.text,
+    );
+    setState(() => _saving = true);
+    try {
+      await controller.upsertPairing(profile);
+      if (mounted) _showList();
+    } catch (error) {
+      controller.lastError.value = error.toString();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _confirmDelete(PairingProfile profile) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('删除“${profile.displayName}”？'),
+        content: const Text('此配对保存的令牌和主机连接信息都会从本机移除。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await controller.deletePairing(profile.id);
+  }
+}
+
+enum _PairingPageMode { list, editor }
+
+class _PairingListHero extends StatelessWidget {
+  const _PairingListHero({required this.count, required this.connected});
+
+  final int count;
+  final bool connected;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return LiquidGlass(
+      radius: 32,
+      opacity: 0.72,
+      padding: const EdgeInsets.fromLTRB(26, 24, 26, 24),
+      child: Row(
+        children: [
+          Container(
+            width: 58,
+            height: 58,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: colors.surfaceOverlay.withValues(alpha: 0.88),
+            ),
+            child: Icon(
+              connected ? Icons.devices : Icons.devices_other_outlined,
+              color: colors.icon,
+              size: 28,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '你的配对',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  count == 0 ? '添加一台 Codex 主机开始使用' : '$count 个配对配置，可随时切换',
+                  style: TextStyle(
+                    color: colors.textMuted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyPairingCard extends StatelessWidget {
+  const _EmptyPairingCard({required this.onCreate});
+
+  final VoidCallback onCreate;
+
+  @override
+  Widget build(BuildContext context) {
+    return LiquidGlass(
+      radius: 28,
+      opacity: 0.66,
+      padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
+      child: Column(
+        children: [
+          Icon(Icons.add_link, size: 42, color: context.recodexColors.icon),
+          const SizedBox(height: 12),
+          Text(
+            '还没有配对',
+            style: TextStyle(
+              color: context.recodexColors.text,
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '每台 Codex 主机都可以保存为独立配置。',
+            style: TextStyle(color: context.recodexColors.textMuted),
+          ),
+          const SizedBox(height: 20),
+          BluePillButton(label: '新建配对', icon: Icons.add, onPressed: onCreate),
+        ],
+      ),
+    );
+  }
+}
+
+class _PairingListTile extends StatelessWidget {
+  const _PairingListTile({
+    required this.profile,
+    required this.active,
+    required this.connected,
+    required this.busy,
+    required this.onSelect,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final PairingProfile profile;
+  final bool active;
+  final bool connected;
+  final bool busy;
+  final VoidCallback onSelect;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final status = connected
+        ? '在线'
+        : busy
+        ? '连接中'
+        : profile.isComplete
+        ? '离线'
+        : '待配置';
+    final statusColor = connected || busy ? colors.success : colors.textMuted;
+    return LiquidGlass(
+      radius: 24,
+      opacity: active ? 0.82 : 0.64,
+      padding: EdgeInsets.zero,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(24),
+          onTap: onSelect,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 12, 16),
+            child: Row(
+              children: [
+                CircleAvatar(
+                  radius: 22,
+                  backgroundColor: active
+                      ? colors.icon.withValues(alpha: 0.14)
+                      : colors.surfaceOverlay,
+                  child: Icon(
+                    active ? Icons.link : Icons.router_outlined,
+                    color: active ? colors.icon : colors.textMuted,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        profile.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: colors.text,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${profile.spaceId.isEmpty ? '未填写 Space ID' : profile.spaceId} · ${profile.targetDeviceId.isEmpty ? '未填写主机' : profile.targetDeviceId}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: colors.textMuted, fontSize: 12),
+                      ),
+                      const SizedBox(height: 7),
+                      Row(
+                        children: [
+                          Icon(Icons.circle, size: 8, color: statusColor),
+                          const SizedBox(width: 6),
+                          Text(
+                            status,
+                            style: TextStyle(
+                              color: statusColor,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: '编辑配对',
+                  onPressed: onEdit,
+                  icon: Icon(Icons.edit_outlined, color: colors.textMuted),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: '更多操作',
+                  onSelected: (value) {
+                    if (value == 'delete') onDelete();
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(value: 'delete', child: Text('删除配对')),
+                  ],
+                  icon: Icon(Icons.more_vert, color: colors.textMuted),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -283,26 +671,27 @@ class _PairingHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return LiquidGlass(
-      radius: 38,
+      radius: 26,
       opacity: 0.72,
-      padding: const EdgeInsets.fromLTRB(30, 28, 30, 28),
+      padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
       child: Row(
         children: [
           Container(
-            width: 72,
-            height: 72,
+            width: 58,
+            height: 58,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: Colors.white.withValues(alpha: 0.84),
+              color: colors.surfaceOverlay.withValues(alpha: 0.88),
             ),
             child: Icon(
               connected ? Icons.link : Icons.link_off,
-              color: const Color(0xff005fc7),
-              size: 34,
+              color: colors.icon,
+              size: 28,
             ),
           ),
-          const SizedBox(width: 20),
+          const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -310,16 +699,16 @@ class _PairingHero extends StatelessWidget {
                 Text(
                   connected ? 'Relay 已连接' : '连接你的 Codex 主机',
                   style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
                 const SizedBox(height: 6),
-                const Text(
+                Text(
                   'App 使用 Ed25519 Endpoint proof 接入 Relay，与桌面插件通过 codex.v1 通信。',
                   style: TextStyle(
-                    color: Color(0xff747878),
-                    fontSize: 14,
+                    color: colors.textMuted,
+                    fontSize: 12,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -345,32 +734,84 @@ class _PairingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
     return LiquidGlass(
-      radius: 34,
+      radius: 26,
       opacity: 0.72,
-      padding: const EdgeInsets.fromLTRB(34, 32, 34, 32),
+      padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(icon, color: const Color(0xff005fc7), size: 30),
-              const SizedBox(width: 16),
+              Icon(icon, color: colors.icon, size: 22),
+              const SizedBox(width: 10),
               Text(
                 title,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  color: const Color(0xff005fc7),
-                  fontWeight: FontWeight.w900,
+                  color: colors.icon,
+                  fontSize: 17,
+                  height: 1.2,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 34),
+          const SizedBox(height: 20),
           ...children,
         ],
       ),
     );
   }
+}
+
+Color _pairingInputFillColor(BuildContext context) {
+  final theme = Theme.of(context);
+  final colors = context.recodexColors;
+  final isDark = theme.brightness == Brightness.dark;
+  return Color.alphaBlend(
+    colors.icon.withValues(alpha: isDark ? 0.08 : 0.04),
+    theme.colorScheme.surfaceContainerHighest,
+  );
+}
+
+OutlineInputBorder _pairingInputBorder(
+  BuildContext context, {
+  bool focused = false,
+}) {
+  final colors = context.recodexColors;
+  final theme = Theme.of(context);
+  return OutlineInputBorder(
+    borderRadius: BorderRadius.circular(14),
+    borderSide: BorderSide(
+      color: focused
+          ? theme.colorScheme.primary
+          : colors.icon.withValues(alpha: 0.34),
+      width: focused ? 1.6 : 1,
+    ),
+  );
+}
+
+InputDecoration _pairingInputDecoration(
+  BuildContext context, {
+  String? hintText,
+  Widget? suffixIcon,
+}) {
+  return InputDecoration(
+    hintText: hintText,
+    filled: true,
+    fillColor: _pairingInputFillColor(context),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+    border: _pairingInputBorder(context),
+    enabledBorder: _pairingInputBorder(context),
+    focusedBorder: _pairingInputBorder(context, focused: true),
+    hintStyle: TextStyle(
+      color: context.recodexColors.textMuted,
+      fontSize: 14,
+      fontWeight: FontWeight.w500,
+    ),
+    suffixIcon: suffixIcon,
+  );
 }
 
 class _TextSettingRow extends StatelessWidget {
@@ -379,12 +820,14 @@ class _TextSettingRow extends StatelessWidget {
     required this.subtitle,
     required this.controller,
     required this.onSubmitted,
+    this.keyboardType = TextInputType.url,
   });
 
   final String title;
   final String subtitle;
   final TextEditingController controller;
   final ValueChanged<String> onSubmitted;
+  final TextInputType keyboardType;
 
   @override
   Widget build(BuildContext context) {
@@ -392,15 +835,15 @@ class _TextSettingRow extends StatelessWidget {
       label: _SettingLabel(title: title, subtitle: subtitle),
       field: TextField(
         controller: controller,
-        textAlign: TextAlign.center,
-        keyboardType: TextInputType.url,
+        textAlign: TextAlign.left,
+        keyboardType: keyboardType,
         onSubmitted: onSubmitted,
         style: TextStyle(
           color: context.recodexColors.icon,
-          fontSize: 17,
-          fontWeight: FontWeight.w800,
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
         ),
-        decoration: const InputDecoration(border: InputBorder.none),
+        decoration: _pairingInputDecoration(context),
       ),
     );
   }
@@ -427,8 +870,14 @@ class _TokenSettingRow extends StatelessWidget {
       field: TextField(
         controller: controller,
         obscureText: !showToken,
-        textAlign: TextAlign.center,
-        decoration: InputDecoration(
+        textAlign: TextAlign.left,
+        style: TextStyle(
+          color: context.recodexColors.icon,
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
+        ),
+        decoration: _pairingInputDecoration(
+          context,
           hintText: '输入 Connect Token',
           suffixIcon: IconButton(
             tooltip: showToken ? '隐藏令牌' : '显示令牌',
@@ -534,7 +983,7 @@ class _ConnectionStatusRow extends StatelessWidget {
               : CrossAxisAlignment.end,
           children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: color.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(999),
@@ -552,8 +1001,8 @@ class _ConnectionStatusRow extends StatelessWidget {
                     text,
                     style: TextStyle(
                       color: color,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14,
                     ),
                   ),
                 ],
@@ -619,8 +1068,8 @@ class _SettingLabel extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(
             color: colors.text,
-            fontSize: 20,
-            fontWeight: FontWeight.w900,
+            fontSize: 15,
+            fontWeight: FontWeight.w800,
           ),
         ),
         const SizedBox(height: 4),
@@ -628,7 +1077,7 @@ class _SettingLabel extends StatelessWidget {
           subtitle,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: colors.textMuted, fontSize: 15),
+          style: TextStyle(color: colors.textMuted, fontSize: 12, height: 1.35),
         ),
       ],
     );

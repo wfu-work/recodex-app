@@ -8,19 +8,27 @@ import 'status_chips.dart';
 class RemodexDrawer extends StatefulWidget {
   const RemodexDrawer({
     required this.connected,
+    required this.pairings,
+    required this.activePairing,
     required this.workspaces,
     required this.selectedWorkspace,
+    required this.onSelectPairing,
     required this.onSelectWorkspace,
     required this.onPairing,
+    required this.onNewPairing,
     required this.onSettings,
     super.key,
   });
 
   final bool connected;
+  final List<PairingProfile> pairings;
+  final PairingProfile? activePairing;
   final List<WorkspaceInfo> workspaces;
   final WorkspaceInfo? selectedWorkspace;
+  final ValueChanged<PairingProfile> onSelectPairing;
   final ValueChanged<WorkspaceInfo> onSelectWorkspace;
   final VoidCallback onPairing;
+  final VoidCallback onNewPairing;
   final VoidCallback onSettings;
 
   @override
@@ -141,32 +149,13 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    const CircleAvatar(
-                      radius: 19,
-                      backgroundColor: Color(0xffffe7d7),
-                      child: Icon(Icons.person, color: Color(0xff4b4b4b)),
-                    ),
-                    const SizedBox(width: 12),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '主分支',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                            color: colors.text,
-                          ),
-                        ),
-                        ConnectionDot(
-                          connected: widget.connected,
-                          label: widget.connected ? '已连接到 Relay' : '未连接',
-                        ),
-                      ],
-                    ),
-                  ],
+                _PairingSwitcher(
+                  pairings: widget.pairings,
+                  activePairing: widget.activePairing,
+                  connected: widget.connected,
+                  onSelectPairing: widget.onSelectPairing,
+                  onPairing: widget.onPairing,
+                  onNewPairing: widget.onNewPairing,
                 ),
                 const SizedBox(height: 30),
                 Row(
@@ -235,6 +224,146 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _PairingSwitcher extends StatelessWidget {
+  const _PairingSwitcher({
+    required this.pairings,
+    required this.activePairing,
+    required this.connected,
+    required this.onSelectPairing,
+    required this.onPairing,
+    required this.onNewPairing,
+  });
+
+  final List<PairingProfile> pairings;
+  final PairingProfile? activePairing;
+  final bool connected;
+  final ValueChanged<PairingProfile> onSelectPairing;
+  final VoidCallback onPairing;
+  final VoidCallback onNewPairing;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final activeName = activePairing?.displayName ?? '尚未配对';
+    final activeSummary = activePairing == null
+        ? '添加 Codex 主机'
+        : (activePairing!.targetDeviceId.isEmpty
+              ? activePairing!.spaceId
+              : activePairing!.targetDeviceId);
+    return PopupMenuButton<String>(
+      tooltip: '切换配对',
+      onSelected: (value) {
+        if (value == '__new') {
+          onNewPairing();
+          return;
+        }
+        if (value == '__manage') {
+          onPairing();
+          return;
+        }
+        final selected = pairings.cast<PairingProfile?>().firstWhere(
+          (profile) => profile?.id == value,
+          orElse: () => null,
+        );
+        if (selected != null) onSelectPairing(selected);
+      },
+      itemBuilder: (context) => [
+        if (pairings.isNotEmpty)
+          PopupMenuItem<String>(
+            enabled: false,
+            child: Text(
+              '切换配对',
+              style: TextStyle(
+                color: colors.textMuted,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        for (final profile in pairings)
+          PopupMenuItem<String>(
+            value: profile.id,
+            child: Row(
+              children: [
+                Icon(
+                  profile.id == activePairing?.id
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  size: 18,
+                  color: profile.id == activePairing?.id
+                      ? colors.icon
+                      : colors.textMuted,
+                ),
+                const SizedBox(width: 10),
+                Expanded(child: Text(profile.displayName)),
+              ],
+            ),
+          ),
+        if (pairings.isNotEmpty) const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: '__new',
+          child: Row(
+            children: [
+              Icon(Icons.add, size: 18),
+              SizedBox(width: 10),
+              Text('新建配对'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: '__manage',
+          child: Row(
+            children: [
+              Icon(Icons.tune, size: 18),
+              SizedBox(width: 10),
+              Text('管理配对'),
+            ],
+          ),
+        ),
+      ],
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 19,
+            backgroundColor: const Color(0xffffe7d7),
+            child: Icon(
+              activePairing == null ? Icons.add_link : Icons.router,
+              color: const Color(0xff4b4b4b),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  activeName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                    color: colors.text,
+                  ),
+                ),
+                ConnectionDot(
+                  connected: connected,
+                  label: connected
+                      ? '已连接到 Relay'
+                      : activeSummary.isEmpty
+                      ? '未连接'
+                      : activeSummary,
+                ),
+              ],
+            ),
+          ),
+          Icon(Icons.unfold_more, color: colors.textMuted, size: 20),
+        ],
       ),
     );
   }

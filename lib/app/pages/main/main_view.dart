@@ -7,6 +7,7 @@ import '../../components/liquid_background.dart';
 import '../../components/menu_drawer.dart';
 import '../../models/bridge_models.dart';
 import '../../routes/app_pages.dart';
+import '../pairing/pairing_view.dart';
 import '../settings/theme_controller.dart';
 import 'bridge_controller.dart';
 import 'git_diff_view.dart';
@@ -83,13 +84,22 @@ class _MainPageState extends State<MainPage> {
             backgroundColor: Colors.transparent,
             drawer: RemodexDrawer(
               connected: controller.connected.value,
+              pairings: controller.pairings,
+              activePairing: controller.activePairing,
               workspaces: controller.workspaces,
               selectedWorkspace: controller.selectedWorkspace.value,
+              onSelectPairing: (profile) {
+                controller.switchPairing(profile.id);
+              },
               onSelectWorkspace: (workspace) {
                 controller.selectWorkspace(workspace);
                 Navigator.of(context).pop();
               },
               onPairing: () => _openPage(Routes.pairing),
+              onNewPairing: () => _openPage(
+                Routes.pairing,
+                arguments: const PairingPageArgs(createNew: true),
+              ),
               onSettings: () => _openPage(Routes.settings),
             ),
             body: Stack(
@@ -375,11 +385,11 @@ class _MainPageState extends State<MainPage> {
     controller.gitUndo(confirm: true);
   }
 
-  void _openPage(String route) {
+  void _openPage(String route, {Object? arguments}) {
     if (Scaffold.maybeOf(context)?.isDrawerOpen ?? false) {
       Navigator.of(context).pop();
     }
-    Get.toNamed(route);
+    Get.toNamed(route, arguments: arguments);
   }
 
   void _openGitDiff(GitFileChange file) {
