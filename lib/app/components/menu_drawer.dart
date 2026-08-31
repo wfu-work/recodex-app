@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/bridge_models.dart';
 import '../theme/recodex_theme.dart';
+import 'recodex_dropdown.dart';
 import 'liquid_glass.dart';
 import 'status_chips.dart';
 
@@ -255,7 +256,7 @@ class _PairingSwitcher extends StatelessWidget {
         : (activePairing!.targetDeviceId.isEmpty
               ? activePairing!.spaceId
               : activePairing!.targetDeviceId);
-    return PopupMenuButton<String>(
+    return RecodexPopupMenuButton<String>(
       tooltip: '切换配对',
       onSelected: (value) {
         if (value == '__new') {
@@ -292,8 +293,8 @@ class _PairingSwitcher extends StatelessWidget {
               children: [
                 Icon(
                   profile.id == activePairing?.id
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked,
+                      ? RecodexIcons.selectedCircle
+                      : RecodexIcons.circle,
                   size: 18,
                   color: profile.id == activePairing?.id
                       ? colors.icon
@@ -309,7 +310,7 @@ class _PairingSwitcher extends StatelessWidget {
           value: '__new',
           child: Row(
             children: [
-              Icon(Icons.add, size: 18),
+              Icon(RecodexIcons.add, size: 18),
               SizedBox(width: 10),
               Text('新建配对'),
             ],
@@ -319,7 +320,7 @@ class _PairingSwitcher extends StatelessWidget {
           value: '__manage',
           child: Row(
             children: [
-              Icon(Icons.tune, size: 18),
+              Icon(RecodexIcons.tune, size: 18),
               SizedBox(width: 10),
               Text('管理配对'),
             ],
@@ -332,7 +333,9 @@ class _PairingSwitcher extends StatelessWidget {
             radius: 19,
             backgroundColor: const Color(0xffffe7d7),
             child: Icon(
-              activePairing == null ? Icons.add_link : Icons.router,
+              activePairing == null
+                  ? RecodexIcons.addLink
+                  : RecodexIcons.router,
               color: const Color(0xff4b4b4b),
             ),
           ),
@@ -362,7 +365,7 @@ class _PairingSwitcher extends StatelessWidget {
               ],
             ),
           ),
-          Icon(Icons.unfold_more, color: colors.textMuted, size: 20),
+          Icon(RecodexIcons.switcher, color: colors.textMuted, size: 20),
         ],
       ),
     );
@@ -404,7 +407,7 @@ class _WorkspaceLine extends StatelessWidget {
           child: Row(
             children: [
               Icon(
-                active ? Icons.folder : Icons.folder_outlined,
+                active ? RecodexIcons.folder : RecodexIcons.folderOpen,
                 size: 18,
                 color: active ? activeColor : colors.textMuted,
               ),
@@ -468,13 +471,13 @@ class _BottomDock extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             _DockButton(
-              icon: Icons.devices_outlined,
+              icon: RecodexIcons.devices,
               label: '配对',
               onTap: onPairing,
             ),
             const SizedBox(height: 6),
             _DockButton(
-              icon: Icons.settings_outlined,
+              icon: RecodexIcons.settings,
               label: '设置',
               onTap: onSettings,
             ),

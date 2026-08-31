@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../../components/liquid_background.dart';
 import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
+import '../../components/recodex_dropdown.dart';
 import '../../models/bridge_models.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
@@ -145,7 +146,7 @@ class _PairingPageState extends State<PairingPage> {
                   const SizedBox(height: 6),
                   BluePillButton(
                     label: '新建配对',
-                    icon: Icons.add,
+                    icon: RecodexIcons.add,
                     onPressed: _newPairing,
                   ),
                 ],
@@ -186,7 +187,7 @@ class _PairingPageState extends State<PairingPage> {
                     _PairingHero(connected: connected),
                     const SizedBox(height: 22),
                     _PairingCard(
-                      icon: Icons.label_outline,
+                      icon: RecodexIcons.tag,
                       title: '配对信息',
                       children: [
                         _TextSettingRow(
@@ -200,7 +201,7 @@ class _PairingPageState extends State<PairingPage> {
                     ),
                     const SizedBox(height: 22),
                     _PairingCard(
-                      icon: Icons.router_outlined,
+                      icon: RecodexIcons.router,
                       title: 'Relay 连接',
                       children: [
                         _TextSettingRow(
@@ -246,7 +247,7 @@ class _PairingPageState extends State<PairingPage> {
                     ),
                     const SizedBox(height: 22),
                     _PairingCard(
-                      icon: Icons.key_outlined,
+                      icon: RecodexIcons.key,
                       title: '令牌认证',
                       children: [
                         _TokenSettingRow(
@@ -279,8 +280,8 @@ class _PairingPageState extends State<PairingPage> {
                                 ? '连接中'
                                 : '保存并连接',
                             icon: _saving || busy
-                                ? Icons.sync
-                                : Icons.qr_code_2,
+                                ? RecodexIcons.sync
+                                : RecodexIcons.qrCode,
                             onPressed: _saving || busy ? null : _savePairing,
                           ),
                         ),
@@ -289,7 +290,7 @@ class _PairingPageState extends State<PairingPage> {
                     if (connected) ...[
                       const SizedBox(height: 22),
                       _PairingCard(
-                        icon: Icons.terminal,
+                        icon: RecodexIcons.terminal,
                         title: '远程 Codex',
                         children: [
                           _ServiceInfoGrid(
@@ -299,14 +300,14 @@ class _PairingPageState extends State<PairingPage> {
                                 value: serviceContext.bridgeVersion.isEmpty
                                     ? '未知'
                                     : serviceContext.bridgeVersion,
-                                icon: Icons.hub_outlined,
+                                icon: RecodexIcons.network,
                               ),
                               _ServiceInfoItem(
                                 label: 'Codex 版本',
                                 value: serviceContext.codexVersion.isEmpty
                                     ? '未检测到'
                                     : serviceContext.codexVersion,
-                                icon: Icons.terminal,
+                                icon: RecodexIcons.terminal,
                               ),
                               _ServiceInfoItem(
                                 label: 'API Key',
@@ -314,28 +315,28 @@ class _PairingPageState extends State<PairingPage> {
                                     ? '已配置'
                                     : '未配置',
                                 icon: serviceContext.apiKeyConfigured
-                                    ? Icons.key
-                                    : Icons.key_off_outlined,
+                                    ? RecodexIcons.key
+                                    : RecodexIcons.keyOff,
                                 positive: serviceContext.apiKeyConfigured,
                               ),
                               _ServiceInfoItem(
                                 label: '默认模型',
                                 value: serviceContext.model,
-                                icon: Icons.memory_outlined,
+                                icon: RecodexIcons.cpu,
                               ),
                               _ServiceInfoItem(
                                 label: '今日用量',
                                 value: _formatTokenCount(
                                   serviceContext.usage.todayTokens,
                                 ),
-                                icon: Icons.today_outlined,
+                                icon: RecodexIcons.calendar,
                               ),
                               _ServiceInfoItem(
                                 label: '本月用量',
                                 value: _formatTokenCount(
                                   serviceContext.usage.monthTokens,
                                 ),
-                                icon: Icons.calendar_month_outlined,
+                                icon: RecodexIcons.calendar,
                               ),
                               _ServiceInfoItem(
                                 label: '估算费用',
@@ -344,14 +345,14 @@ class _PairingPageState extends State<PairingPage> {
                                         serviceContext.usage.monthCost,
                                       )
                                     : '未配置费率',
-                                icon: Icons.payments_outlined,
+                                icon: RecodexIcons.payments,
                               ),
                               _ServiceInfoItem(
                                 label: '最近更新',
                                 value: _formatUsageTime(
                                   serviceContext.usage.lastUpdated,
                                 ),
-                                icon: Icons.update,
+                                icon: RecodexIcons.sync,
                               ),
                               _ServiceInfoItem(
                                 label: '用量读取',
@@ -359,8 +360,8 @@ class _PairingPageState extends State<PairingPage> {
                                     ? '可读取'
                                     : '不可读取',
                                 icon: serviceContext.usage.canReadUsage
-                                    ? Icons.check_circle_outline
-                                    : Icons.error_outline,
+                                    ? RecodexIcons.checkCircle
+                                    : RecodexIcons.error,
                                 positive: serviceContext.usage.canReadUsage,
                               ),
                             ],
@@ -479,7 +480,7 @@ class _PairingListHero extends StatelessWidget {
               color: colors.surfaceOverlay.withValues(alpha: 0.88),
             ),
             child: Icon(
-              connected ? Icons.devices : Icons.devices_other_outlined,
+              connected ? RecodexIcons.devices : RecodexIcons.devices,
               color: colors.icon,
               size: 28,
             ),
@@ -524,7 +525,11 @@ class _EmptyPairingCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
       child: Column(
         children: [
-          Icon(Icons.add_link, size: 42, color: context.recodexColors.icon),
+          Icon(
+            RecodexIcons.addLink,
+            size: 42,
+            color: context.recodexColors.icon,
+          ),
           const SizedBox(height: 12),
           Text(
             '还没有配对',
@@ -540,7 +545,11 @@ class _EmptyPairingCard extends StatelessWidget {
             style: TextStyle(color: context.recodexColors.textMuted),
           ),
           const SizedBox(height: 20),
-          BluePillButton(label: '新建配对', icon: Icons.add, onPressed: onCreate),
+          BluePillButton(
+            label: '新建配对',
+            icon: RecodexIcons.add,
+            onPressed: onCreate,
+          ),
         ],
       ),
     );
@@ -596,7 +605,7 @@ class _PairingListTile extends StatelessWidget {
                       ? colors.icon.withValues(alpha: 0.14)
                       : colors.surfaceOverlay,
                   child: Icon(
-                    active ? Icons.link : Icons.router_outlined,
+                    active ? RecodexIcons.link : RecodexIcons.router,
                     color: active ? colors.icon : colors.textMuted,
                   ),
                 ),
@@ -625,7 +634,11 @@ class _PairingListTile extends StatelessWidget {
                       const SizedBox(height: 7),
                       Row(
                         children: [
-                          Icon(Icons.circle, size: 8, color: statusColor),
+                          Icon(
+                            RecodexIcons.circle,
+                            size: 8,
+                            color: statusColor,
+                          ),
                           const SizedBox(width: 6),
                           Text(
                             status,
@@ -643,9 +656,10 @@ class _PairingListTile extends StatelessWidget {
                 IconButton(
                   tooltip: '编辑配对',
                   onPressed: onEdit,
-                  icon: Icon(Icons.edit_outlined, color: colors.textMuted),
+                  icon: Icon(RecodexIcons.edit, color: colors.textMuted),
                 ),
-                PopupMenuButton<String>(
+                RecodexPopupMenuButton<String>(
+                  padding: const EdgeInsets.all(8),
                   tooltip: '更多操作',
                   onSelected: (value) {
                     if (value == 'delete') onDelete();
@@ -653,7 +667,7 @@ class _PairingListTile extends StatelessWidget {
                   itemBuilder: (context) => const [
                     PopupMenuItem(value: 'delete', child: Text('删除配对')),
                   ],
-                  icon: Icon(Icons.more_vert, color: colors.textMuted),
+                  icon: Icon(RecodexIcons.more, color: colors.textMuted),
                 ),
               ],
             ),
@@ -686,7 +700,7 @@ class _PairingHero extends StatelessWidget {
               color: colors.surfaceOverlay.withValues(alpha: 0.88),
             ),
             child: Icon(
-              connected ? Icons.link : Icons.link_off,
+              connected ? RecodexIcons.link : RecodexIcons.linkOff,
               color: colors.icon,
               size: 28,
             ),
@@ -882,7 +896,9 @@ class _TokenSettingRow extends StatelessWidget {
           suffixIcon: IconButton(
             tooltip: showToken ? '隐藏令牌' : '显示令牌',
             onPressed: onToggleToken,
-            icon: Icon(showToken ? Icons.visibility_off : Icons.visibility),
+            icon: Icon(
+              showToken ? RecodexIcons.visibilityOff : RecodexIcons.visibility,
+            ),
           ),
         ),
       ),
@@ -992,7 +1008,7 @@ class _ConnectionStatusRow extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    connected ? Icons.check_circle : Icons.info_outline,
+                    connected ? RecodexIcons.checkCircle : RecodexIcons.info,
                     size: 18,
                     color: color,
                   ),

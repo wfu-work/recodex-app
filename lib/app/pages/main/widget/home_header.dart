@@ -71,7 +71,7 @@ class HomeHeader extends StatelessWidget {
           children: [
             Builder(
               builder: (context) => LiquidIconButton(
-                icon: Icons.menu,
+                icon: RecodexIcons.menu,
                 tooltip: '菜单',
                 onPressed: () => Scaffold.of(context).openDrawer(),
               ),

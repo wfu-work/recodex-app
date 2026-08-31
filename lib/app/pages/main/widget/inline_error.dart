@@ -24,10 +24,13 @@ class InlineError extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(18, 12, 8, 12),
         child: Row(
           children: [
-            Icon(Icons.warning_amber_rounded, color: colors.error),
+            Icon(RecodexIcons.warning, color: colors.error),
             const SizedBox(width: 10),
             Expanded(child: Text(message)),
-            IconButton(onPressed: onDismiss, icon: const Icon(Icons.close)),
+            IconButton(
+              onPressed: onDismiss,
+              icon: const Icon(RecodexIcons.close),
+            ),
           ],
         ),
       ),

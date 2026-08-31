@@ -24,7 +24,6 @@ BUBBLE_TOP = (184, 181, 255)
 BUBBLE_MIDDLE = (111, 167, 255)
 BUBBLE_BOTTOM = (52, 72, 244)
 PROMPT = (237, 246, 255)
-SHADOW = (39, 70, 219)
 
 
 def _transform(value):
@@ -39,16 +38,32 @@ def _point(point):
     return (_transform(point[0]), _transform(point[1]))
 
 
-RECT_LEFT = _transform(230)
-RECT_TOP = _transform(222)
-RECT_RIGHT = _transform(822)
-RECT_BOTTOM = _transform(784)
+# Center the command bubble on the 1024 x 1024 paper tile. The previous
+# source bounds were offset right/up, which became visible at app-icon size.
+RECT_LEFT = _transform(216)
+RECT_TOP = _transform(231)
+RECT_RIGHT = _transform(808)
+RECT_BOTTOM = _transform(793)
 RECT_RADIUS = 188.0 * ICON_SCALE
 STROKE_WIDTH = 52.0 * ICON_SCALE
 PAPER_RADIUS = 230.0
 
-CHEVRON = [_point((366, 444)), _point((466, 546)), _point((366, 648))]
-CURSOR = [_point((552, 660)), _point((718, 660))]
+# Center the complete prompt (chevron + cursor) in the corrected bubble.
+PROMPT_OFFSET = (-30.0, -40.0)
+
+
+def _prompt_point(point):
+    return _point(
+        (point[0] + PROMPT_OFFSET[0], point[1] + PROMPT_OFFSET[1]),
+    )
+
+
+CHEVRON = [
+    _prompt_point((366, 444)),
+    _prompt_point((466, 546)),
+    _prompt_point((366, 648)),
+]
+CURSOR = [_prompt_point((552, 660)), _prompt_point((718, 660))]
 
 
 def _inside_rounded_rect(x, y, left, top, right, bottom, radius):
@@ -76,33 +91,23 @@ def _paper_color(y):
 
 
 def _bubble_color(x, y):
-    dx = 700.0 - 312.0
-    dy = 724.0 - 280.0
-    amount = ((x - 312.0) * dx + (y - 280.0) * dy) / (dx * dx + dy * dy)
+    gradient_start = (298.0, 289.0)
+    gradient_end = (686.0, 733.0)
+    dx = gradient_end[0] - gradient_start[0]
+    dy = gradient_end[1] - gradient_start[1]
+    amount = (
+        (x - gradient_start[0]) * dx + (y - gradient_start[1]) * dy
+    ) / (dx * dx + dy * dy)
     amount = max(0.0, min(1.0, amount))
     if amount < 0.42:
         return _mix(BUBBLE_TOP, BUBBLE_MIDDLE, amount / 0.42)
     return _mix(BUBBLE_MIDDLE, BUBBLE_BOTTOM, (amount - 0.42) / 0.58)
 
 
-def _shadow_alpha(x, y):
-    """Return a continuous blue shadow around an offset rounded rectangle."""
-    center_x = (RECT_LEFT + RECT_RIGHT) / 2.0
-    center_y = (RECT_TOP + RECT_BOTTOM) / 2.0 + 18.0
-    inner_half_width = (RECT_RIGHT - RECT_LEFT) / 2.0 - RECT_RADIUS
-    inner_half_height = (RECT_BOTTOM - RECT_TOP) / 2.0 - RECT_RADIUS
-    qx = abs(x - center_x) - inner_half_width
-    qy = abs(y - center_y) - inner_half_height
-    outside = math.hypot(max(qx, 0.0), max(qy, 0.0))
-    signed_distance = outside + min(max(qx, qy), 0.0) - RECT_RADIUS
-    distance = max(0.0, signed_distance)
-    return 0.24 * math.exp(-0.5 * (distance / 20.0) ** 2)
-
-
 def _shine_alpha(x, y):
     local_x = _untransform(x)
     local_y = _untransform(y)
-    distance = ((local_x - 526.0) / 226.0) ** 2 + ((local_y - 292.0) / 98.0) ** 2
+    distance = ((local_x - 512.0) / 226.0) ** 2 + ((local_y - 301.0) / 98.0) ** 2
     if distance >= 1:
         return 0.0
     return 0.2 * (1.0 - distance) ** 0.7
@@ -152,7 +157,6 @@ def render_logo(size, samples=4, rounded_paper=True):
                         continue
                     covered_samples += 1
                     color = _paper_color(y)
-                    color = _blend(color, SHADOW, _shadow_alpha(x, y))
                     if _inside_rounded_rect(
                         x,
                         y,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../components/chat_components.dart';
 import '../../../models/bridge_models.dart';
+import '../../../theme/recodex_theme.dart';
 
 class WelcomeTimeline extends StatelessWidget {
   const WelcomeTimeline({
@@ -32,12 +33,12 @@ class WelcomeTimeline extends StatelessWidget {
         ? '正在重新连接 Relay'
         : '等待 Relay 连接';
     final icon = connected
-        ? Icons.check_circle_outline
+        ? RecodexIcons.checkCircle
         : connectionLabel == 'connecting' ||
               connectionLabel == 'auth' ||
               connectionLabel == 'reconnecting'
-        ? Icons.sync
-        : Icons.radio_button_unchecked;
+        ? RecodexIcons.sync
+        : RecodexIcons.circle;
 
     return Column(
       children: [

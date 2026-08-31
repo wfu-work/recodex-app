@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+export 'recodex_icons.dart';
+
 @immutable
 class RecodexThemeColors extends ThemeExtension<RecodexThemeColors> {
   const RecodexThemeColors({
@@ -143,6 +145,58 @@ extension RecodexThemeContext on BuildContext {
       Theme.of(this).extension<RecodexThemeColors>()!;
 }
 
+enum RecodexThemeAccent {
+  azure(
+    label: '天空蓝',
+    description: '克制理性，适合长时间查看任务和代码状态',
+    primary: Color(0xff3448f4),
+    secondary: Color(0xff4f7dff),
+    darkPrimary: Color(0xff8ba0ff),
+  ),
+  amber(
+    label: '日曜金',
+    description: '温暖专注，让关键操作和反馈更醒目',
+    primary: Color(0xffc88400),
+    secondary: Color(0xffffb400),
+    darkPrimary: Color(0xffffd26f),
+  ),
+  jade(
+    label: '松石青',
+    description: '轻盈平和，营造安静稳定的工作氛围',
+    primary: Color(0xff1e8f7a),
+    secondary: Color(0xff5db59f),
+    darkPrimary: Color(0xff75d8c1),
+  ),
+  rose(
+    label: '晚霞粉',
+    description: '柔和明快，为远程工作界面加入温度',
+    primary: Color(0xffcc5f88),
+    secondary: Color(0xffffa46d),
+    darkPrimary: Color(0xffff96bb),
+  );
+
+  const RecodexThemeAccent({
+    required this.label,
+    required this.description,
+    required this.primary,
+    required this.secondary,
+    required this.darkPrimary,
+  });
+
+  final String label;
+  final String description;
+  final Color primary;
+  final Color secondary;
+  final Color darkPrimary;
+
+  static RecodexThemeAccent fromStorage(String? value) {
+    return values.firstWhere(
+      (accent) => accent.name == value,
+      orElse: () => azure,
+    );
+  }
+}
+
 class RecodexTheme {
   static const _fontFamily = '.SF Pro Text';
   static const _fallbackFonts = [
@@ -193,10 +247,15 @@ class RecodexTheme {
     backgroundStops: [0, 0.58, 1],
     primaryGlow: Color(0x66448fff),
     secondaryGlow: Color(0x4dff6eb7),
-    glassColor: Color(0x8f1b2432),
-    glassBorder: Color(0x40ffffff),
+    // Cool blue-gray surfaces keep cards distinct from the page background
+    // without falling into a heavy, near-black panel treatment.
+    glassColor: Color(0x9b29374a),
+    // Keep dark surfaces defined by fill and elevation, not bright outlines.
+    // A quiet blue-gray edge remains discoverable without competing with text.
+    glassBorder: Color(0xff2d3a4d),
     glassHighlight: Color(0x24ffffff),
-    glassShadow: Color(0x8a000000),
+    // Keep elevation readable while avoiding a black halo around every card.
+    glassShadow: Color(0x52000000),
     headerColor: Color(0xff111827),
     headerBorder: Color(0xff314052),
     headerShadow: Color(0xff000000),
@@ -213,27 +272,57 @@ class RecodexTheme {
     warning: Color(0xffffc35a),
   );
 
-  static ThemeData get light {
+  static ThemeData get light => lightFor(RecodexThemeAccent.azure);
+
+  static ThemeData lightFor(RecodexThemeAccent accent) {
     return _build(
       brightness: Brightness.light,
-      colors: lightColors,
+      colors: _lightColorsFor(accent),
       paper: const Color(0xfff7f8fb),
       surface: const Color(0xffffffff),
-      primary: const Color(0xff007aff),
-      secondary: const Color(0xff5e5ce6),
+      primary: accent.primary,
+      secondary: accent.secondary,
       outline: const Color(0xffd6d9df),
     );
   }
 
-  static ThemeData get dark {
+  static ThemeData get dark => darkFor(RecodexThemeAccent.azure);
+
+  static ThemeData darkFor(RecodexThemeAccent accent) {
     return _build(
       brightness: Brightness.dark,
-      colors: darkColors,
+      colors: _darkColorsFor(accent),
       paper: const Color(0xff0b1020),
       surface: const Color(0xff151d2b),
-      primary: const Color(0xff70b7ff),
-      secondary: const Color(0xffa6a4ff),
+      primary: accent.darkPrimary,
+      secondary: Color.lerp(accent.darkPrimary, accent.secondary, 0.46)!,
       outline: const Color(0xff3d4a5f),
+    );
+  }
+
+  static RecodexThemeColors _lightColorsFor(RecodexThemeAccent accent) {
+    return lightColors.copyWith(
+      backgroundGradient: [
+        Color.lerp(const Color(0xfff7f8fb), accent.primary, 0.08)!,
+        const Color(0xfff8f9fc),
+        Color.lerp(const Color(0xfffff9fb), accent.secondary, 0.08)!,
+      ],
+      primaryGlow: accent.primary.withValues(alpha: 0.18),
+      secondaryGlow: accent.secondary.withValues(alpha: 0.16),
+      icon: accent.primary,
+    );
+  }
+
+  static RecodexThemeColors _darkColorsFor(RecodexThemeAccent accent) {
+    return darkColors.copyWith(
+      backgroundGradient: [
+        Color.lerp(const Color(0xff0b1020), accent.primary, 0.14)!,
+        const Color(0xff111827),
+        Color.lerp(const Color(0xff201525), accent.secondary, 0.12)!,
+      ],
+      primaryGlow: accent.primary.withValues(alpha: 0.34),
+      secondaryGlow: accent.secondary.withValues(alpha: 0.24),
+      icon: accent.darkPrimary,
     );
   }
 
@@ -265,6 +354,13 @@ class RecodexTheme {
       colorScheme: scheme,
       scaffoldBackgroundColor: paper,
       extensions: [colors],
+      iconTheme: IconThemeData(color: colors.icon, size: 20),
+      iconButtonTheme: IconButtonThemeData(
+        style: ButtonStyle(
+          foregroundColor: WidgetStatePropertyAll(colors.icon),
+          iconSize: const WidgetStatePropertyAll(20),
+        ),
+      ),
       textTheme: TextTheme(
         displaySmall: TextStyle(
           fontFamily: '.SF Pro Display',
@@ -359,9 +455,35 @@ class RecodexTheme {
         ),
       ),
       popupMenuTheme: PopupMenuThemeData(
-        color: isDark ? const Color(0xff202a3a) : Colors.white,
+        color: isDark ? const Color(0xff202a3a) : const Color(0xfffcfdff),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(
+            color: isDark ? const Color(0xff29364a) : const Color(0x3d8da0b8),
+          ),
+        ),
+        menuPadding: const EdgeInsets.symmetric(vertical: 7),
+        elevation: isDark ? 12 : 6,
+        shadowColor: isDark
+            ? Colors.black.withValues(alpha: 0.46)
+            : const Color(0x2925384d),
         surfaceTintColor: Colors.transparent,
-        textStyle: TextStyle(color: colors.text, fontWeight: FontWeight.w700),
+        textStyle: TextStyle(
+          color: colors.text,
+          fontSize: 14,
+          height: 1.2,
+          fontWeight: FontWeight.w700,
+        ),
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (states) => TextStyle(
+            color: states.contains(WidgetState.disabled)
+                ? colors.textMuted.withValues(alpha: 0.52)
+                : colors.text,
+            fontSize: 14,
+            height: 1.2,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
       ),
       sliderTheme: SliderThemeData(
         activeTrackColor: primary,

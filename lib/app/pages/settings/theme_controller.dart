@@ -4,15 +4,23 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
 
+import '../../theme/recodex_theme.dart';
+
 enum RecodexThemePreference {
   system('跟随系统', ThemeMode.system),
-  light('浅色', ThemeMode.light),
-  dark('深色', ThemeMode.dark);
+  light('浅色模式', ThemeMode.light),
+  dark('深色模式', ThemeMode.dark);
 
   const RecodexThemePreference(this.label, this.themeMode);
 
   final String label;
   final ThemeMode themeMode;
+
+  String get description => switch (this) {
+    RecodexThemePreference.system => '自动跟随设备的明暗外观',
+    RecodexThemePreference.light => '保持清爽明亮的界面观感',
+    RecodexThemePreference.dark => '减少夜间眩光，适合沉浸浏览',
+  };
 
   static RecodexThemePreference fromLabel(String label) {
     return values.firstWhere(
@@ -32,9 +40,11 @@ enum RecodexThemePreference {
 class ThemeController extends GetxController {
   static const _storage = FlutterSecureStorage();
   static const _themePreferenceKey = 'recodex_theme_preference';
+  static const _themeAccentKey = 'recodex_theme_accent';
   static const _fontScaleKey = 'recodex_font_scale';
 
   final preference = RecodexThemePreference.system.obs;
+  final accent = RecodexThemeAccent.azure.obs;
   final fontScale = 1.0.obs;
 
   ThemeMode get themeMode => preference.value.themeMode;
@@ -55,6 +65,12 @@ class ThemeController extends GetxController {
     preference.value = value;
     Get.changeThemeMode(value.themeMode);
     unawaited(_storage.write(key: _themePreferenceKey, value: value.name));
+  }
+
+  void setAccent(RecodexThemeAccent value) {
+    if (accent.value == value) return;
+    accent.value = value;
+    unawaited(_storage.write(key: _themeAccentKey, value: value.name));
   }
 
   void setFontScale(double value) {
@@ -82,6 +98,9 @@ class ThemeController extends GetxController {
     final themeValue = RecodexThemePreference.fromStorage(storedTheme);
     preference.value = themeValue;
     Get.changeThemeMode(themeValue.themeMode);
+
+    final storedAccent = await _storage.read(key: _themeAccentKey);
+    accent.value = RecodexThemeAccent.fromStorage(storedAccent);
 
     final storedFontScale = await _storage.read(key: _fontScaleKey);
     final parsedFontScale = double.tryParse(storedFontScale ?? '');

@@ -28,21 +28,21 @@ class ServicePage extends StatelessWidget {
                 children: [
                   _ServiceTile(
                     icon: controller.connected.value
-                        ? Icons.cloud_done_outlined
-                        : Icons.cloud_off,
+                        ? RecodexIcons.cloudDone
+                        : RecodexIcons.cloudOff,
                     title: 'Relay 连接',
                     subtitle: controller.connected.value ? '在线' : '未连接',
                     trailing: _StatusDot(connected: controller.connected.value),
                   ),
                   _DividerLine(),
                   _ServiceTile(
-                    icon: Icons.link_outlined,
+                    icon: RecodexIcons.link,
                     title: 'Relay 地址',
                     subtitle: controller.baseUrl.value,
                   ),
                   _DividerLine(),
                   _ServiceTile(
-                    icon: Icons.info_outline,
+                    icon: RecodexIcons.info,
                     title: '协议状态',
                     subtitle: controller.connectionLabel.value,
                   ),
@@ -53,14 +53,14 @@ class ServicePage extends StatelessWidget {
                 title: '工作区',
                 children: [
                   _ServiceTile(
-                    icon: Icons.workspaces_outline,
+                    icon: RecodexIcons.workspaces,
                     title: '工作区',
                     subtitle: '${controller.workspaces.length} 个工作区',
                     trailingText: controller.selectedWorkspace.value?.name,
                   ),
                   _DividerLine(),
                   _ServiceTile(
-                    icon: Icons.account_tree_outlined,
+                    icon: RecodexIcons.accountTree,
                     title: 'Git 分支',
                     subtitle: controller.composerContext.value.branch.isEmpty
                         ? '未读取'
@@ -68,7 +68,7 @@ class ServicePage extends StatelessWidget {
                   ),
                   _DividerLine(),
                   _ServiceTile(
-                    icon: Icons.security_outlined,
+                    icon: RecodexIcons.security,
                     title: '权限策略',
                     subtitle: controller.composerContext.value.approvalPolicy,
                   ),
@@ -80,14 +80,14 @@ class ServicePage extends StatelessWidget {
                 children: [
                   _ServiceTile(
                     icon: controller.hasDeviceKey
-                        ? Icons.verified_user_outlined
-                        : Icons.no_encryption_outlined,
+                        ? RecodexIcons.verified
+                        : RecodexIcons.shieldOff,
                     title: '本机 App Endpoint',
                     subtitle: controller.deviceId.value,
                   ),
                   _DividerLine(),
                   _ServiceTile(
-                    icon: Icons.key_outlined,
+                    icon: RecodexIcons.key,
                     title: 'Endpoint 私钥',
                     subtitle: controller.hasDeviceKey ? '已保存在安全存储' : '未生成',
                     trailing: TextButton(
@@ -103,7 +103,7 @@ class ServicePage extends StatelessWidget {
                   title: '错误',
                   children: [
                     _ServiceTile(
-                      icon: Icons.warning_amber_rounded,
+                      icon: RecodexIcons.warning,
                       title: '最近错误',
                       subtitle: controller.lastError.value,
                     ),
@@ -142,7 +142,7 @@ class _StatusHero extends StatelessWidget {
               ),
             ),
             child: Icon(
-              connected ? Icons.check_circle_outline : Icons.cloud_off,
+              connected ? RecodexIcons.checkCircle : RecodexIcons.cloudOff,
               color: connected ? colors.success : colors.textMuted,
               size: 28,
             ),
@@ -289,7 +289,7 @@ class _StatusDot extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     return Icon(
-      Icons.circle,
+      RecodexIcons.circle,
       size: 12,
       color: connected ? colors.success : colors.textMuted,
     );

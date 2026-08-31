@@ -38,7 +38,7 @@ class LiquidPageAppBar extends StatelessWidget implements PreferredSizeWidget {
         if (showMore)
           Padding(
             padding: const EdgeInsets.only(right: 18),
-            child: Icon(Icons.more_vert, color: colors.icon, size: 24),
+            child: Icon(RecodexIcons.more, color: colors.icon, size: 24),
           )
         else
           const SizedBox(width: 56),
@@ -65,17 +65,17 @@ class _LiquidBackButton extends StatelessWidget {
             boxShadow: [
               BoxShadow(
                 color: colors.headerShadow.withValues(
-                  alpha: isDark ? 0.42 : 0.16,
+                  alpha: isDark ? 0.22 : 0.16,
                 ),
-                offset: const Offset(0, 10),
-                blurRadius: 22,
+                offset: Offset(0, isDark ? 6 : 10),
+                blurRadius: isDark ? 16 : 22,
               ),
               BoxShadow(
                 color: colors.glassHighlight.withValues(
-                  alpha: isDark ? 0.08 : 0.54,
+                  alpha: isDark ? 0.05 : 0.54,
                 ),
-                offset: const Offset(-4, -4),
-                blurRadius: 12,
+                offset: Offset(isDark ? -3 : -4, isDark ? -3 : -4),
+                blurRadius: isDark ? 8 : 12,
               ),
             ],
           ),
@@ -113,7 +113,7 @@ class _LiquidBackButton extends StatelessWidget {
                     child: Padding(
                       padding: const EdgeInsets.only(left: 0),
                       child: Icon(
-                        Icons.arrow_back_ios_new_rounded,
+                        RecodexIcons.back,
                         color: colors.icon,
                         size: 22,
                       ),

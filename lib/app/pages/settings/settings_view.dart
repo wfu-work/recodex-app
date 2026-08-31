@@ -36,7 +36,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: '外观',
                 children: [
                   _SettingsTile(
-                    icon: Icons.text_fields,
+                    icon: RecodexIcons.fontSize,
                     title: '字体大小',
                     subtitle: _fontSizeLabel,
                     trailing: SizedBox(
@@ -51,16 +51,13 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                   _DividerLine(),
-                  _SettingsMenuTile(
-                    icon: Icons.dark_mode_outlined,
+                  _SettingsTile(
+                    icon: RecodexIcons.darkMode,
                     title: '主题设置',
-                    value: themeController.preference.value.label,
-                    options: RecodexThemePreference.values
-                        .map((preference) => preference.label)
-                        .toList(),
-                    onSelected: (value) => themeController.setPreference(
-                      RecodexThemePreference.fromLabel(value),
-                    ),
+                    subtitle:
+                        '${themeController.preference.value.label} · ${themeController.accent.value.label}',
+                    trailingIcon: RecodexIcons.chevronRight,
+                    onTap: () => _openPage(Routes.theme),
                   ),
                 ],
               ),
@@ -69,22 +66,24 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: '通知',
                 children: [
                   _SettingsTile(
-                    icon: Icons.notifications_outlined,
+                    icon: RecodexIcons.notifications,
                     title: '消息通知',
                     subtitle: notificationController.statusLabel,
                     trailing: Switch(
                       value: notificationController.enabled.value,
                       onChanged: notificationController.setEnabled,
                     ),
+                    trailingIcon: RecodexIcons.chevronRight,
+                    onTap: () => _openPage(Routes.notifications),
                   ),
                   if (notificationController.enabled.value &&
                       notificationController.permissionGranted.value) ...[
                     _DividerLine(),
                     _SettingsTile(
-                      icon: Icons.notifications_active_outlined,
+                      icon: RecodexIcons.notificationsActive,
                       title: '测试通知',
                       subtitle: '发送一条本地通知',
-                      trailingIcon: Icons.chevron_right,
+                      trailingIcon: RecodexIcons.chevronRight,
                       onTap: notificationController.sendTestNotification,
                     ),
                   ],
@@ -96,14 +95,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 children: [
                   _SettingsTile(
                     icon: controller.connected.value
-                        ? Icons.cloud_done_outlined
-                        : Icons.cloud_off,
+                        ? RecodexIcons.cloudDone
+                        : RecodexIcons.cloudOff,
                     title: '服务状态',
                     subtitle: controller.connected.value
                         ? 'Bridge 在线'
                         : 'Bridge 未连接',
                     trailing: _StatusDot(connected: controller.connected.value),
-                    trailingIcon: Icons.chevron_right,
+                    trailingIcon: RecodexIcons.chevronRight,
                     onTap: () => _openPage(Routes.service),
                   ),
                 ],
@@ -113,15 +112,15 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: '关于',
                 children: [
                   _SettingsTile(
-                    icon: Icons.info_outline,
+                    icon: RecodexIcons.info,
                     title: '关于我们',
                     subtitle: 'Remodex Companion',
-                    trailingIcon: Icons.chevron_right,
+                    trailingIcon: RecodexIcons.chevronRight,
                     onTap: () => _openPage(Routes.about),
                   ),
                   _DividerLine(),
                   const _SettingsTile(
-                    icon: Icons.new_releases_outlined,
+                    icon: RecodexIcons.updates,
                     title: '检测更新',
                     subtitle: '当前版本 v1.0.4',
                     trailingText: '已是最新',
@@ -253,142 +252,6 @@ class _SettingsTile extends StatelessWidget {
   }
 }
 
-class _SettingsMenuTile extends StatelessWidget {
-  const _SettingsMenuTile({
-    required this.icon,
-    required this.title,
-    required this.value,
-    required this.options,
-    required this.onSelected,
-  });
-
-  final IconData icon;
-  final String title;
-  final String value;
-  final List<String> options;
-  final ValueChanged<String> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return _SettingsTile(
-      icon: icon,
-      title: title,
-      subtitle: '当前：$value',
-      trailingText: value,
-      trailingIcon: Icons.keyboard_arrow_down,
-      onTap: () => _showOptions(context),
-    );
-  }
-
-  Future<void> _showOptions(BuildContext context) async {
-    final selected = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.18),
-      builder: (context) =>
-          _SettingsOptionSheet(title: title, value: value, options: options),
-    );
-    if (selected != null) {
-      onSelected(selected);
-    }
-  }
-}
-
-class _SettingsOptionSheet extends StatelessWidget {
-  const _SettingsOptionSheet({
-    required this.title,
-    required this.value,
-    required this.options,
-  });
-
-  final String title;
-  final String value;
-  final List<String> options;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    return SafeArea(
-      minimum: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-      child: LiquidGlass(
-        radius: 26,
-        opacity: 0.84,
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 10),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: TextStyle(
-                        color: colors.text,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '关闭',
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: Icon(Icons.close, color: colors.textMuted),
-                  ),
-                ],
-              ),
-            ),
-            for (var index = 0; index < options.length; index += 1) ...[
-              _SettingsOptionTile(
-                label: options[index],
-                selected: options[index] == value,
-              ),
-              if (index != options.length - 1) _DividerLine(),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SettingsOptionTile extends StatelessWidget {
-  const _SettingsOptionTile({required this.label, required this.selected});
-
-  final String label;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => Navigator.of(context).pop(label),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    color: colors.text,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              if (selected) Icon(Icons.check, color: colors.icon, size: 22),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _StatusDot extends StatelessWidget {
   const _StatusDot({required this.connected});
 
@@ -398,7 +261,7 @@ class _StatusDot extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     return Icon(
-      Icons.circle,
+      RecodexIcons.circle,
       size: 12,
       color: connected ? colors.success : colors.textMuted,
     );

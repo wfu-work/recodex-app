@@ -6,7 +6,7 @@
       <stop offset="0" stop-color="#ffffff"/>
       <stop offset="1" stop-color="#eef3ff"/>
     </linearGradient>
-    <linearGradient id="bubble" x1="312" y1="280" x2="700" y2="724" gradientUnits="userSpaceOnUse">
+    <linearGradient id="bubble" x1="298" y1="289" x2="686" y2="733" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#b8b5ff"/>
       <stop offset=".42" stop-color="#6fa7ff"/>
       <stop offset="1" stop-color="#3448f4"/>
@@ -16,16 +16,13 @@
       <stop offset=".56" stop-color="#ffffff" stop-opacity=".16"/>
       <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
-    <filter id="bubbleShadow" x="-30%" y="-30%" width="160%" height="160%" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#2746db" flood-opacity=".42"/>
-    </filter>
   </defs>
 
   <rect width="1024" height="1024" rx="230" fill="url(#paper)"/>
-  <g filter="url(#bubbleShadow)" transform="translate(512 512) scale(1.32) translate(-512 -512)">
-    <rect x="230" y="222" width="592" height="562" rx="188" fill="url(#bubble)"/>
-    <ellipse cx="526" cy="292" rx="226" ry="98" fill="url(#shine)"/>
-    <path d="M366 444 466 546 366 648" fill="none" stroke="#edf6ff" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M552 660h166" fill="none" stroke="#edf6ff" stroke-width="52" stroke-linecap="round"/>
+  <g transform="translate(512 512) scale(1.32) translate(-512 -512)">
+    <rect x="216" y="231" width="592" height="562" rx="188" fill="url(#bubble)"/>
+    <ellipse cx="512" cy="301" rx="226" ry="98" fill="url(#shine)"/>
+    <path d="M336 404 436 506 336 608" fill="none" stroke="#edf6ff" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M522 620h166" fill="none" stroke="#edf6ff" stroke-width="52" stroke-linecap="round"/>
   </g>
 </svg>

@@ -91,7 +91,7 @@ class ConnectionDot extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(
-          Icons.circle,
+          RecodexIcons.circle,
           size: 8,
           color: connected ? colors.success : colors.textMuted,
         ),

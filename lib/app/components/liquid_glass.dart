@@ -23,6 +23,7 @@ class LiquidGlass extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final shape = BorderRadius.circular(radius);
     final content = ClipRRect(
       borderRadius: shape,
@@ -32,7 +33,10 @@ class LiquidGlass extends StatelessWidget {
           decoration: BoxDecoration(
             color: colors.glassColor.withValues(alpha: opacity),
             borderRadius: shape,
-            border: Border.all(color: colors.glassBorder),
+            border: Border.all(
+              color: colors.glassBorder,
+              width: isDark ? 0.8 : 1,
+            ),
             boxShadow: [
               BoxShadow(
                 color: colors.glassHighlight,
@@ -76,6 +80,7 @@ class LiquidIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Tooltip(
       message: tooltip ?? '',
       child: SizedBox.square(
@@ -84,7 +89,10 @@ class LiquidIconButton extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: colors.glassColor.withValues(alpha: 0.72),
-            border: Border.all(color: colors.glassBorder),
+            border: Border.all(
+              color: colors.glassBorder,
+              width: isDark ? 0.8 : 1,
+            ),
           ),
           child: Material(
             color: Colors.transparent,

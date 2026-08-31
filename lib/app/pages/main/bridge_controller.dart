@@ -60,6 +60,7 @@ class BridgeController extends GetxController {
   int _lastIncomingSequence = 0;
   int _maxFrameSize = RelayProtocol.defaultMaxFrameSize;
   bool _manualDisconnect = false;
+  bool _hadOnlineConnection = false;
   bool _pendingSessionStart = false;
   String? _pendingPrompt;
   String? _currentTurnId;
@@ -459,6 +460,7 @@ class BridgeController extends GetxController {
     await _closeSocket();
     connected.value = false;
     connectionLabel.value = 'offline';
+    _hadOnlineConnection = false;
   }
 
   Future<void> _closeSocket() async {
@@ -670,6 +672,7 @@ class BridgeController extends GetxController {
         (message['connectionId'] as String? ?? '').isEmpty) {
       throw StateError('Relay welcome 与当前 Endpoint 配置不一致');
     }
+    final shouldNotifyReconnect = _hadOnlineConnection && !connected.value;
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     _startHeartbeat();
@@ -677,7 +680,14 @@ class BridgeController extends GetxController {
     relaySessionId.value = message['sessionId'] as String? ?? '';
     connected.value = true;
     connectionLabel.value = 'online';
+    _hadOnlineConnection = true;
     lastError.value = '';
+    if (shouldNotifyReconnect &&
+        Get.isRegistered<TaskNotificationController>()) {
+      unawaited(
+        Get.find<TaskNotificationController>().notifyRelayReconnected(),
+      );
+    }
     _pendingCommands.clear();
     unawaited(_storeConnectionHints());
     _sendCommand('sync.request', {
@@ -688,6 +698,7 @@ class BridgeController extends GetxController {
   }
 
   void _handleRelayError(Map<String, dynamic> message) {
+    final wasConnected = connected.value;
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     final code = message['code'] as String? ?? 'relay.error';
@@ -695,6 +706,13 @@ class BridgeController extends GetxController {
     lastError.value = '$code：$text';
     connected.value = false;
     connectionLabel.value = 'failed';
+    if (wasConnected &&
+        !_manualDisconnect &&
+        Get.isRegistered<TaskNotificationController>()) {
+      unawaited(
+        Get.find<TaskNotificationController>().notifyRelayDisconnected(),
+      );
+    }
     if (code == 'auth.token_expired' && endpointGrant.value.isNotEmpty) {
       _forceTokenRefresh = true;
       _scheduleReconnect();
@@ -1162,18 +1180,27 @@ class BridgeController extends GetxController {
   }
 
   void _handleDone() {
+    final wasConnected = connected.value;
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
     connected.value = false;
     connectionLabel.value = 'offline';
+    if (wasConnected &&
+        !_manualDisconnect &&
+        Get.isRegistered<TaskNotificationController>()) {
+      unawaited(
+        Get.find<TaskNotificationController>().notifyRelayDisconnected(),
+      );
+    }
     _socket = null;
     _socketSubscription = null;
     _scheduleReconnect();
   }
 
   void _handleSocketError(Object error) {
+    final wasConnected = connected.value;
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     _heartbeatTimer?.cancel();
@@ -1181,6 +1208,13 @@ class BridgeController extends GetxController {
     connected.value = false;
     connectionLabel.value = 'failed';
     _fail(error);
+    if (wasConnected &&
+        !_manualDisconnect &&
+        Get.isRegistered<TaskNotificationController>()) {
+      unawaited(
+        Get.find<TaskNotificationController>().notifyRelayDisconnected(),
+      );
+    }
     _scheduleReconnect();
   }
 

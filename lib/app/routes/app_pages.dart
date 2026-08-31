@@ -1,11 +1,14 @@
 import 'package:get/get.dart';
 
 import '../pages/about/about_view.dart';
+import '../pages/about/open_source_licenses_view.dart';
 import '../pages/main/git_diff_view.dart';
 import '../pages/main/main_view.dart';
 import '../pages/pairing/pairing_view.dart';
 import '../pages/service/service_view.dart';
 import '../pages/settings/settings_view.dart';
+import '../pages/settings/notification_settings_view.dart';
+import '../pages/settings/theme_settings_view.dart';
 
 part 'app_routes.dart';
 
@@ -31,6 +34,16 @@ class AppPages {
       preventDuplicates: true,
     ),
     GetPage(
+      name: _Paths.theme,
+      page: () => const ThemeSettingsPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
+      name: _Paths.notifications,
+      page: () => const NotificationSettingsPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
       name: _Paths.service,
       page: () => const ServicePage(),
       preventDuplicates: true,
@@ -38,6 +51,11 @@ class AppPages {
     GetPage(
       name: _Paths.about,
       page: () => const AboutPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
+      name: _Paths.licenses,
+      page: () => const OpenSourceLicensesPage(),
       preventDuplicates: true,
     ),
     GetPage(

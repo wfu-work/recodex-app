@@ -8,6 +8,7 @@ import 'package:get/get.dart';
 import '../models/bridge_models.dart';
 import '../pages/settings/theme_controller.dart';
 import '../theme/recodex_theme.dart';
+import 'recodex_dropdown.dart';
 
 class AssistantBubble extends StatelessWidget {
   const AssistantBubble({required this.event, super.key});
@@ -141,7 +142,7 @@ class _EventImageTile extends StatelessWidget {
                 errorBuilder: (context, error, stackTrace) {
                   return Center(
                     child: Icon(
-                      Icons.broken_image_outlined,
+                      RecodexIcons.brokenImage,
                       color: colors.textMuted,
                       size: 22,
                     ),
@@ -218,7 +219,7 @@ class _EventImagePreviewDialog extends StatelessWidget {
               ),
               child: IconButton(
                 tooltip: '关闭',
-                icon: const Icon(Icons.close, color: Colors.white),
+                icon: const Icon(RecodexIcons.close, color: Colors.white),
                 onPressed: () => Navigator.of(context).pop(),
               ),
             ),
@@ -267,7 +268,7 @@ class EventTimelineItem extends StatelessWidget {
       return ToolCallRow(
         title: command == null ? '已运行工具' : '已运行',
         status: command ?? _shortenText(event.text, fallback: '工具调用'),
-        icon: Icons.terminal,
+        icon: RecodexIcons.terminal,
       );
     }
     if (_isDoneEvent(event.kind)) {
@@ -276,14 +277,14 @@ class EventTimelineItem extends StatelessWidget {
         status: event.text.trim().isEmpty
             ? '完成'
             : _shortenText(event.text, fallback: '完成'),
-        icon: Icons.check_circle_outline,
+        icon: RecodexIcons.checkCircle,
       );
     }
     if (event.kind == 'interrupted') {
       return const ToolCallRow(
         title: '已中断',
         status: '用户取消',
-        icon: Icons.pause_circle_outline,
+        icon: RecodexIcons.pause,
       );
     }
     final gitSummary = GitChangeSummary.tryParse(event.text);
@@ -353,7 +354,7 @@ class AssistantAnswerBlock extends StatelessWidget {
         flushText();
         children.add(
           const _InlineStatusRow(
-            icon: Icons.pause_circle_outline,
+            icon: RecodexIcons.pause,
             title: '已中断',
             detail: '用户取消',
           ),
@@ -501,7 +502,7 @@ class _LiveActivityRow extends StatelessWidget {
             Row(
               children: [
                 Icon(
-                  Icons.terminal,
+                  RecodexIcons.terminal,
                   size: 17,
                   color: activeColor.withValues(alpha: 0.82),
                 ),
@@ -579,7 +580,11 @@ class _AnswerStatusHeader extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 6),
-              Icon(Icons.chevron_right, color: colors.textMuted, size: 19),
+              Icon(
+                RecodexIcons.chevronRight,
+                color: colors.textMuted,
+                size: 19,
+              ),
               if (usage != null) ...[
                 const SizedBox(width: 10),
                 _TokenUsagePill(usage: usage!),
@@ -762,7 +767,11 @@ class _AnswerLine extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.only(top: 10),
-            child: Icon(Icons.circle, size: 5.5, color: colors.textMuted),
+            child: Icon(
+              RecodexIcons.circle,
+              size: 5.5,
+              color: colors.textMuted,
+            ),
           ),
           const SizedBox(width: 10),
           Expanded(child: richText),
@@ -851,7 +860,11 @@ class _ModifiedFilesBlock extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Icon(Icons.expand_more, size: 22, color: colors.textMuted),
+                  Icon(
+                    RecodexIcons.chevronDown,
+                    size: 22,
+                    color: colors.textMuted,
+                  ),
                 ],
               ),
             ),
@@ -918,7 +931,7 @@ class _ModifiedFileBlockRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 10),
-          Icon(Icons.expand_more, size: 22, color: colors.textMuted),
+          Icon(RecodexIcons.chevronDown, size: 22, color: colors.textMuted),
         ],
       ),
     );
@@ -988,7 +1001,7 @@ class ToolCallRow extends StatelessWidget {
   const ToolCallRow({
     required this.title,
     required this.status,
-    this.icon = Icons.check_circle_outline,
+    this.icon = RecodexIcons.checkCircle,
     this.onTap,
     super.key,
   });
@@ -1135,7 +1148,7 @@ class _GitChangePanel extends StatelessWidget {
                   child: Padding(
                     padding: const EdgeInsets.all(8),
                     child: Icon(
-                      Icons.difference_outlined,
+                      RecodexIcons.gitCompare,
                       size: 18,
                       color: colors.icon,
                     ),
@@ -1173,7 +1186,7 @@ class _GitChangePanel extends StatelessWidget {
                 const SizedBox(width: 8),
                 if (onUndo != null)
                   _GitActionButton(
-                    icon: Icons.undo,
+                    icon: RecodexIcons.undo,
                     tooltip: '撤销',
                     onPressed: onUndo,
                   ),
@@ -1336,7 +1349,7 @@ class _GitFileRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Icon(
-            Icons.description_outlined,
+            RecodexIcons.fileText,
             size: 18,
             color: Theme.of(context).colorScheme.primary,
           ),
@@ -1494,7 +1507,7 @@ class ComposerBar extends StatelessWidget {
               Row(
                 children: [
                   _ComposerIconButton(
-                    icon: Icons.add,
+                    icon: RecodexIcons.add,
                     onPressed: enabled ? () {} : null,
                   ),
                   const SizedBox(width: 6),
@@ -1506,14 +1519,14 @@ class ComposerBar extends StatelessWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           _ComposerMenuButton(
-                            icon: Icons.bolt,
+                            icon: RecodexIcons.fast,
                             label: this.context.model,
                             values: this.context.models,
                             onChanged: onModelChanged,
                           ),
                           const SizedBox(width: 6),
                           _ComposerMenuButton(
-                            icon: Icons.blur_circular,
+                            icon: RecodexIcons.reasoning,
                             label: _reasoningLabel(
                               this.context.reasoningEffort,
                             ),
@@ -1527,7 +1540,7 @@ class ComposerBar extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   _ComposerIconButton(
-                    icon: listening ? Icons.mic : Icons.mic_none,
+                    icon: listening ? RecodexIcons.mic : RecodexIcons.mic,
                     active: listening,
                     onPressed: enabled ? onVoicePressed : null,
                   ),
@@ -1547,7 +1560,7 @@ class ComposerBar extends StatelessWidget {
                         padding: EdgeInsets.zero,
                         elevation: 0,
                       ),
-                      child: const Icon(Icons.arrow_upward, size: 26),
+                      child: const Icon(RecodexIcons.arrowUp, size: 26),
                     ),
                   ),
                 ],
@@ -1561,23 +1574,23 @@ class ComposerBar extends StatelessWidget {
           child: Row(
             children: [
               _ContextMenuPill(
-                icon: Icons.laptop_mac_outlined,
+                icon: RecodexIcons.laptop,
                 label: this.context.transport,
                 items: [
                   _ContextMenuItem(
-                    icon: Icons.laptop_mac_outlined,
+                    icon: RecodexIcons.laptop,
                     title: this.context.transport,
                     subtitle: '本机 Bridge 上下文',
                   ),
                   _ContextMenuItem(
-                    icon: Icons.account_tree_outlined,
+                    icon: RecodexIcons.accountTree,
                     title: this.context.branch.isEmpty
                         ? '未读取分支'
                         : this.context.branch,
                     subtitle: '当前 Git 分支',
                   ),
                   _ContextMenuItem(
-                    icon: Icons.shield_outlined,
+                    icon: RecodexIcons.shield,
                     title: this.context.requireConfirmGitWrite
                         ? 'Git 写操作需确认'
                         : '信任当前工作区',
@@ -1587,21 +1600,21 @@ class ComposerBar extends StatelessWidget {
               ),
               const SizedBox(width: 10),
               _PermissionModePill(
-                icon: Icons.shield_outlined,
+                icon: RecodexIcons.shield,
                 value: permissionMode,
                 values: permissionModes,
                 onChanged: onPermissionModeChanged,
               ),
               const SizedBox(width: 18),
               _ContextPill(
-                icon: Icons.account_tree_outlined,
+                icon: RecodexIcons.accountTree,
                 label: this.context.branch.isEmpty
                     ? 'branch'
                     : this.context.branch,
               ),
               const SizedBox(width: 10),
               _ContextPill(
-                icon: Icons.cloud_done_outlined,
+                icon: RecodexIcons.cloudDone,
                 label: this.context.approvalPolicy,
               ),
             ],
@@ -1738,64 +1751,41 @@ class _ComposerMenuButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final foreground = colors.textMuted;
-    return PopupMenuButton<String>(
-      onSelected: onChanged,
-      itemBuilder: (context) => values
+    final selected = values.firstWhere(
+      (value) => (labelForValue?.call(value) ?? value) == label,
+      orElse: () => values.isEmpty ? '' : values.first,
+    );
+    return RecodexDropdown<String>(
+      value: selected,
+      options: values
           .map(
-            (value) => PopupMenuItem<String>(
+            (value) => RecodexDropdownOption<String>(
               value: value,
-              child: Text(labelForValue?.call(value) ?? value),
+              label: labelForValue?.call(value) ?? value,
             ),
           )
           .toList(),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 18, color: foreground),
-            const SizedBox(width: 5),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 112),
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: isDark ? colors.textMuted : foreground,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ),
-            Icon(Icons.keyboard_arrow_down, size: 18, color: foreground),
-          ],
-        ),
-      ),
+      leadingIcon: icon,
+      maxWidth: 112,
+      compact: true,
+      tooltip: '选择$label',
+      onChanged: onChanged,
     );
   }
 }
 
 class _ContextPill extends StatelessWidget {
-  const _ContextPill({
-    required this.icon,
-    required this.label,
-    this.trailing,
-    this.warning = false,
-  });
+  const _ContextPill({required this.icon, required this.label, this.trailing});
 
   final IconData icon;
   final String label;
   final IconData? trailing;
-  final bool warning;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final foreground = warning ? colors.warning : colors.textMuted;
+    final foreground = colors.textMuted;
     final background = isDark
         ? colors.glassColor.withValues(alpha: 0.44)
         : Colors.white.withValues(alpha: 0.62);
@@ -1854,35 +1844,17 @@ class _PermissionModePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final selected = values.contains(value) ? value : values.first;
-    return PopupMenuButton<String>(
-      initialValue: selected,
-      onSelected: onChanged,
-      itemBuilder: (context) => values
+    return RecodexDropdown<String>(
+      value: selected,
+      options: values
           .map(
-            (item) => PopupMenuItem<String>(
-              value: item,
-              child: Row(
-                children: [
-                  Icon(
-                    item == selected
-                        ? Icons.check_circle
-                        : Icons.radio_button_unchecked,
-                    size: 18,
-                    color: context.recodexColors.textMuted,
-                  ),
-                  const SizedBox(width: 10),
-                  Text(item),
-                ],
-              ),
-            ),
+            (item) => RecodexDropdownOption<String>(value: item, label: item),
           )
           .toList(),
-      child: _ContextPill(
-        icon: icon,
-        label: selected,
-        warning: selected == '完全访问权限',
-        trailing: Icons.keyboard_arrow_down,
-      ),
+      leadingIcon: icon,
+      warningWhen: (item) => item == '完全访问权限',
+      tooltip: '选择权限模式',
+      onChanged: onChanged,
     );
   }
 }
@@ -1900,7 +1872,7 @@ class _ContextMenuPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return PopupMenuButton<int>(
+    return RecodexPopupMenuButton<int>(
       itemBuilder: (context) => [
         for (var index = 0; index < items.length; index += 1)
           PopupMenuItem<int>(
@@ -1912,7 +1884,7 @@ class _ContextMenuPill extends StatelessWidget {
       child: _ContextPill(
         icon: icon,
         label: label,
-        trailing: Icons.keyboard_arrow_down,
+        trailing: RecodexIcons.chevronDown,
       ),
     );
   }
@@ -2056,7 +2028,7 @@ InlineSpan _fileLinkSpan(BuildContext context, String target, String? label) {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.description_outlined, size: 16, color: color),
+          Icon(RecodexIcons.fileText, size: 16, color: color),
           const SizedBox(width: 4),
           Text(
             '$fileName$suffix',

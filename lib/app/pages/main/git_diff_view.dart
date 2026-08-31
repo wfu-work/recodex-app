@@ -104,7 +104,7 @@ class _DiffFileHeader extends StatelessWidget {
               ),
               child: Padding(
                 padding: const EdgeInsets.all(10),
-                child: Icon(Icons.difference_outlined, color: colors.icon),
+                child: Icon(RecodexIcons.gitCompare, color: colors.icon),
               ),
             ),
             const SizedBox(width: 14),
@@ -296,7 +296,7 @@ class _DiffEmptyState extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(18, 22, 18, 24),
       child: Column(
         children: [
-          Icon(Icons.manage_search_outlined, color: colors.textMuted, size: 34),
+          Icon(RecodexIcons.search, color: colors.textMuted, size: 34),
           const SizedBox(height: 12),
           SelectableText(
             message,
