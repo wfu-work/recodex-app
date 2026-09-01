@@ -295,18 +295,8 @@ class _TaskHero extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 20, 18, 20),
       child: Row(
         children: [
-          SizedBox.square(
-            dimension: 58,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: colors.icon.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(17),
-                border: Border.all(color: colors.icon.withValues(alpha: 0.20)),
-              ),
-              child: Icon(RecodexIcons.terminal, color: colors.icon, size: 27),
-            ),
-          ),
-          const SizedBox(width: 15),
+          Icon(RecodexIcons.terminal, color: colors.icon, size: 30),
+          const SizedBox(width: 18),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

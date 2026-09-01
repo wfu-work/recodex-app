@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
 
 import '../../models/bridge_models.dart';
 import '../../services/relay_protocol.dart';
@@ -12,9 +13,24 @@ import '../../services/task_notification_controller.dart';
 import '../settings/settings_preferences_controller.dart';
 
 class BridgeController extends GetxController {
-  static const _storage = FlutterSecureStorage();
+  static const _storageContainer = 'recodex';
+  static const _commandTimeout = Duration(seconds: 35);
+  static final _storage = GetStorage(_storageContainer);
+  static const _legacySecureStorage = FlutterSecureStorage();
   static const _pairingsStorageKey = 'recodex_pairings_v2';
   static const _activePairingStorageKey = 'recodex_active_pairing_id_v2';
+  static Future<void>? _storageReady;
+
+  /// Initializes the local configuration container before any controller
+  /// starts loading credentials. The guard also keeps widget tests and
+  /// secondary entry points safe when they create the controller directly.
+  static Future<void> initializeStorage() {
+    final ready = _storageReady;
+    if (ready != null) return ready;
+    final pending = GetStorage.init(_storageContainer).then<void>((_) {});
+    _storageReady = pending;
+    return pending;
+  }
 
   final baseUrl = 'ws://127.0.0.1:8788/v1/connect'.obs;
   final spaceId = ''.obs;
@@ -67,6 +83,7 @@ class BridgeController extends GetxController {
   bool _manualDisconnect = false;
   bool _hadOnlineConnection = false;
   bool _pendingSessionStart = false;
+  bool _interruptRequested = false;
   String? _pendingPrompt;
   String? _currentTurnId;
   String? _pendingHelloRequestId;
@@ -300,6 +317,7 @@ class BridgeController extends GetxController {
     _outgoingSequence = 0;
     _lastIncomingSequence = 0;
     _pendingSessionStart = false;
+    _interruptRequested = false;
     _pendingPrompt = null;
     _currentTurnId = null;
     _pendingHelloRequestId = null;
@@ -332,25 +350,27 @@ class BridgeController extends GetxController {
 
   Future<void> _persistPairings() async {
     try {
+      await initializeStorage();
       await _storage.write(
-        key: _pairingsStorageKey,
-        value: jsonEncode(pairings.map((profile) => profile.toJson()).toList()),
+        _pairingsStorageKey,
+        pairings.map((profile) => profile.toJson()).toList(),
       );
     } catch (_) {
-      // Keep in-memory profiles when secure storage is unavailable.
+      // Keep in-memory profiles when local storage is unavailable.
     }
   }
 
   Future<void> _persistActivePairingId() async {
     try {
+      await initializeStorage();
       final id = activePairingId.value;
       if (id == null || id.isEmpty) {
-        await _storage.delete(key: _activePairingStorageKey);
+        await _storage.remove(_activePairingStorageKey);
       } else {
-        await _storage.write(key: _activePairingStorageKey, value: id);
+        await _storage.write(_activePairingStorageKey, id);
       }
     } catch (_) {
-      // Keep the active profile in memory when secure storage is unavailable.
+      // Keep the active profile in memory when local storage is unavailable.
     }
   }
 
@@ -633,7 +653,7 @@ class BridgeController extends GetxController {
     _bumpTimelineRevision();
     refreshContext();
     gitStatus(includeDiff: true);
-    _loadLatestSessionEventsForSelectedWorkspace(force: true);
+    _loadLatestSessionEventsForSelectedWorkspace();
   }
 
   /// Selects a task from the sidebar and loads its persisted conversation.
@@ -679,6 +699,7 @@ class BridgeController extends GetxController {
     _bumpTimelineRevision();
     currentSessionId.value = null;
     timelineSessionRunning.value = true;
+    _interruptRequested = false;
     _pendingSessionStart = true;
     _pendingPrompt = trimmedPrompt;
     selectedSessionId.value = null;
@@ -722,11 +743,47 @@ class BridgeController extends GetxController {
     permissionMode.value = preferences.defaultPermissionMode.value;
   }
 
+  /// Stops the active turn, including the short window while thread.create or
+  /// turn.start is still waiting for a response from the host.
   void interrupt() {
+    if (_pendingSessionStart) {
+      _pendingSessionStart = false;
+      _pendingPrompt = null;
+      _pendingCommands.removeWhere(
+        (_, command) => command.kind == 'thread.create',
+      );
+      currentSessionId.value = null;
+      selectedSessionId.value = null;
+      _currentTurnId = null;
+      _interruptRequested = false;
+      timelineSessionRunning.value = false;
+      _appendSessionEvent(
+        const SessionEvent(kind: 'interrupted', text: '已取消当前任务。'),
+      );
+      return;
+    }
+
     final sessionId = currentSessionId.value;
     if (sessionId == null || sessionId.isEmpty) return;
     final turnId = _currentTurnId;
-    if (turnId == null || turnId.isEmpty) return;
+    if (turnId == null || turnId.isEmpty) {
+      _interruptRequested = true;
+      return;
+    }
+    _sendCommand('turn.interrupt', {}, threadId: sessionId, turnId: turnId);
+  }
+
+  void _sendRequestedInterrupt() {
+    if (!_interruptRequested) return;
+    final sessionId = currentSessionId.value;
+    final turnId = _currentTurnId;
+    if (sessionId == null ||
+        sessionId.isEmpty ||
+        turnId == null ||
+        turnId.isEmpty) {
+      return;
+    }
+    _interruptRequested = false;
     _sendCommand('turn.interrupt', {}, threadId: sessionId, turnId: turnId);
   }
 
@@ -760,6 +817,27 @@ class BridgeController extends GetxController {
     _liveTimelineTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       _refreshLiveTimeline();
     });
+  }
+
+  /// Refreshes the current workspace task list and selected task output once.
+  /// The periodic refresh continues independently when the main page is open.
+  void refreshProjectTasks() {
+    _refreshLiveTimeline();
+  }
+
+  /// Requests a fresh thread snapshot so the sidebar can rebuild its project
+  /// list even when reconnect recovery only has incremental events available.
+  ///
+  /// The sidebar action only needs the catalog request. A reconnect also asks
+  /// for the event cursor so an interrupted conversation can be restored.
+  void refreshProjects({bool recoverEvents = false}) {
+    if (!connected.value) return;
+    if (recoverEvents) {
+      _sendCommand('sync.request', {
+        if (_lastIncomingSequence > 0) 'lastSequence': _lastIncomingSequence,
+      });
+    }
+    _sendCommand('thread.list', {'limit': 100});
   }
 
   void stopLiveTimelineRefresh() {
@@ -798,15 +876,31 @@ class BridgeController extends GetxController {
     _forceTokenRefresh = false;
     lastError.value = '';
     try {
-      await _storage.delete(key: 'recodex_endpoint_private_key');
-      await _storage.delete(key: 'recodex_device_key');
-      await _storage.delete(key: 'recodex_device_id');
-      await _storage.delete(key: 'recodex_pairing_token');
-      await _storage.delete(key: 'recodex_endpoint_grant');
-      await _storage.delete(key: 'recodex_token_expires_at');
-      await _storage.delete(key: 'recodex_grant_expires_at');
+      await initializeStorage();
+      await Future.wait([
+        _storage.remove('recodex_endpoint_private_key'),
+        _storage.remove('recodex_device_key'),
+        _storage.remove('recodex_device_id'),
+        _storage.remove('recodex_pairing_token'),
+        _storage.remove('recodex_endpoint_grant'),
+        _storage.remove('recodex_token_expires_at'),
+        _storage.remove('recodex_grant_expires_at'),
+      ]);
+      // Also clear the pre-GetStorage Keychain values so an explicit
+      // credential reset cannot be undone by a later migration.
+      await Future.wait([
+        _legacySecureStorage.delete(key: _pairingsStorageKey),
+        _legacySecureStorage.delete(key: _activePairingStorageKey),
+        _legacySecureStorage.delete(key: 'recodex_endpoint_private_key'),
+        _legacySecureStorage.delete(key: 'recodex_device_key'),
+        _legacySecureStorage.delete(key: 'recodex_device_id'),
+        _legacySecureStorage.delete(key: 'recodex_pairing_token'),
+        _legacySecureStorage.delete(key: 'recodex_endpoint_grant'),
+        _legacySecureStorage.delete(key: 'recodex_token_expires_at'),
+        _legacySecureStorage.delete(key: 'recodex_grant_expires_at'),
+      ]);
     } catch (_) {
-      lastError.value = 'Secure storage is unavailable on this target.';
+      lastError.value = '本地配置存储不可用。';
     }
   }
 
@@ -892,10 +986,7 @@ class BridgeController extends GetxController {
     _clearRemoteModels();
     _pendingCommands.clear();
     unawaited(_storeConnectionHints());
-    _sendCommand('sync.request', {
-      if (_lastIncomingSequence > 0) 'lastSequence': _lastIncomingSequence,
-    });
-    _sendCommand('thread.list', {'limit': 100});
+    refreshProjects(recoverEvents: true);
     _sendCommand('model.list', {'includeHidden': false, 'limit': 100});
     _sendCommand('host.get_status', {});
   }
@@ -950,6 +1041,10 @@ class BridgeController extends GetxController {
       }
       return;
     }
+    if ((pending?.kind == 'thread.list' || pending?.kind == 'thread.read') &&
+        _isTransientSyncError(lastError.value)) {
+      lastError.value = '';
+    }
     final result = message['result'];
     switch (pending?.kind) {
       case 'sync.request':
@@ -967,6 +1062,7 @@ class BridgeController extends GetxController {
         _currentTurnId =
             _readString(map?['turnId']) ??
             _readString(_asMap(map?['turn'])?['id']);
+        _sendRequestedInterrupt();
       case 'turn.interrupt':
         _finishCurrentSession(
           status: TaskNotificationStatus.interrupted,
@@ -992,6 +1088,9 @@ class BridgeController extends GetxController {
         }
       }
       _acceptIncomingSequence(map['latestSequence']);
+      if (sessions.isEmpty || workspaces.isEmpty) {
+        _sendCommand('thread.list', {'limit': 100});
+      }
     } else {
       _applyThreadListResult(map['threads']);
       _applyHostStatus(map['status']);
@@ -999,11 +1098,11 @@ class BridgeController extends GetxController {
   }
 
   void _applyThreadListResult(Object? value) {
-    final map = _asMap(value);
-    final rawThreads = map == null ? value : (map['data'] ?? map['threads']);
-    final next = _asList(
-      rawThreads,
-    ).map(_sessionFromThread).whereType<SessionRecord>().toList();
+    final next = _dedupeSessions(
+      _threadListItems(
+        value,
+      ).map(_sessionFromThread).whereType<SessionRecord>(),
+    );
     _syncSessionCompletionNotifications(next);
     sessions.assignAll(next);
     final selectedId = selectedSessionId.value;
@@ -1014,7 +1113,64 @@ class BridgeController extends GetxController {
     _deriveWorkspaces(next);
     selectedWorkspace.value ??= _restoreSelectedWorkspace();
     selectedWorkspace.value ??= _defaultWorkspace();
-    _loadLatestSessionEventsForSelectedWorkspace(force: true);
+    // The catalog refresh only updates an already selected timeline once.
+    // Older Codex threads can contain megabytes of tool output, so forcing a
+    // full read here would make the Relay connection flap while polling.
+    _loadLatestSessionEventsForSelectedWorkspace();
+  }
+
+  /// Codex App Server has returned both `{data: [...]}` and direct arrays over
+  /// its supported versions. Relay keeps that result opaque, so tolerate the
+  /// common wrapper names here instead of making the sidebar depend on one
+  /// server release.
+  List<Object?> _threadListItems(Object? value) {
+    var current = value;
+    for (var depth = 0; depth < 3; depth++) {
+      if (current is List) return List<Object?>.from(current);
+      final map = _asMap(current);
+      if (map == null) return const [];
+      Object? next;
+      for (final key in const [
+        'data',
+        'threads',
+        'items',
+        'results',
+        'sessions',
+        'result',
+      ]) {
+        if (map.containsKey(key)) {
+          next = map[key];
+          break;
+        }
+      }
+      if (next == null) return const [];
+      current = next;
+    }
+    return const [];
+  }
+
+  List<SessionRecord> _dedupeSessions(Iterable<SessionRecord> records) {
+    final byId = <String, SessionRecord>{};
+    final order = <String>[];
+    for (final session in records) {
+      final id = session.id.trim();
+      if (id.isEmpty) continue;
+      final previous = byId[id];
+      if (previous == null) {
+        order.add(id);
+        byId[id] = session;
+      } else if (session.updatedAtDate.isAfter(previous.updatedAtDate)) {
+        byId[id] = session;
+      }
+    }
+    return [for (final id in order) byId[id]!];
+  }
+
+  void _upsertSession(SessionRecord record) {
+    final id = record.id.trim();
+    if (id.isEmpty) return;
+    sessions.removeWhere((item) => item.id.trim() == id);
+    sessions.insert(0, record);
   }
 
   void _deriveWorkspaces(List<SessionRecord> records) {
@@ -1037,12 +1193,12 @@ class BridgeController extends GetxController {
     final map = _asMap(value);
     if (map == null) return null;
     final thread = _asMap(map['thread']) ?? map;
-    final id = _readString(thread['id']);
+    final id =
+        _readString(thread['id']) ??
+        _readString(thread['threadId']) ??
+        _readString(thread['sessionId']);
     if (id == null || id.isEmpty) return null;
-    final cwd =
-        _readString(thread['cwd']) ??
-        _readString(thread['workingDirectory']) ??
-        '';
+    final workspace = _threadWorkspace(thread);
     final prompt =
         _readString(thread['preview']) ??
         _readString(thread['name']) ??
@@ -1053,12 +1209,45 @@ class BridgeController extends GetxController {
     final updated = _dateString(thread['updatedAt'] ?? thread['updated_at']);
     return SessionRecord(
       id: id,
-      workspace: cwd,
+      workspace: workspace,
       prompt: prompt,
       status: status,
       createdAt: created,
       updatedAt: updated.isEmpty ? created : updated,
     );
+  }
+
+  String _threadWorkspace(Map<String, dynamic> thread) {
+    final direct = <String?>[
+      _readString(thread['cwd']),
+      _readString(thread['workingDirectory']),
+      _readString(thread['workspacePath']),
+      _readString(thread['projectPath']),
+    ];
+    for (final value in direct) {
+      if (value != null) return value;
+    }
+
+    final workspace = _asMap(thread['workspace']);
+    final nestedWorkspace = _readString(workspace?['path']);
+    if (nestedWorkspace != null) return nestedWorkspace;
+    final project = _asMap(thread['project']);
+    final nestedProject = _readString(project?['path']);
+    if (nestedProject != null) return nestedProject;
+
+    // `path` is a rollout JSONL file in current Codex versions. It is useful
+    // as a fallback for older servers only when it is clearly a directory,
+    // never when it points at Codex's session archive.
+    final path = _readString(thread['path']);
+    if (path != null && !_looksLikeSessionArtifact(path)) return path;
+    return _readString(thread['workspace']) ?? '';
+  }
+
+  bool _looksLikeSessionArtifact(String value) {
+    final normalized = value.replaceAll('\\', '/').toLowerCase();
+    return normalized.endsWith('.jsonl') ||
+        normalized.contains('/.codex/sessions') ||
+        normalized.contains('/codex/sessions');
   }
 
   String _threadStatus(Map<String, dynamic> thread) {
@@ -1098,8 +1287,7 @@ class BridgeController extends GetxController {
     _markSessionRunningForNotification(record.id);
     _requestedEventsSessionId = record.id;
     _requestedEventsPrompt = _pendingPrompt ?? record.prompt;
-    sessions.removeWhere((item) => item.id == record.id);
-    sessions.insert(0, record);
+    _upsertSession(record);
     events.add(const SessionEvent(kind: 'running', text: '正在启动 Codex 任务...'));
     _bumpTimelineRevision();
     final prompt = _pendingPrompt;
@@ -1195,8 +1383,7 @@ class BridgeController extends GetxController {
       case 'thread.updated':
         final record = _sessionFromThread(data);
         if (record != null) {
-          sessions.removeWhere((item) => item.id == record.id);
-          sessions.insert(0, record);
+          _upsertSession(record);
           _deriveWorkspaces(sessions);
         }
       case 'turn.started':
@@ -1212,6 +1399,7 @@ class BridgeController extends GetxController {
         _appendSessionEvent(
           const SessionEvent(kind: 'running', text: 'Codex 正在执行...'),
         );
+        _sendRequestedInterrupt();
       case 'message.assistant.delta':
         _appendSessionEvent(
           SessionEvent(kind: 'assistant', text: _extractText(data)),
@@ -1286,6 +1474,7 @@ class BridgeController extends GetxController {
     );
     currentSessionId.value = null;
     _currentTurnId = null;
+    _interruptRequested = false;
     timelineSessionRunning.value = false;
     _pendingSessionStart = false;
     _pendingPrompt = null;
@@ -1381,9 +1570,20 @@ class BridgeController extends GetxController {
         spaceId.value.isEmpty) {
       return;
     }
+    _expirePendingCommands();
+    if (_coalescesPendingCommand(type) &&
+        _pendingCommands.values.any(
+          (pending) => pending.matches(type, threadId: threadId),
+        )) {
+      return;
+    }
     final requestId = RelayProtocol.randomId('req');
     _outgoingSequence += 1;
-    _pendingCommands[requestId] = _PendingCommand(type);
+    _pendingCommands[requestId] = _PendingCommand(
+      kind: type,
+      threadId: threadId,
+      sentAt: DateTime.now(),
+    );
     final sent = _sendRaw(
       RelayProtocol.command(
         requestId: requestId,
@@ -1397,6 +1597,29 @@ class BridgeController extends GetxController {
       ),
     );
     if (!sent) _pendingCommands.remove(requestId);
+  }
+
+  bool _coalescesPendingCommand(String type) {
+    return type == 'thread.list' || type == 'thread.read';
+  }
+
+  bool _isTransientSyncError(String message) {
+    return message.contains('APP_SERVER_TIMEOUT') ||
+        message.contains('APP_SERVER_UNAVAILABLE') ||
+        message.contains('项目列表同步超时');
+  }
+
+  void _expirePendingCommands() {
+    final cutoff = DateTime.now().subtract(_commandTimeout);
+    var catalogTimedOut = false;
+    _pendingCommands.removeWhere((_, pending) {
+      final expired = pending.sentAt.isBefore(cutoff);
+      if (expired && pending.kind == 'thread.list') catalogTimedOut = true;
+      return expired;
+    });
+    if (catalogTimedOut && lastError.value.isEmpty) {
+      lastError.value = '项目列表同步超时，请确认目标主机在线后重试。';
+    }
   }
 
   bool _sendRaw(Map<String, dynamic> frame) {
@@ -1534,7 +1757,9 @@ class BridgeController extends GetxController {
   void _refreshLiveTimeline() {
     if (!connected.value) return;
     _sendCommand('thread.list', {'limit': 100});
-    if (_requestedEventsSessionId != null) {
+    // Only a running turn needs live detail polling. Completed threads are
+    // loaded once when selected.
+    if (_requestedEventsSessionId != null && timelineSessionRunning.value) {
       _sendCommand('thread.read', {}, threadId: _requestedEventsSessionId);
     }
   }
@@ -1629,7 +1854,7 @@ class BridgeController extends GetxController {
     return _lastPathSegment(normalized);
   }
 
-  void _loadLatestSessionEventsForSelectedWorkspace({bool force = false}) {
+  void _loadLatestSessionEventsForSelectedWorkspace() {
     if (!connected.value) return;
     if (_pendingSessionStart) return;
     if (sessions.isEmpty) {
@@ -1660,27 +1885,29 @@ class BridgeController extends GetxController {
       return;
     }
 
-    final runningCandidates = candidates.where(
-      (session) => session.status == 'running',
-    );
     final selectedId = selectedSessionId.value;
-    final selected = selectedId == null
-        ? null
-        : candidates.cast<SessionRecord?>().firstWhere(
-            (session) => session?.id == selectedId,
-            orElse: () => null,
-          );
-    final timelineCandidates = runningCandidates.isEmpty
-        ? candidates
-        : runningCandidates;
-    final latest =
-        selected ??
-        timelineCandidates.reduce(
-          (current, next) => next.updatedAtDate.isAfter(current.updatedAtDate)
-              ? next
-              : current,
-        );
-    selectedSessionId.value ??= latest.id;
+    // Catalog synchronization should only populate the sidebar. Loading a
+    // conversation is an explicit task-selection action; automatically
+    // opening the latest completed thread can immediately request tens of
+    // megabytes of historical tool output after every app restart.
+    if (selectedId == null) {
+      currentSessionId.value = null;
+      timelineSessionRunning.value = false;
+      return;
+    }
+    final selected = candidates.cast<SessionRecord?>().firstWhere(
+      (session) => session?.id == selectedId,
+      orElse: () => null,
+    );
+    if (selected == null) {
+      selectedSessionId.value = null;
+      _requestedEventsSessionId = null;
+      _requestedEventsPrompt = null;
+      currentSessionId.value = null;
+      timelineSessionRunning.value = false;
+      return;
+    }
+    final latest = selected;
     final requestedRunning =
         _requestedEventsSessionId == latest.id && timelineSessionRunning.value;
     if (latest.status == 'running') {
@@ -1692,7 +1919,11 @@ class BridgeController extends GetxController {
       timelineSessionRunning.value = false;
     }
 
-    if (!force && _requestedEventsSessionId == latest.id && events.isNotEmpty) {
+    // A completed thread is loaded once when selected. Re-reading its full
+    // history during every 2-second catalog refresh can produce a very large
+    // Relay response and evict the project list. Running threads are still
+    // refreshed by [_refreshLiveTimeline].
+    if (_requestedEventsSessionId == latest.id) {
       return;
     }
 
@@ -1920,13 +2151,14 @@ class BridgeController extends GetxController {
         : null;
     if (preferences != null) await preferences.ready;
     try {
-      // Remove the private key used by the deleted legacy Bridge protocol.
-      await _storage.delete(key: 'recodex_device_key');
-      final encodedPairings = await _storage.read(key: _pairingsStorageKey);
+      await initializeStorage();
+      final storedValue = _storage.read<dynamic>(_pairingsStorageKey);
       List<PairingProfile> restored = const [];
-      if (encodedPairings != null && encodedPairings.trim().isNotEmpty) {
+      if (storedValue != null) {
         try {
-          final decoded = jsonDecode(encodedPairings);
+          final decoded = storedValue is String
+              ? jsonDecode(storedValue)
+              : storedValue;
           if (decoded is List) {
             restored = decoded
                 .whereType<Map>()
@@ -1942,26 +2174,44 @@ class BridgeController extends GetxController {
         }
       }
 
-      if (restored.isEmpty) {
-        final legacy = await _readLegacyPairing();
-        if (legacy != null) {
-          restored = [legacy];
+      // An existing empty list is an intentional "no pairings" state. Only
+      // migrate from Keychain when the new local container has no value yet.
+      if (restored.isEmpty && storedValue == null) {
+        restored = await _readLegacyPairings();
+        if (restored.isNotEmpty) {
           pairings.assignAll(restored);
-          activePairingId.value = legacy.id;
+          final storedActiveId = await _legacySecureStorage.read(
+            key: _activePairingStorageKey,
+          );
+          final selected = restored.firstWhere(
+            (profile) => profile.id == storedActiveId,
+            orElse: () => restored.first,
+          );
+          activePairingId.value = selected.id;
           await _persistActivePairingId();
           await _persistPairings();
+        } else {
+          final legacy = await _readLegacyPairing();
+          if (legacy != null) {
+            restored = [legacy];
+            pairings.assignAll(restored);
+            activePairingId.value = legacy.id;
+            await _persistActivePairingId();
+            await _persistPairings();
+          }
         }
-      } else {
+      } else if (restored.isNotEmpty) {
         pairings.assignAll(restored);
-        final storedActiveId = await _storage.read(
-          key: _activePairingStorageKey,
-        );
+        final storedActiveId = _storage.read<String>(_activePairingStorageKey);
         final selected = restored.firstWhere(
           (profile) => profile.id == storedActiveId,
           orElse: () => restored.first,
         );
         activePairingId.value = selected.id;
         await _persistActivePairingId();
+      } else {
+        pairings.clear();
+        activePairingId.value = null;
       }
 
       final selectedProfile = activePairing;
@@ -2010,32 +2260,40 @@ class BridgeController extends GetxController {
   }
 
   Future<PairingProfile?> _readLegacyPairing() async {
-    final storedBaseUrl = await _storage.read(key: 'recodex_base_url');
-    final storedSpaceId = await _storage.read(key: 'recodex_space_id');
-    final storedTargetDeviceId = await _storage.read(
+    final storedBaseUrl = await _legacySecureStorage.read(
+      key: 'recodex_base_url',
+    );
+    final storedSpaceId = await _legacySecureStorage.read(
+      key: 'recodex_space_id',
+    );
+    final storedTargetDeviceId = await _legacySecureStorage.read(
       key: 'recodex_target_device_id',
     );
-    final storedDeviceName = await _storage.read(key: 'recodex_device_name');
-    final storedDeviceId = await _storage.read(key: 'recodex_device_id');
-    final storedDeviceKey = await _storage.read(
+    final storedDeviceName = await _legacySecureStorage.read(
+      key: 'recodex_device_name',
+    );
+    final storedDeviceId = await _legacySecureStorage.read(
+      key: 'recodex_device_id',
+    );
+    final storedDeviceKey = await _legacySecureStorage.read(
       key: 'recodex_endpoint_private_key',
     );
-    final storedPairingToken = await _storage.read(
+    final storedPairingToken = await _legacySecureStorage.read(
       key: 'recodex_pairing_token',
     );
-    final storedEndpointGrant = await _storage.read(
+    final storedEndpointGrant = await _legacySecureStorage.read(
       key: 'recodex_endpoint_grant',
     );
-    final storedTokenExpiresAt = await _storage.read(
+    final storedTokenExpiresAt = await _legacySecureStorage.read(
       key: 'recodex_token_expires_at',
     );
-    final storedGrantExpiresAt = await _storage.read(
+    final storedGrantExpiresAt = await _legacySecureStorage.read(
       key: 'recodex_grant_expires_at',
     );
-    final storedWorkspaceName = await _storage.read(
+    final storedWorkspaceName = await _legacySecureStorage.read(
       key: 'recodex_selected_workspace_name',
     );
-    final storedWorkspacePath = await _storage.read(
+    final storedWorkspacePath = await _legacySecureStorage.read(
       key: 'recodex_selected_workspace_path',
     );
     final hasLegacyData = [
@@ -2072,6 +2330,24 @@ class BridgeController extends GetxController {
     );
   }
 
+  Future<List<PairingProfile>> _readLegacyPairings() async {
+    try {
+      final encoded = await _legacySecureStorage.read(key: _pairingsStorageKey);
+      if (encoded == null || encoded.trim().isEmpty) return const [];
+      final decoded = jsonDecode(encoded);
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map>()
+          .map(
+            (item) => PairingProfile.fromJson(Map<String, dynamic>.from(item)),
+          )
+          .where((profile) => profile.id.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<void> _ensureCredentialsLoaded() async {
     if (!_credentialsLoaded.isCompleted) {
       await _credentialsLoaded.future;
@@ -2097,12 +2373,10 @@ class BridgeController extends GetxController {
     deviceKey.value = RelayProtocol.encodeBase64Url(seed);
     endpointPublicKey.value = await RelayProtocol.publicKey(pair);
     try {
-      await _storage.write(
-        key: 'recodex_endpoint_private_key',
-        value: deviceKey.value,
-      );
+      await initializeStorage();
+      await _storage.write('recodex_endpoint_private_key', deviceKey.value);
     } catch (_) {
-      // Keep the key in memory when secure storage is unavailable.
+      // Keep the key in memory when local storage is unavailable.
     }
     return pair;
   }
@@ -2113,6 +2387,7 @@ class BridgeController extends GetxController {
 
   Future<void> _storeConnectionHints() async {
     try {
+      await initializeStorage();
       final current = activePairing;
       if (current != null) {
         final index = pairings.indexWhere(
@@ -2126,44 +2401,26 @@ class BridgeController extends GetxController {
         }
         await _persistPairings();
       }
-      await _storage.write(key: 'recodex_base_url', value: baseUrl.value);
-      await _storage.write(key: 'recodex_space_id', value: spaceId.value);
-      await _storage.write(
-        key: 'recodex_target_device_id',
-        value: targetDeviceId.value,
-      );
-      await _storage.write(key: 'recodex_device_name', value: deviceName.value);
-      await _storage.write(key: 'recodex_device_id', value: deviceId.value);
-      await _storage.write(
-        key: 'recodex_endpoint_private_key',
-        value: deviceKey.value,
-      );
-      if (pairingToken.value.isNotEmpty) {
-        await _storage.write(
-          key: 'recodex_pairing_token',
-          value: pairingToken.value,
-        );
-      } else {
-        await _storage.delete(key: 'recodex_pairing_token');
-      }
-      if (endpointGrant.value.isNotEmpty) {
-        await _storage.write(
-          key: 'recodex_endpoint_grant',
-          value: endpointGrant.value,
-        );
-      } else {
-        await _storage.delete(key: 'recodex_endpoint_grant');
-      }
-      await _storage.write(
-        key: 'recodex_token_expires_at',
-        value: tokenExpiresAt.value.toString(),
-      );
-      await _storage.write(
-        key: 'recodex_grant_expires_at',
-        value: grantExpiresAt.value.toString(),
-      );
+      await _storage.write('recodex_base_url', baseUrl.value);
+      await _storage.write('recodex_space_id', spaceId.value);
+      await _storage.write('recodex_target_device_id', targetDeviceId.value);
+      await _storage.write('recodex_device_name', deviceName.value);
+      await _storage.write('recodex_device_id', deviceId.value);
+      await _storage.write('recodex_endpoint_private_key', deviceKey.value);
+      await _writeOrRemove('recodex_pairing_token', pairingToken.value);
+      await _writeOrRemove('recodex_endpoint_grant', endpointGrant.value);
+      await _storage.write('recodex_token_expires_at', tokenExpiresAt.value);
+      await _storage.write('recodex_grant_expires_at', grantExpiresAt.value);
     } catch (_) {
       // Keep the in-memory values for the current connection if storage is unavailable.
+    }
+  }
+
+  Future<void> _writeOrRemove(String key, String value) async {
+    if (value.isEmpty) {
+      await _storage.remove(key);
+    } else {
+      await _storage.write(key, value);
     }
   }
 
@@ -2193,11 +2450,12 @@ class BridgeController extends GetxController {
 
   Future<void> _storeSelectedWorkspace(WorkspaceInfo? workspace) async {
     try {
+      await initializeStorage();
       if (workspace == null) {
         _storedWorkspaceName = null;
         _storedWorkspacePath = null;
-        await _storage.delete(key: 'recodex_selected_workspace_name');
-        await _storage.delete(key: 'recodex_selected_workspace_path');
+        await _storage.remove('recodex_selected_workspace_name');
+        await _storage.remove('recodex_selected_workspace_path');
         final current = activePairing;
         if (current != null) {
           final index = pairings.indexWhere(
@@ -2215,14 +2473,8 @@ class BridgeController extends GetxController {
       }
       _storedWorkspaceName = workspace.name;
       _storedWorkspacePath = workspace.path;
-      await _storage.write(
-        key: 'recodex_selected_workspace_name',
-        value: workspace.name,
-      );
-      await _storage.write(
-        key: 'recodex_selected_workspace_path',
-        value: workspace.path,
-      );
+      await _storage.write('recodex_selected_workspace_name', workspace.name);
+      await _storage.write('recodex_selected_workspace_path', workspace.path);
       final current = activePairing;
       if (current != null) {
         final index = pairings.indexWhere(
@@ -2430,7 +2682,17 @@ class _SessionLifecycle {
 }
 
 class _PendingCommand {
-  const _PendingCommand(this.kind);
+  const _PendingCommand({
+    required this.kind,
+    required this.sentAt,
+    this.threadId,
+  });
 
   final String kind;
+  final String? threadId;
+  final DateTime sentAt;
+
+  bool matches(String commandKind, {String? threadId}) {
+    return kind == commandKind && this.threadId == threadId;
+  }
 }

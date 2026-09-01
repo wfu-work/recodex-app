@@ -223,17 +223,8 @@ class _AboutPurposeCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: colors.icon.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(13),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Icon(RecodexIcons.terminal, color: colors.icon, size: 21),
-            ),
-          ),
-          const SizedBox(width: 14),
+          Icon(RecodexIcons.terminal, color: colors.icon, size: 28),
+          const SizedBox(width: 16),
           Expanded(
             child: Text(
               '通过 Relay 安全连接手机与 Codex 主机，快速选择工作区、发送任务并查看执行状态。',
@@ -289,17 +280,8 @@ class _AboutInfoRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       child: Row(
         children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: colors.icon.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(11),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Icon(icon, size: 19, color: colors.icon),
-            ),
-          ),
-          const SizedBox(width: 13),
+          Icon(icon, size: 22, color: colors.icon),
+          const SizedBox(width: 14),
           Expanded(
             child: Text(
               title,

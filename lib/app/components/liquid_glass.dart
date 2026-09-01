@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 
 import '../theme/recodex_theme.dart';
@@ -25,34 +23,16 @@ class LiquidGlass extends StatelessWidget {
     final colors = context.recodexColors;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final shape = BorderRadius.circular(radius);
-    final content = ClipRRect(
-      borderRadius: shape,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 42, sigmaY: 42),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: colors.glassColor.withValues(alpha: opacity),
-            borderRadius: shape,
-            border: Border.all(
-              color: colors.glassBorder,
-              width: isDark ? 0.8 : 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: colors.glassHighlight,
-                offset: const Offset(-8, -8),
-                blurRadius: 24,
-              ),
-              BoxShadow(
-                color: colors.glassShadow,
-                offset: const Offset(0, 18),
-                blurRadius: 38,
-              ),
-            ],
-          ),
-          child: Padding(padding: padding, child: child),
+    final content = DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.glassColor.withValues(alpha: opacity),
+        borderRadius: shape,
+        border: Border.all(
+          color: colors.glassBorder.withValues(alpha: isDark ? 0.88 : 0.78),
+          width: isDark ? 0.8 : 1,
         ),
       ),
+      child: Padding(padding: padding, child: child),
     );
 
     if (onTap == null) return content;
@@ -80,29 +60,15 @@ class LiquidIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Tooltip(
       message: tooltip ?? '',
-      child: SizedBox.square(
-        dimension: size,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: colors.glassColor.withValues(alpha: 0.72),
-            border: Border.all(
-              color: colors.glassBorder,
-              width: isDark ? 0.8 : 1,
-            ),
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: onPressed,
-              child: Icon(icon, color: colors.icon, size: size * 0.48),
-            ),
-          ),
-        ),
+      child: IconButton(
+        onPressed: onPressed,
+        padding: EdgeInsets.zero,
+        constraints: BoxConstraints.tightFor(width: size, height: size),
+        iconSize: size * 0.52,
+        visualDensity: VisualDensity.standard,
+        icon: Icon(icon, color: colors.icon),
       ),
     );
   }
@@ -122,11 +88,13 @@ class BluePillButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return FilledButton.icon(
       onPressed: onPressed,
       style: FilledButton.styleFrom(
         backgroundColor: Theme.of(context).colorScheme.primary,
-        foregroundColor: Colors.white,
+        foregroundColor: isDark ? colors.glassColor : Colors.white,
         disabledBackgroundColor: Theme.of(
           context,
         ).colorScheme.outline.withValues(alpha: 0.34),

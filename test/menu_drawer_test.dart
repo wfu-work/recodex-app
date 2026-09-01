@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:recodex/app/components/menu_drawer.dart';
 import 'package:recodex/app/models/bridge_models.dart';
+import 'package:recodex/app/pages/settings/theme_controller.dart';
 import 'package:recodex/app/theme/recodex_theme.dart';
 
 void main() {
@@ -11,6 +12,8 @@ void main() {
   ) async {
     final scaffoldKey = GlobalKey<ScaffoldState>();
     SessionRecord? selected;
+    RecodexThemePreference? selectedTheme;
+    var projectsRefreshed = false;
     const workspace = WorkspaceInfo(name: 'recodex', path: '/work/recodex');
     const session = SessionRecord(
       id: 'thread-1',
@@ -40,6 +43,9 @@ void main() {
             onPairing: () {},
             onNewPairing: () {},
             onSettings: () {},
+            themePreference: RecodexThemePreference.system,
+            onThemePreferenceChanged: (value) => selectedTheme = value,
+            onRefreshProjects: () => projectsRefreshed = true,
           ),
           body: const SizedBox.shrink(),
         ),
@@ -49,7 +55,32 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('项目'), findsOneWidget);
-    expect(find.text('任务'), findsOneWidget);
+    expect(find.text('配对'), findsNothing);
+    expect(find.byTooltip('设置'), findsOneWidget);
+    expect(find.byTooltip('当前主题：跟随系统'), findsOneWidget);
+    expect(find.byTooltip('刷新项目'), findsOneWidget);
+    expect(find.text('Remodex v1.0.4'), findsNothing);
+    expect(find.text('recodex'), findsOneWidget);
+    expect(find.text('修复任务列表'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('刷新项目'));
+    expect(projectsRefreshed, isTrue);
+
+    await tester.tap(find.byTooltip('当前主题：跟随系统'));
+    await tester.pumpAndSettle();
+    expect(find.text('跟随系统'), findsOneWidget);
+    expect(find.text('浅色模式'), findsOneWidget);
+    expect(find.text('深色模式'), findsOneWidget);
+    await tester.tap(find.text('深色模式'));
+    await tester.pumpAndSettle();
+    expect(selectedTheme, RecodexThemePreference.dark);
+
+    await tester.tap(find.text('recodex'));
+    await tester.pumpAndSettle();
+    expect(find.text('修复任务列表'), findsNothing);
+
+    await tester.tap(find.text('recodex'));
+    await tester.pumpAndSettle();
     expect(find.text('修复任务列表'), findsOneWidget);
 
     await tester.tap(find.text('修复任务列表'));

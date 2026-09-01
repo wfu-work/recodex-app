@@ -15,6 +15,7 @@ import 'git_diff_view.dart';
 import 'widget/home_header.dart';
 import 'widget/inline_error.dart';
 import 'widget/main_helpers.dart';
+import 'widget/task_output_dialog.dart';
 import 'widget/welcome_timeline.dart';
 
 class MainPage extends StatefulWidget {
@@ -57,7 +58,8 @@ class _MainPageState extends State<MainPage> {
   @override
   Widget build(BuildContext context) {
     return Obx(() {
-      Get.find<ThemeController>().fontScale.value;
+      final themeController = Get.find<ThemeController>();
+      themeController.fontScale.value;
       final compactTimeline = Get.isRegistered<SettingsPreferencesController>()
           ? Get.find<SettingsPreferencesController>().compactTimeline.value
           : false;
@@ -99,7 +101,6 @@ class _MainPageState extends State<MainPage> {
               },
               onSelectWorkspace: (workspace) {
                 controller.selectWorkspace(workspace);
-                Navigator.of(context).pop();
               },
               onSelectSession: (session) {
                 controller.selectSession(session);
@@ -111,6 +112,11 @@ class _MainPageState extends State<MainPage> {
                 arguments: const PairingPageArgs(createNew: true),
               ),
               onSettings: () => _openPage(Routes.settings),
+              themePreference: themeController.preference.value,
+              onThemePreferenceChanged: themeController.setPreference,
+              onRefreshProjects: controller.connected.value
+                  ? controller.refreshProjects
+                  : null,
             ),
             body: Stack(
               children: [
@@ -200,14 +206,21 @@ class _MainPageState extends State<MainPage> {
                   child: HomeHeader(
                     title: _workspaceTitle,
                     subtitle: _workspaceSubtitle,
-                    changedFiles: _gitChangeOverview.changedFiles,
-                    added: _gitChangeOverview.addedLines,
-                    removed: _gitChangeOverview.removedLines,
                     backgroundProgress: _headerBackgroundProgress,
                     topPadding: topInset,
+                    onRefreshTasks: controller.canUseWorkspace
+                        ? controller.refreshProjectTasks
+                        : null,
+                    onShowTaskOutput: _taskOutputText.isEmpty
+                        ? null
+                        : _showTaskOutput,
+                    onCopyTaskOutput: _taskOutputText.isEmpty
+                        ? null
+                        : _copyTaskOutput,
                     onRefreshGit: controller.canUseWorkspace
                         ? () => controller.gitStatus(includeDiff: true)
                         : null,
+                    taskOutputAvailable: _taskOutputText.isNotEmpty,
                   ),
                 ),
                 Positioned(
@@ -232,6 +245,8 @@ class _MainPageState extends State<MainPage> {
                           context: controller.composerContext.value,
                           permissionMode: controller.permissionMode.value,
                           onSend: _sendPrompt,
+                          running: controller.timelineSessionRunning.value,
+                          onStop: controller.interrupt,
                           onModelChanged: controller.setComposerModel,
                           onReasoningChanged: controller.setReasoningEffort,
                           onPermissionModeChanged: controller.setPermissionMode,
@@ -292,15 +307,62 @@ class _MainPageState extends State<MainPage> {
     return path;
   }
 
-  GitChangeOverview get _gitChangeOverview =>
-      parseGitChangeOverview(controller.gitSnapshot.value);
-
   GitChangeSummary? get _gitChangeSummary {
     final snapshot = controller.gitSnapshot.value;
     if (snapshot == null) return null;
     return GitChangeSummary.tryParse(
       snapshot.numstat.isNotEmpty ? snapshot.numstat : snapshot.stat,
     );
+  }
+
+  String get _taskOutputText {
+    final sections = <String>[];
+    for (final event in controller.events) {
+      final text = event.text.trim();
+      final kind = event.kind.trim().toLowerCase();
+      if (text.isEmpty || kind == 'token_usage') continue;
+      final label = switch (kind) {
+        'user' => '用户',
+        'assistant' => '助手',
+        'reasoning' => '思考',
+        'tool_call' => '工具',
+        'running' => '状态',
+        'interrupted' => '状态',
+        _ => '事件',
+      };
+      sections.add('$label\n$text');
+    }
+    return sections.join('\n\n');
+  }
+
+  void _showTaskOutput() {
+    final output = _taskOutputText;
+    if (output.isEmpty) return;
+    showDialog<void>(
+      context: context,
+      builder: (_) =>
+          TaskOutputDialog(output: output, subtitle: _selectedTaskTitle),
+    );
+  }
+
+  Future<void> _copyTaskOutput() async {
+    final output = _taskOutputText;
+    if (output.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: output));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('任务输出已复制')));
+  }
+
+  String get _selectedTaskTitle {
+    final selectedId = controller.selectedSessionId.value;
+    if (selectedId != null) {
+      for (final session in controller.sessions) {
+        if (session.id == selectedId) return session.displayTitle;
+      }
+    }
+    return '当前任务';
   }
 
   String get _timelineSignature {

@@ -16,6 +16,7 @@ class AppInitializer {
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
     ]);
+    await BridgeController.initializeStorage();
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(statusBarColor: Color(0x00000000)),
     );

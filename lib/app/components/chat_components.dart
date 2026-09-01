@@ -1,6 +1,6 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -211,17 +211,10 @@ class _EventImagePreviewDialog extends StatelessWidget {
           Positioned(
             top: media.padding.top + 12,
             right: 16,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.36),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withValues(alpha: 0.20)),
-              ),
-              child: IconButton(
-                tooltip: '关闭',
-                icon: const Icon(RecodexIcons.close, color: Colors.white),
-                onPressed: () => Navigator.of(context).pop(),
-              ),
+            child: IconButton(
+              tooltip: '关闭',
+              icon: const Icon(RecodexIcons.close, color: Colors.white),
+              onPressed: () => Navigator.of(context).pop(),
             ),
           ),
         ],
@@ -313,10 +306,10 @@ class AssistantAnswerBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.recodexColors;
     final textBuffer = StringBuffer();
     final children = <Widget>[];
     final gitSummaries = <GitChangeSummary>[];
+    final steps = <_AnswerStep>[];
     var hasTerminalEvent = false;
     SessionEvent? latestLiveEvent;
 
@@ -336,6 +329,14 @@ class AssistantAnswerBlock extends StatelessWidget {
       textBuffer.clear();
     }
 
+    void appendStep(_AnswerStep step) {
+      steps.add(step);
+      if (children.isNotEmpty) {
+        children.add(const SizedBox(height: 7));
+      }
+      children.add(_AnswerStepRow(step: step));
+    }
+
     for (final event in events) {
       if (_isDoneEvent(event.kind)) {
         hasTerminalEvent = true;
@@ -352,17 +353,18 @@ class AssistantAnswerBlock extends StatelessWidget {
       if (event.kind == 'interrupted') {
         hasTerminalEvent = true;
         flushText();
-        children.add(
-          const _InlineStatusRow(
-            icon: RecodexIcons.pause,
-            title: '已中断',
-            detail: '用户取消',
-          ),
+        const step = _AnswerStep(
+          icon: RecodexIcons.pause,
+          title: '已中断',
+          detail: '用户取消',
         );
+        appendStep(step);
         continue;
       }
       if (_isToolEvent(event.kind)) {
         flushText();
+        final step = _AnswerStep.fromToolEvent(event);
+        appendStep(step);
         latestLiveEvent = event;
         continue;
       }
@@ -370,7 +372,27 @@ class AssistantAnswerBlock extends StatelessWidget {
       if (gitSummary != null) {
         flushText();
         gitSummaries.add(gitSummary);
+        final step = _AnswerStep(
+          icon: RecodexIcons.gitCompare,
+          title: '已更新文件',
+          detail: '${gitSummary.files.length} 个文件',
+        );
+        appendStep(step);
         continue;
+      }
+      final imageCount = event.attachments
+          .where(
+            (attachment) =>
+                attachment.type == 'image' && attachment.dataUrl.isNotEmpty,
+          )
+          .length;
+      if (imageCount > 0) {
+        flushText();
+        final step = _AnswerStep(
+          icon: RecodexIcons.image,
+          title: '已查看 $imageCount 张图像',
+        );
+        appendStep(step);
       }
       final text = _cleanEventText(event);
       if (text.isEmpty) continue;
@@ -394,11 +416,15 @@ class AssistantAnswerBlock extends StatelessWidget {
         ),
       );
     }
-    if (!completed && !hasTerminalEvent && latestLiveEvent != null) {
+    if (!completed && !hasTerminalEvent) {
       if (children.isNotEmpty) {
         children.add(const SizedBox(height: 18));
       }
-      children.add(_LiveActivityRow.fromEvent(latestLiveEvent));
+      children.add(
+        latestLiveEvent == null
+            ? const _LiveActivityRow(text: '正在生成回答...')
+            : _LiveActivityRow.fromEvent(latestLiveEvent),
+      );
     }
 
     final isDone = completed || hasTerminalEvent;
@@ -414,52 +440,408 @@ class AssistantAnswerBlock extends StatelessWidget {
       );
     }
     final elapsed = _elapsedLabel(events);
-    final usage = _latestUsage(events);
-    final activeColor = Theme.of(context).colorScheme.primary;
+    final isActive = !isDone;
+    final summarySteps = steps.isEmpty && isActive
+        ? const [_AnswerStep(icon: RecodexIcons.reasoning, title: '正在思考')]
+        : steps;
 
     return Align(
       alignment: Alignment.centerLeft,
       child: FractionallySizedBox(
-        widthFactor: 0.9,
+        widthFactor: 0.96,
         alignment: Alignment.centerLeft,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: isDone
-                ? colors.assistantBubble
-                : activeColor.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(
-              color: isDone
-                  ? colors.glassBorder
-                  : activeColor.withValues(alpha: 0.48),
-              width: isDone ? 1 : 1.4,
-            ),
-            boxShadow: isDone
-                ? null
-                : [
-                    BoxShadow(
-                      color: activeColor.withValues(alpha: 0.22),
-                      offset: const Offset(0, 16),
-                      blurRadius: 34,
-                    ),
-                  ],
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(22, 18, 22, 22),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _AnswerStatusHeader(
-                  done: isDone,
-                  elapsed: elapsed,
-                  usage: usage,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _AnswerStatusHeader(done: isDone, elapsed: elapsed),
+              const SizedBox(height: 16),
+              ...children,
+              if (summarySteps.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.center,
+                  child: _StepSummaryPill(
+                    steps: summarySteps,
+                    active: isActive,
+                  ),
                 ),
-                const SizedBox(height: 18),
-                ...children,
               ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AnswerStep {
+  const _AnswerStep({required this.icon, required this.title, this.detail});
+
+  factory _AnswerStep.fromToolEvent(SessionEvent event) {
+    final command = _extractCommand(event.text);
+    final raw = event.text.toLowerCase();
+    final title = command != null
+        ? '运行了命令'
+        : raw.contains('read') ||
+              raw.contains('file') ||
+              raw.contains('读取') ||
+              raw.contains('文件')
+        ? '加载了工具读取文件'
+        : '已运行工具';
+    return _AnswerStep(icon: RecodexIcons.terminal, title: title);
+  }
+
+  final IconData icon;
+  final String title;
+  final String? detail;
+}
+
+class _AnswerStepRow extends StatelessWidget {
+  const _AnswerStepRow({required this.step});
+
+  final _AnswerStep step;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final fontScale = Get.find<ThemeController>().fontScale.value;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(step.icon, size: 16, color: colors.textMuted),
+        const SizedBox(width: 9),
+        Flexible(
+          child: Text(
+            step.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: _scaledFontSize(13.5, fontScale),
+              fontWeight: FontWeight.w600,
             ),
           ),
         ),
+        if ((step.detail ?? '').trim().isNotEmpty) ...[
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              step.detail!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: colors.textMuted.withValues(alpha: 0.82),
+                fontSize: _scaledFontSize(13, fontScale),
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _StepSummaryPill extends StatelessWidget {
+  const _StepSummaryPill({required this.steps, required this.active});
+
+  final List<_AnswerStep> steps;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final fontScale = Get.find<ThemeController>().fontScale.value;
+    final total = math.max(1, steps.length);
+    final current = active ? math.max(1, steps.length) : total;
+    final label = active ? '第 $current / $total 步' : '已完成 ${steps.length} 步';
+    return Tooltip(
+      message: '查看步骤',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(999),
+          onTap: () => showDialog<void>(
+            context: context,
+            builder: (_) => _StepSummaryDialog(steps: steps),
+          ),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: colors.surfaceOverlay.withValues(alpha: 0.28),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: colors.glassBorder.withValues(alpha: 0.56),
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    RecodexIcons.circle,
+                    size: 15,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: colors.textMuted,
+                      fontSize: _scaledFontSize(12.5, fontScale),
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StepSummaryDialog extends StatelessWidget {
+  const _StepSummaryDialog({required this.steps});
+
+  final List<_AnswerStep> steps;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final fontScale = Get.find<ThemeController>().fontScale.value;
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      backgroundColor: colors.glassColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: colors.glassBorder.withValues(alpha: 0.72)),
+      ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 430),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '执行步骤',
+                      style: TextStyle(
+                        color: colors.text,
+                        fontSize: _scaledFontSize(16, fontScale),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: Icon(RecodexIcons.close, color: colors.textMuted),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: steps.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 13),
+                  itemBuilder: (_, index) => _StepDialogRow(step: steps[index]),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StepDialogRow extends StatelessWidget {
+  const _StepDialogRow({required this.step});
+
+  final _AnswerStep step;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final fontScale = Get.find<ThemeController>().fontScale.value;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 3),
+          child: Icon(RecodexIcons.circle, size: 17, color: colors.textMuted),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(text: step.title),
+                if ((step.detail ?? '').trim().isNotEmpty) ...[
+                  const TextSpan(text: '  '),
+                  TextSpan(
+                    text: step.detail,
+                    style: TextStyle(
+                      color: colors.textMuted.withValues(alpha: 0.82),
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: _scaledFontSize(14.5, fontScale),
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FloatingThinkingIndicator extends StatefulWidget {
+  const _FloatingThinkingIndicator({this.size = 28});
+
+  final double size;
+
+  @override
+  State<_FloatingThinkingIndicator> createState() =>
+      _FloatingThinkingIndicatorState();
+}
+
+class _FloatingThinkingIndicatorState extends State<_FloatingThinkingIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  bool _reduceMotion = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final media = MediaQuery.of(context);
+    final reduceMotion = media.disableAnimations || media.accessibleNavigation;
+    if (reduceMotion != _reduceMotion) {
+      _reduceMotion = reduceMotion;
+      if (_reduceMotion) {
+        _controller.stop();
+      } else {
+        _controller.repeat();
+      }
+    } else if (!_reduceMotion && !_controller.isAnimating) {
+      _controller.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final dotSize = math.max(3.0, widget.size * 0.19);
+    Widget dot(int index, double progress) {
+      final phase = (progress + index * 0.17) % 1.0;
+      final lift = _reduceMotion
+          ? 0.0
+          : -math.sin(phase * math.pi * 2) * widget.size * 0.12;
+      final opacity = _reduceMotion
+          ? 0.64
+          : (0.44 + (math.sin(phase * math.pi * 2) + 1) * 0.22)
+                .clamp(0.36, 0.90)
+                .toDouble();
+      return Transform.translate(
+        offset: Offset(0, lift),
+        child: Opacity(
+          opacity: opacity,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: colors.textMuted,
+              shape: BoxShape.circle,
+            ),
+            child: SizedBox.square(dimension: dotSize),
+          ),
+        ),
+      );
+    }
+
+    Widget dots(double progress) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          dot(0, progress),
+          SizedBox(width: dotSize * 0.72),
+          dot(1, progress),
+          SizedBox(width: dotSize * 0.72),
+          dot(2, progress),
+        ],
+      );
+    }
+
+    Widget indicator(double progress) {
+      final ringProgress = (progress + 0.28) % 1.0;
+      final ringScale = _reduceMotion ? 0.74 : 0.72 + ringProgress * 0.25;
+      final ringOpacity = _reduceMotion
+          ? 0.24
+          : (0.26 * (1 - ringProgress)).clamp(0.04, 0.26).toDouble();
+      return Stack(
+        alignment: Alignment.center,
+        children: [
+          Transform.scale(
+            scale: ringScale,
+            child: Opacity(
+              opacity: ringOpacity,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: colors.textMuted, width: 1.2),
+                ),
+                child: SizedBox.square(dimension: widget.size),
+              ),
+            ),
+          ),
+          dots(progress),
+        ],
+      );
+    }
+
+    if (_reduceMotion) {
+      return SizedBox(
+        width: widget.size,
+        height: widget.size,
+        child: indicator(0),
+      );
+    }
+    return SizedBox(
+      width: widget.size,
+      height: widget.size,
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (_, _) => indicator(_controller.value),
       ),
     );
   }
@@ -487,179 +869,82 @@ class _LiveActivityRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
-    final activeColor = Theme.of(context).colorScheme.primary;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.surfaceOverlay.withValues(alpha: 0.42),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: colors.glassBorder.withValues(alpha: 0.62)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  RecodexIcons.terminal,
-                  size: 17,
-                  color: activeColor.withValues(alpha: 0.82),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    text,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: colors.text.withValues(alpha: 0.92),
-                      fontSize: _scaledFontSize(15, fontScale),
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if ((detail ?? '').trim().isNotEmpty) ...[
-              const SizedBox(height: 18),
-              Text(
-                detail!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: colors.textMuted,
-                  fontSize: _scaledFontSize(14, fontScale),
-                  fontWeight: FontWeight.w700,
-                ),
+    return Padding(
+      padding: const EdgeInsets.only(top: 2, bottom: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const _FloatingThinkingIndicator(size: 28),
+          const SizedBox(width: 4),
+          Icon(RecodexIcons.terminal, size: 17, color: colors.textMuted),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: colors.text.withValues(alpha: 0.92),
+                fontSize: _scaledFontSize(15, fontScale),
+                fontWeight: FontWeight.w600,
               ),
-            ],
+            ),
+          ),
+          if ((detail ?? '').trim().isNotEmpty) ...[
+            const SizedBox(width: 12),
+            Text(
+              detail!,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: colors.textMuted,
+                fontSize: _scaledFontSize(13, fontScale),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
 }
 
 class _AnswerStatusHeader extends StatelessWidget {
-  const _AnswerStatusHeader({
-    required this.done,
-    required this.elapsed,
-    required this.usage,
-  });
+  const _AnswerStatusHeader({required this.done, required this.elapsed});
 
   final bool done;
   final String? elapsed;
-  final TokenUsage? usage;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
-    final activeColor = Theme.of(context).colorScheme.primary;
     final label = done
         ? elapsed == null
               ? '已处理'
               : '已处理 $elapsed'
         : elapsed == null
-        ? '正在思考...'
-        : '正在思考... $elapsed';
+        ? '正在处理'
+        : '正在处理 $elapsed';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (done)
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                label,
-                style: TextStyle(
-                  color: colors.textMuted,
-                  fontSize: _scaledFontSize(14, fontScale),
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Icon(
-                RecodexIcons.chevronRight,
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
                 color: colors.textMuted,
-                size: 19,
-              ),
-              if (usage != null) ...[
-                const SizedBox(width: 10),
-                _TokenUsagePill(usage: usage!),
-              ],
-            ],
-          )
-        else
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: activeColor.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: activeColor.withValues(alpha: 0.28)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 7, 12, 7),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  SizedBox.square(
-                    dimension: 13,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation<Color>(activeColor),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: activeColor,
-                      fontSize: _scaledFontSize(14, fontScale),
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ],
+                fontSize: _scaledFontSize(14, fontScale),
+                fontWeight: FontWeight.w700,
               ),
             ),
-          ),
-        const SizedBox(height: 12),
-        Divider(
-          height: 1,
-          color: (done ? colors.textMuted : activeColor).withValues(
-            alpha: 0.16,
-          ),
+          ],
         ),
+        const SizedBox(height: 10),
+        Divider(height: 1, color: colors.textMuted.withValues(alpha: 0.16)),
       ],
-    );
-  }
-}
-
-class _TokenUsagePill extends StatelessWidget {
-  const _TokenUsagePill({required this.usage});
-
-  final TokenUsage usage;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.surfaceOverlay.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: colors.glassBorder),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-        child: Text(
-          '${_formatCompactNumber(usage.totalTokens)} tokens',
-          style: TextStyle(
-            color: colors.textMuted,
-            fontSize: 12,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-      ),
     );
   }
 }
@@ -749,7 +1034,7 @@ class _AnswerLine extends StatelessWidget {
         color: colors.text,
         fontSize: _scaledFontSize(isHeading ? 16.5 : 15.5, fontScale),
         height: 1.62,
-        fontWeight: isHeading ? FontWeight.w600 : FontWeight.w300,
+        fontWeight: isHeading ? FontWeight.w600 : FontWeight.w400,
         letterSpacing: 0,
       ),
     );
@@ -819,7 +1104,7 @@ class _ModifiedFilesBlock extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: isDark
-              ? const Color(0xff17181c).withValues(alpha: 0.86)
+              ? const Color(0xff171717).withValues(alpha: 0.86)
               : colors.assistantBubble.withValues(alpha: 0.78),
           borderRadius: BorderRadius.circular(22),
           border: Border.all(color: colors.glassBorder.withValues(alpha: 0.92)),
@@ -943,60 +1228,6 @@ class _ModifiedFileBlockRow extends StatelessWidget {
   }
 }
 
-class _InlineStatusRow extends StatelessWidget {
-  const _InlineStatusRow({
-    required this.icon,
-    required this.title,
-    required this.detail,
-  });
-
-  final IconData icon;
-  final String title;
-  final String detail;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final fontScale = Get.find<ThemeController>().fontScale.value;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.userBubble.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: colors.textMuted),
-            const SizedBox(width: 10),
-            Text(
-              title,
-              style: TextStyle(
-                color: colors.textMuted,
-                fontSize: _scaledFontSize(14, fontScale),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                detail,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: colors.text,
-                  fontSize: _scaledFontSize(14, fontScale),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class ToolCallRow extends StatelessWidget {
   const ToolCallRow({
     required this.title,
@@ -1113,7 +1344,7 @@ class _GitChangePanel extends StatelessWidget {
     final fontScale = Get.find<ThemeController>().fontScale.value;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final panelColor = isDark
-        ? const Color(0xff17181c).withValues(alpha: 0.86)
+        ? const Color(0xff171717).withValues(alpha: 0.86)
         : colors.assistantBubble.withValues(alpha: 0.78);
     final rowDivider = colors.textMuted.withValues(alpha: isDark ? 0.14 : 0.12);
     final fileCountLabel = '已编辑 ${summary.files.length} 个文件';
@@ -1137,23 +1368,7 @@ class _GitChangePanel extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
             child: Row(
               children: [
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: colors.surfaceOverlay.withValues(alpha: 0.74),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: colors.glassBorder.withValues(alpha: 0.78),
-                    ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: Icon(
-                      RecodexIcons.gitCompare,
-                      size: 18,
-                      color: colors.icon,
-                    ),
-                  ),
-                ),
+                Icon(RecodexIcons.gitCompare, size: 21, color: colors.icon),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -1425,6 +1640,8 @@ class ComposerBar extends StatelessWidget {
     required this.onReasoningChanged,
     required this.onPermissionModeChanged,
     required this.onVoicePressed,
+    this.running = false,
+    this.onStop,
     this.listening = false,
     super.key,
   });
@@ -1436,6 +1653,8 @@ class ComposerBar extends StatelessWidget {
   final ComposerContext context;
   final String permissionMode;
   final VoidCallback onSend;
+  final bool running;
+  final VoidCallback? onStop;
   final ValueChanged<String> onModelChanged;
   final ValueChanged<String> onReasoningChanged;
   final ValueChanged<String> onPermissionModeChanged;
@@ -1450,7 +1669,7 @@ class ComposerBar extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         _ComposerGlassPanel(
-          padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
           radius: 32,
           child: Column(
             children: [
@@ -1459,29 +1678,13 @@ class ComposerBar extends StatelessWidget {
                   borderRadius: BorderRadius.circular(23),
                   border: Border.all(
                     color: colors.glassBorder.withValues(
-                      alpha: isDark ? 0.46 : 0.96,
+                      alpha: isDark ? 0.24 : 0.72,
                     ),
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: colors.glassHighlight.withValues(
-                        alpha: isDark ? 0.04 : 0.62,
-                      ),
-                      offset: const Offset(-3, -3),
-                      blurRadius: 10,
-                    ),
-                    BoxShadow(
-                      color: colors.headerShadow.withValues(
-                        alpha: isDark ? 0.28 : 0.08,
-                      ),
-                      offset: const Offset(0, 5),
-                      blurRadius: 14,
-                    ),
-                  ],
                 ),
                 child: TextField(
                   controller: controller,
-                  enabled: enabled,
+                  enabled: enabled && !running,
                   minLines: 1,
                   maxLines: 4,
                   style: TextStyle(
@@ -1499,7 +1702,7 @@ class ComposerBar extends StatelessWidget {
                     enabledBorder: InputBorder.none,
                     focusedBorder: InputBorder.none,
                     filled: false,
-                    contentPadding: const EdgeInsets.fromLTRB(14, 9, 14, 12),
+                    contentPadding: const EdgeInsets.fromLTRB(14, 10, 14, 13),
                   ),
                 ),
               ),
@@ -1510,58 +1713,88 @@ class ComposerBar extends StatelessWidget {
                     icon: RecodexIcons.add,
                     onPressed: enabled ? () {} : null,
                   ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      physics: const BouncingScrollPhysics(),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _ComposerMenuButton(
-                            icon: RecodexIcons.fast,
-                            label: this.context.model,
-                            values: this.context.models,
-                            labelForValue: this.context.modelLabel,
-                            onChanged: onModelChanged,
-                          ),
-                          const SizedBox(width: 6),
-                          _ComposerMenuButton(
-                            icon: RecodexIcons.reasoning,
-                            label: _reasoningLabel(
-                              this.context.reasoningEffort,
+                  if (running) ...[
+                    const SizedBox(width: 6),
+                    _PermissionModePill(
+                      icon: RecodexIcons.shield,
+                      value: permissionMode,
+                      values: permissionModes,
+                      onChanged: onPermissionModeChanged,
+                    ),
+                    const Spacer(),
+                    const _FloatingThinkingIndicator(size: 24),
+                    const SizedBox(width: 4),
+                    Flexible(child: _RunningModelLabel(context: this.context)),
+                  ] else ...[
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _ComposerMenuButton(
+                              icon: RecodexIcons.fast,
+                              label: this.context.model,
+                              values: this.context.models,
+                              labelForValue: this.context.modelLabel,
+                              onChanged: onModelChanged,
                             ),
-                            values: this.context.reasoningEfforts,
-                            labelForValue: _reasoningLabel,
-                            onChanged: onReasoningChanged,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  _ComposerIconButton(
-                    icon: listening ? RecodexIcons.mic : RecodexIcons.mic,
-                    active: listening,
-                    onPressed: enabled ? onVoicePressed : null,
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox.square(
-                    dimension: 48,
-                    child: FilledButton(
-                      onPressed: enabled ? onSend : null,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: Colors.white.withValues(alpha: 0.72),
-                        foregroundColor: const Color(0xff7d848c),
-                        disabledBackgroundColor: Colors.white.withValues(
-                          alpha: 0.56,
+                            const SizedBox(width: 6),
+                            _ComposerMenuButton(
+                              icon: RecodexIcons.reasoning,
+                              label: _reasoningLabel(
+                                this.context.reasoningEffort,
+                              ),
+                              values: this.context.reasoningEfforts,
+                              labelForValue: _reasoningLabel,
+                              onChanged: onReasoningChanged,
+                            ),
+                          ],
                         ),
-                        disabledForegroundColor: const Color(0xffb6bcc4),
-                        shape: const CircleBorder(),
-                        padding: EdgeInsets.zero,
-                        elevation: 0,
                       ),
-                      child: const Icon(RecodexIcons.arrowUp, size: 26),
+                    ),
+                    const SizedBox(width: 8),
+                    _ComposerIconButton(
+                      icon: RecodexIcons.mic,
+                      active: listening,
+                      onPressed: enabled ? onVoicePressed : null,
+                    ),
+                  ],
+                  const SizedBox(width: 8),
+                  Tooltip(
+                    message: running ? '停止任务' : '发送消息',
+                    child: SizedBox.square(
+                      dimension: 48,
+                      child: FilledButton(
+                        onPressed: running
+                            ? onStop
+                            : enabled
+                            ? onSend
+                            : null,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: running ? colors.text : colors.text,
+                          foregroundColor: running
+                              ? (isDark
+                                    ? colors.glassColor
+                                    : colors.surfaceOverlay)
+                              : (isDark
+                                    ? colors.glassColor
+                                    : colors.glassHighlight),
+                          disabledBackgroundColor: colors.textMuted.withValues(
+                            alpha: 0.34,
+                          ),
+                          disabledForegroundColor: colors.textMuted,
+                          shape: const CircleBorder(),
+                          padding: EdgeInsets.zero,
+                          elevation: 0,
+                        ),
+                        child: Icon(
+                          running ? RecodexIcons.stop : RecodexIcons.arrowUp,
+                          size: running ? 20 : 26,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -1569,59 +1802,87 @@ class ComposerBar extends StatelessWidget {
             ],
           ),
         ),
-        const SizedBox(height: 12),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              _ContextMenuPill(
-                icon: RecodexIcons.laptop,
-                label: this.context.transport,
-                items: [
-                  _ContextMenuItem(
-                    icon: RecodexIcons.laptop,
-                    title: this.context.transport,
-                    subtitle: '本机 Bridge 上下文',
-                  ),
-                  _ContextMenuItem(
-                    icon: RecodexIcons.accountTree,
-                    title: this.context.branch.isEmpty
-                        ? '未读取分支'
-                        : this.context.branch,
-                    subtitle: '当前 Git 分支',
-                  ),
-                  _ContextMenuItem(
-                    icon: RecodexIcons.shield,
-                    title: this.context.requireConfirmGitWrite
-                        ? 'Git 写操作需确认'
-                        : '信任当前工作区',
-                    subtitle: '权限策略',
-                  ),
-                ],
-              ),
-              const SizedBox(width: 10),
-              _PermissionModePill(
-                icon: RecodexIcons.shield,
-                value: permissionMode,
-                values: permissionModes,
-                onChanged: onPermissionModeChanged,
-              ),
-              const SizedBox(width: 18),
-              _ContextPill(
-                icon: RecodexIcons.accountTree,
-                label: this.context.branch.isEmpty
-                    ? 'branch'
-                    : this.context.branch,
-              ),
-              const SizedBox(width: 10),
-              _ContextPill(
-                icon: RecodexIcons.cloudDone,
-                label: this.context.approvalPolicy,
-              ),
-            ],
+        if (!running) ...[
+          const SizedBox(height: 12),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _ContextMenuPill(
+                  icon: RecodexIcons.laptop,
+                  label: this.context.transport,
+                  items: [
+                    _ContextMenuItem(
+                      icon: RecodexIcons.laptop,
+                      title: this.context.transport,
+                      subtitle: '本机 Bridge 上下文',
+                    ),
+                    _ContextMenuItem(
+                      icon: RecodexIcons.accountTree,
+                      title: this.context.branch.isEmpty
+                          ? '未读取分支'
+                          : this.context.branch,
+                      subtitle: '当前 Git 分支',
+                    ),
+                    _ContextMenuItem(
+                      icon: RecodexIcons.shield,
+                      title: this.context.requireConfirmGitWrite
+                          ? 'Git 写操作需确认'
+                          : '信任当前工作区',
+                      subtitle: '权限策略',
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 10),
+                _PermissionModePill(
+                  icon: RecodexIcons.shield,
+                  value: permissionMode,
+                  values: permissionModes,
+                  onChanged: onPermissionModeChanged,
+                ),
+                const SizedBox(width: 18),
+                _ContextPill(
+                  icon: RecodexIcons.accountTree,
+                  label: this.context.branch.isEmpty
+                      ? 'branch'
+                      : this.context.branch,
+                ),
+                const SizedBox(width: 10),
+                _ContextPill(
+                  icon: RecodexIcons.cloudDone,
+                  label: this.context.approvalPolicy,
+                ),
+              ],
+            ),
           ),
-        ),
+        ],
       ],
+    );
+  }
+}
+
+class _RunningModelLabel extends StatelessWidget {
+  const _RunningModelLabel({required this.context});
+
+  final ComposerContext context;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final model = this.context.model.trim().isEmpty
+        ? 'Codex'
+        : this.context.modelLabel(this.context.model);
+    final reasoning = _reasoningLabel(this.context.reasoningEffort);
+    return Text(
+      '$model  $reasoning',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      textAlign: TextAlign.right,
+      style: TextStyle(
+        color: colors.textMuted,
+        fontSize: 14,
+        fontWeight: FontWeight.w700,
+      ),
     );
   }
 }
@@ -1642,66 +1903,24 @@ class _ComposerGlassPanel extends StatelessWidget {
     final colors = context.recodexColors;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final shape = BorderRadius.circular(radius);
-    final baseAlpha = isDark ? 0.70 : 0.76;
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: shape,
         boxShadow: [
           BoxShadow(
-            color: colors.headerShadow.withValues(alpha: isDark ? 0.58 : 0.24),
-            offset: const Offset(0, 24),
-            blurRadius: 42,
-          ),
-          BoxShadow(
-            color: colors.icon.withValues(alpha: isDark ? 0.16 : 0.10),
-            offset: const Offset(0, 9),
-            blurRadius: 28,
+            color: colors.headerShadow.withValues(alpha: isDark ? 0.34 : 0.12),
+            offset: const Offset(0, 8),
+            blurRadius: 20,
           ),
         ],
       ),
-      child: ClipRRect(
-        borderRadius: shape,
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 72, sigmaY: 72),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              borderRadius: shape,
-              color: colors.glassColor.withValues(alpha: baseAlpha),
-              border: Border.all(
-                color: colors.glassBorder.withValues(alpha: isDark ? 0.72 : 1),
-                width: 1.2,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: colors.glassHighlight.withValues(
-                    alpha: isDark ? 0.10 : 0.74,
-                  ),
-                  offset: const Offset(-7, -7),
-                  blurRadius: 22,
-                ),
-              ],
-            ),
-            child: Stack(
-              children: [
-                Positioned(
-                  left: 14,
-                  right: 14,
-                  top: 1,
-                  height: 1,
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: colors.glassHighlight.withValues(
-                        alpha: isDark ? 0.18 : 0.92,
-                      ),
-                      borderRadius: BorderRadius.circular(1),
-                    ),
-                  ),
-                ),
-                Padding(padding: padding, child: child),
-              ],
-            ),
-          ),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: shape,
+          color: colors.glassColor,
+          border: Border.all(color: colors.glassBorder, width: 1),
         ),
+        child: Padding(padding: padding, child: child),
       ),
     );
   }
@@ -1768,7 +1987,7 @@ class _ComposerMenuButton extends StatelessWidget {
           )
           .toList(),
       leadingIcon: icon,
-      maxWidth: 112,
+      maxWidth: 168,
       compact: true,
       tooltip: '选择$label',
       onChanged: onChanged,
@@ -2153,31 +2372,18 @@ String? _elapsedLabel(List<SessionEvent> events) {
   final elapsed = times.last.difference(times.first);
   if (elapsed.isNegative) return null;
   final seconds = elapsed.inSeconds;
-  if (seconds < 1) return '<1s';
+  if (seconds < 1) return '少于 1 秒';
   final minutes = seconds ~/ 60;
   final remainingSeconds = seconds % 60;
-  if (minutes == 0) return '${remainingSeconds}s';
+  if (minutes == 0) return '$remainingSeconds 秒';
   final hours = minutes ~/ 60;
   final remainingMinutes = minutes % 60;
-  if (hours == 0) return '${minutes}m ${remainingSeconds}s';
-  return '${hours}h ${remainingMinutes}m';
-}
-
-TokenUsage? _latestUsage(List<SessionEvent> events) {
-  for (final event in events.reversed) {
-    if (event.usage != null) return event.usage;
+  if (hours == 0) {
+    if (remainingSeconds == 0) return '$minutes 分钟';
+    return '$minutes 分 $remainingSeconds 秒';
   }
-  return null;
-}
-
-String _formatCompactNumber(int value) {
-  if (value >= 1000000) {
-    return '${(value / 1000000).toStringAsFixed(1)}M';
-  }
-  if (value >= 1000) {
-    return '${(value / 1000).toStringAsFixed(1)}K';
-  }
-  return '$value';
+  if (remainingMinutes == 0) return '$hours 小时';
+  return '$hours 小时 $remainingMinutes 分';
 }
 
 String _cleanEventText(SessionEvent event) {

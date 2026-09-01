@@ -628,20 +628,8 @@ class _PairingListHero extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(26, 24, 26, 24),
       child: Row(
         children: [
-          Container(
-            width: 58,
-            height: 58,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: colors.surfaceOverlay.withValues(alpha: 0.88),
-            ),
-            child: Icon(
-              connected ? RecodexIcons.devices : RecodexIcons.devices,
-              color: colors.icon,
-              size: 28,
-            ),
-          ),
-          const SizedBox(width: 16),
+          Icon(RecodexIcons.devices, color: colors.icon, size: 30),
+          const SizedBox(width: 18),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -755,17 +743,12 @@ class _PairingListTile extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(18, 16, 12, 16),
             child: Row(
               children: [
-                CircleAvatar(
-                  radius: 22,
-                  backgroundColor: active
-                      ? colors.icon.withValues(alpha: 0.14)
-                      : colors.surfaceOverlay,
-                  child: Icon(
-                    active ? RecodexIcons.link : RecodexIcons.router,
-                    color: active ? colors.icon : colors.textMuted,
-                  ),
+                Icon(
+                  active ? RecodexIcons.link : RecodexIcons.router,
+                  color: active ? colors.icon : colors.textMuted,
+                  size: 24,
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 16),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -848,20 +831,12 @@ class _PairingHero extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
       child: Row(
         children: [
-          Container(
-            width: 58,
-            height: 58,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: colors.surfaceOverlay.withValues(alpha: 0.88),
-            ),
-            child: Icon(
-              connected ? RecodexIcons.link : RecodexIcons.linkOff,
-              color: colors.icon,
-              size: 28,
-            ),
+          Icon(
+            connected ? RecodexIcons.link : RecodexIcons.linkOff,
+            color: colors.icon,
+            size: 30,
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 18),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

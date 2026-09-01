@@ -96,17 +96,7 @@ class _DiffFileHeader extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
         child: Row(
           children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: colors.icon.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: colors.icon.withValues(alpha: 0.18)),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(10),
-                child: Icon(RecodexIcons.gitCompare, color: colors.icon),
-              ),
-            ),
+            Icon(RecodexIcons.gitCompare, color: colors.icon, size: 26),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -214,8 +204,8 @@ class _DiffCodePanel extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: Theme.of(context).brightness == Brightness.dark
-            ? const Color(0xff10141d).withValues(alpha: 0.92)
-            : const Color(0xfffbfcff).withValues(alpha: 0.86),
+            ? const Color(0xff171717).withValues(alpha: 0.92)
+            : const Color(0xfffbfbfb).withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: colors.glassBorder),
         boxShadow: [

@@ -27,6 +27,7 @@ abstract final class RecodexIcons {
   static const IconData darkMode = LucideIcons.moon300;
   static const IconData fileText = LucideIcons.fileText300;
   static const IconData gitCompare = LucideIcons.gitCompare300;
+  static const IconData image = LucideIcons.image300;
   static const IconData devices = LucideIcons.monitorSmartphone300;
   static const IconData edit = LucideIcons.pencil300;
   static const IconData error = LucideIcons.circleAlert300;
@@ -62,6 +63,7 @@ abstract final class RecodexIcons {
   static const IconData shield = LucideIcons.shield300;
   static const IconData sun = LucideIcons.sun300;
   static const IconData sync = LucideIcons.refreshCw300;
+  static const IconData stop = LucideIcons.square300;
   static const IconData terminal = LucideIcons.squareTerminal300;
   static const IconData fontSize = LucideIcons.type300;
   static const IconData tune = LucideIcons.slidersHorizontal300;

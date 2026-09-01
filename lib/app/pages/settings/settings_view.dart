@@ -60,7 +60,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     icon: RecodexIcons.darkMode,
                     title: '主题设置',
                     subtitle:
-                        '${themeController.preference.value.label} · ${themeController.accent.value.label}',
+                        '${themeController.preference.value.label} · 黑白主题',
                     trailingIcon: RecodexIcons.chevronRight,
                     onTap: () => _openPage(Routes.theme),
                   ),

@@ -190,17 +190,7 @@ class _LicenseHero extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 20, 22, 20),
       child: Row(
         children: [
-          SizedBox.square(
-            dimension: 58,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: colors.icon.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(17),
-                border: Border.all(color: colors.icon.withValues(alpha: 0.20)),
-              ),
-              child: Icon(RecodexIcons.scale, color: colors.icon, size: 26),
-            ),
-          ),
+          Icon(RecodexIcons.scale, color: colors.icon, size: 30),
           const SizedBox(width: 15),
           Expanded(
             child: Column(
@@ -353,17 +343,8 @@ class _LicenseRow extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(18, 14, 14, 14),
               child: Row(
                 children: [
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: colors.icon.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(11),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: Icon(icon, color: colors.icon, size: 19),
-                    ),
-                  ),
-                  const SizedBox(width: 13),
+                  Icon(icon, color: colors.icon, size: 22),
+                  const SizedBox(width: 14),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,

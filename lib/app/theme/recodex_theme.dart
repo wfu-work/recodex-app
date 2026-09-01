@@ -148,31 +148,31 @@ extension RecodexThemeContext on BuildContext {
 enum RecodexThemeAccent {
   azure(
     label: '天空蓝',
-    description: '克制理性，适合长时间查看任务和代码状态',
-    primary: Color(0xff3448f4),
-    secondary: Color(0xff4f7dff),
-    darkPrimary: Color(0xff8ba0ff),
+    description: 'Codex 风格的黑白中性主题',
+    primary: Color(0xff171717),
+    secondary: Color(0xff555555),
+    darkPrimary: Color(0xfff5f5f5),
   ),
   amber(
     label: '日曜金',
-    description: '温暖专注，让关键操作和反馈更醒目',
-    primary: Color(0xffc88400),
-    secondary: Color(0xffffb400),
-    darkPrimary: Color(0xffffd26f),
+    description: 'Codex 风格的黑白中性主题',
+    primary: Color(0xff171717),
+    secondary: Color(0xff555555),
+    darkPrimary: Color(0xfff5f5f5),
   ),
   jade(
     label: '松石青',
-    description: '轻盈平和，营造安静稳定的工作氛围',
-    primary: Color(0xff1e8f7a),
-    secondary: Color(0xff5db59f),
-    darkPrimary: Color(0xff75d8c1),
+    description: 'Codex 风格的黑白中性主题',
+    primary: Color(0xff171717),
+    secondary: Color(0xff555555),
+    darkPrimary: Color(0xfff5f5f5),
   ),
   rose(
     label: '晚霞粉',
-    description: '柔和明快，为远程工作界面加入温度',
-    primary: Color(0xffcc5f88),
-    secondary: Color(0xffffa46d),
-    darkPrimary: Color(0xffff96bb),
+    description: 'Codex 风格的黑白中性主题',
+    primary: Color(0xff171717),
+    secondary: Color(0xff555555),
+    darkPrimary: Color(0xfff5f5f5),
   );
 
   const RecodexThemeAccent({
@@ -211,26 +211,26 @@ class RecodexTheme {
 
   static const lightColors = RecodexThemeColors(
     backgroundGradient: [
-      Color(0xffeef5ff),
-      Color(0xfff8f9fc),
-      Color(0xfffff7fb),
+      Color(0xfff5f5f5),
+      Color(0xfffbfbfb),
+      Color(0xfff2f2f2),
     ],
     backgroundStops: [0, 0.54, 1],
-    primaryGlow: Color(0x80dbeaff),
-    secondaryGlow: Color(0x94ffeaf6),
-    glassColor: Color(0xa3ffffff),
-    glassBorder: Color(0xb8ffffff),
-    glassHighlight: Color(0xadffffff),
-    glassShadow: Color(0x218b95a5),
-    headerColor: Color(0xffffffff),
-    headerBorder: Color(0xffd8dee8),
-    headerShadow: Color(0xff9da8b7),
-    text: Color(0xff111318),
-    textMuted: Color(0xff747878),
-    icon: Color(0xff005fc7),
-    surfaceOverlay: Color(0x99ffffff),
-    userBubble: Color(0x14202124),
-    assistantBubble: Color(0xa8ffffff),
+    primaryGlow: Color(0x00ffffff),
+    secondaryGlow: Color(0x00ffffff),
+    glassColor: Color(0xfff9f9f9),
+    glassBorder: Color(0xffdedede),
+    glassHighlight: Color(0xffffffff),
+    glassShadow: Color(0x24000000),
+    headerColor: Color(0xfffafafa),
+    headerBorder: Color(0xffdedede),
+    headerShadow: Color(0xff9a9a9a),
+    text: Color(0xff171717),
+    textMuted: Color(0xff6f6f6f),
+    icon: Color(0xff171717),
+    surfaceOverlay: Color(0xffeeeeee),
+    userBubble: Color(0xffe9e9e9),
+    assistantBubble: Color(0xfffafafa),
     errorBubble: Color(0xb8ffdad6),
     errorBorder: Color(0x2eba1a1a),
     success: Color(0xff0a8f43),
@@ -240,32 +240,27 @@ class RecodexTheme {
 
   static const darkColors = RecodexThemeColors(
     backgroundGradient: [
-      Color(0xff0b1020),
-      Color(0xff111827),
-      Color(0xff201525),
+      Color(0xff101010),
+      Color(0xff171717),
+      Color(0xff202020),
     ],
     backgroundStops: [0, 0.58, 1],
-    primaryGlow: Color(0x66448fff),
-    secondaryGlow: Color(0x4dff6eb7),
-    // Cool blue-gray surfaces keep cards distinct from the page background
-    // without falling into a heavy, near-black panel treatment.
-    glassColor: Color(0x9b29374a),
-    // Keep dark surfaces defined by fill and elevation, not bright outlines.
-    // A quiet blue-gray edge remains discoverable without competing with text.
-    glassBorder: Color(0xff2d3a4d),
-    glassHighlight: Color(0x24ffffff),
-    // Keep elevation readable while avoiding a black halo around every card.
+    primaryGlow: Color(0x00ffffff),
+    secondaryGlow: Color(0x00ffffff),
+    glassColor: Color(0xff242424),
+    glassBorder: Color(0xff393939),
+    glassHighlight: Color(0x18ffffff),
     glassShadow: Color(0x52000000),
-    headerColor: Color(0xff111827),
-    headerBorder: Color(0xff314052),
+    headerColor: Color(0xff181818),
+    headerBorder: Color(0xff383838),
     headerShadow: Color(0xff000000),
-    text: Color(0xfff4f7fb),
-    textMuted: Color(0xffa9b3c2),
-    icon: Color(0xff70b7ff),
-    surfaceOverlay: Color(0x661b2432),
-    userBubble: Color(0x99304255),
-    assistantBubble: Color(0x991b2432),
-    errorBubble: Color(0x803b1d24),
+    text: Color(0xfff5f5f5),
+    textMuted: Color(0xffa4a4a4),
+    icon: Color(0xfff5f5f5),
+    surfaceOverlay: Color(0xff2b2b2b),
+    userBubble: Color(0xff303030),
+    assistantBubble: Color(0xff232323),
+    errorBubble: Color(0xff382424),
     errorBorder: Color(0x66ff8a80),
     success: Color(0xff62d98b),
     error: Color(0xffff8a80),
@@ -278,11 +273,11 @@ class RecodexTheme {
     return _build(
       brightness: Brightness.light,
       colors: _lightColorsFor(accent),
-      paper: const Color(0xfff7f8fb),
-      surface: const Color(0xffffffff),
-      primary: accent.primary,
-      secondary: accent.secondary,
-      outline: const Color(0xffd6d9df),
+      paper: const Color(0xfff5f5f5),
+      surface: const Color(0xfffbfbfb),
+      primary: const Color(0xff171717),
+      secondary: const Color(0xff555555),
+      outline: const Color(0xffd4d4d4),
     );
   }
 
@@ -292,38 +287,22 @@ class RecodexTheme {
     return _build(
       brightness: Brightness.dark,
       colors: _darkColorsFor(accent),
-      paper: const Color(0xff0b1020),
-      surface: const Color(0xff151d2b),
-      primary: accent.darkPrimary,
-      secondary: Color.lerp(accent.darkPrimary, accent.secondary, 0.46)!,
-      outline: const Color(0xff3d4a5f),
+      paper: const Color(0xff101010),
+      surface: const Color(0xff1d1d1d),
+      primary: const Color(0xfff5f5f5),
+      secondary: const Color(0xffc8c8c8),
+      outline: const Color(0xff505050),
     );
   }
 
   static RecodexThemeColors _lightColorsFor(RecodexThemeAccent accent) {
-    return lightColors.copyWith(
-      backgroundGradient: [
-        Color.lerp(const Color(0xfff7f8fb), accent.primary, 0.08)!,
-        const Color(0xfff8f9fc),
-        Color.lerp(const Color(0xfffff9fb), accent.secondary, 0.08)!,
-      ],
-      primaryGlow: accent.primary.withValues(alpha: 0.18),
-      secondaryGlow: accent.secondary.withValues(alpha: 0.16),
-      icon: accent.primary,
-    );
+    // Accent remains in the API for saved settings compatibility. Codex's
+    // mobile visual language uses a neutral black-and-white treatment.
+    return lightColors;
   }
 
   static RecodexThemeColors _darkColorsFor(RecodexThemeAccent accent) {
-    return darkColors.copyWith(
-      backgroundGradient: [
-        Color.lerp(const Color(0xff0b1020), accent.primary, 0.14)!,
-        const Color(0xff111827),
-        Color.lerp(const Color(0xff201525), accent.secondary, 0.12)!,
-      ],
-      primaryGlow: accent.primary.withValues(alpha: 0.34),
-      secondaryGlow: accent.secondary.withValues(alpha: 0.24),
-      icon: accent.darkPrimary,
-    );
+    return darkColors;
   }
 
   static ThemeData _build({
@@ -429,7 +408,7 @@ class RecodexTheme {
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           backgroundColor: primary,
-          foregroundColor: Colors.white,
+          foregroundColor: isDark ? const Color(0xff171717) : Colors.white,
           elevation: 0,
           shape: const StadiumBorder(),
         ),
@@ -455,18 +434,18 @@ class RecodexTheme {
         ),
       ),
       popupMenuTheme: PopupMenuThemeData(
-        color: isDark ? const Color(0xff202a3a) : const Color(0xfffcfdff),
+        color: isDark ? const Color(0xff252525) : const Color(0xfffbfbfb),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(18),
           side: BorderSide(
-            color: isDark ? const Color(0xff29364a) : const Color(0x3d8da0b8),
+            color: isDark ? const Color(0xff3b3b3b) : const Color(0xffdedede),
           ),
         ),
         menuPadding: const EdgeInsets.symmetric(vertical: 7),
         elevation: isDark ? 12 : 6,
         shadowColor: isDark
             ? Colors.black.withValues(alpha: 0.46)
-            : const Color(0x2925384d),
+            : const Color(0x29333333),
         surfaceTintColor: Colors.transparent,
         textStyle: TextStyle(
           color: colors.text,

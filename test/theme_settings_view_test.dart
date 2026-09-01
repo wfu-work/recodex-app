@@ -32,11 +32,12 @@ void main() {
     expect(find.text('跟随系统'), findsOneWidget);
     expect(find.text('浅色模式'), findsOneWidget);
     expect(find.text('深色模式'), findsOneWidget);
+    expect(find.text('黑色'), findsWidgets);
+    expect(find.text('白色'), findsWidgets);
+    expect(find.text('松石青'), findsNothing);
   });
 
-  testWidgets('applies both mode and accent choices immediately', (
-    tester,
-  ) async {
+  testWidgets('applies the selected display mode immediately', (tester) async {
     tester.view.physicalSize = const Size(800, 1000);
     tester.view.devicePixelRatio = 1;
     addTearDown(() {
@@ -59,8 +60,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.preference.value, RecodexThemePreference.dark);
 
-    await tester.tap(find.text('松石青'));
-    await tester.pumpAndSettle();
-    expect(controller.accent.value, RecodexThemeAccent.jade);
+    expect(controller.accent.value, RecodexThemeAccent.azure);
   });
 }

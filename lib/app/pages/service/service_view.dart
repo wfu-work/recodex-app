@@ -171,22 +171,12 @@ class _StatusHero extends StatelessWidget {
       padding: const EdgeInsets.all(22),
       child: Row(
         children: [
-          Container(
-            width: 54,
-            height: 54,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: (connected ? colors.success : colors.textMuted).withValues(
-                alpha: 0.16,
-              ),
-            ),
-            child: Icon(
-              connected ? RecodexIcons.checkCircle : RecodexIcons.cloudOff,
-              color: connected ? colors.success : colors.textMuted,
-              size: 28,
-            ),
+          Icon(
+            connected ? RecodexIcons.checkCircle : RecodexIcons.cloudOff,
+            color: connected ? colors.success : colors.textMuted,
+            size: 30,
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 18),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

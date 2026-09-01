@@ -24,10 +24,7 @@ class ThemeSettingsPage extends StatelessWidget {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
                 children: [
-                  _ThemePreview(
-                    preference: controller.preference.value,
-                    accent: controller.accent.value,
-                  ),
+                  _ThemePreview(preference: controller.preference.value),
                   const SizedBox(height: 24),
                   const _ThemeSectionTitle(
                     title: '界面模式',
@@ -63,32 +60,35 @@ class ThemeSettingsPage extends StatelessWidget {
                   const SizedBox(height: 24),
                   const _ThemeSectionTitle(
                     title: '主题色',
-                    subtitle: '强调色会同步影响图标、按钮和背景氛围',
+                    subtitle: '统一使用黑白中性色，保持 Codex 风格',
                   ),
                   const SizedBox(height: 10),
                   LiquidGlass(
                     radius: 24,
                     opacity: 0.66,
-                    padding: EdgeInsets.zero,
-                    child: Column(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                    child: Row(
                       children: [
-                        for (
-                          var index = 0;
-                          index < RecodexThemeAccent.values.length;
-                          index += 1
-                        ) ...[
-                          _ThemeAccentRow(
-                            accent: RecodexThemeAccent.values[index],
-                            selected:
-                                controller.accent.value ==
-                                RecodexThemeAccent.values[index],
-                            onTap: () => controller.setAccent(
-                              RecodexThemeAccent.values[index],
+                        const _NeutralSwatch(
+                          color: Color(0xff171717),
+                          label: '黑色',
+                        ),
+                        const SizedBox(width: 24),
+                        const _NeutralSwatch(
+                          color: Color(0xfff5f5f5),
+                          label: '白色',
+                        ),
+                        const SizedBox(width: 18),
+                        Expanded(
+                          child: Text(
+                            '图标、按钮和文字统一使用黑白中性色',
+                            style: TextStyle(
+                              color: context.recodexColors.textMuted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                          if (index != RecodexThemeAccent.values.length - 1)
-                            const _ThemeDivider(),
-                        ],
+                        ),
                       ],
                     ),
                   ),
@@ -103,10 +103,9 @@ class ThemeSettingsPage extends StatelessWidget {
 }
 
 class _ThemePreview extends StatelessWidget {
-  const _ThemePreview({required this.preference, required this.accent});
+  const _ThemePreview({required this.preference});
 
   final RecodexThemePreference preference;
-  final RecodexThemeAccent accent;
 
   @override
   Widget build(BuildContext context) {
@@ -117,17 +116,7 @@ class _ThemePreview extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 17),
       child: Row(
         children: [
-          SizedBox.square(
-            dimension: 58,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: colors.icon.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: colors.icon.withValues(alpha: 0.20)),
-              ),
-              child: Icon(RecodexIcons.palette, color: colors.icon, size: 25),
-            ),
-          ),
+          Icon(RecodexIcons.palette, color: colors.icon, size: 30),
           const SizedBox(width: 15),
           Expanded(
             child: Column(
@@ -143,7 +132,7 @@ class _ThemePreview extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${preference.label} · ${accent.label}',
+                  '${preference.label} · 黑白主题',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -153,16 +142,11 @@ class _ThemePreview extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 7),
-                Row(
+                const Row(
                   children: [
-                    for (final option in RecodexThemeAccent.values) ...[
-                      _AccentDot(
-                        color: option.primary,
-                        selected: option == accent,
-                      ),
-                      if (option != RecodexThemeAccent.values.last)
-                        const SizedBox(width: 7),
-                    ],
+                    _NeutralSwatch(color: Color(0xff171717), label: '黑色'),
+                    SizedBox(width: 8),
+                    _NeutralSwatch(color: Color(0xfff5f5f5), label: '白色'),
                   ],
                 ),
               ],
@@ -242,62 +226,14 @@ class _ThemeModePreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    final isDark = preference == RecodexThemePreference.dark;
     final icon = switch (preference) {
       RecodexThemePreference.system => RecodexIcons.devices,
       RecodexThemePreference.light => RecodexIcons.sun,
       RecodexThemePreference.dark => RecodexIcons.darkMode,
     };
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xff182132) : const Color(0xfff5f8ff),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark
-              ? const Color(0xff39475c)
-              : colors.icon.withValues(alpha: 0.18),
-        ),
-      ),
-      child: SizedBox.square(
-        dimension: 40,
-        child: Icon(
-          icon,
-          color: isDark ? const Color(0xffa9c8ff) : colors.icon,
-          size: 19,
-        ),
-      ),
-    );
-  }
-}
-
-class _ThemeAccentRow extends StatelessWidget {
-  const _ThemeAccentRow({
-    required this.accent,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final RecodexThemeAccent accent;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return _ThemeOptionRow(
-      title: accent.label,
-      subtitle: accent.description,
-      selected: selected,
-      onTap: onTap,
-      leading: SizedBox.square(
-        dimension: 40,
-        child: Center(
-          child: _AccentDot(
-            color: accent.primary,
-            selected: selected,
-            size: 22,
-          ),
-        ),
-      ),
+    return SizedBox.square(
+      dimension: 40,
+      child: Icon(icon, color: colors.text, size: 21),
     );
   }
 }
@@ -386,33 +322,40 @@ class _ThemeOptionRow extends StatelessWidget {
   }
 }
 
-class _AccentDot extends StatelessWidget {
-  const _AccentDot({
-    required this.color,
-    required this.selected,
-    this.size = 16,
-  });
+class _NeutralSwatch extends StatelessWidget {
+  const _NeutralSwatch({required this.color, required this.label});
 
   final Color color;
-  final bool selected;
-  final double size;
+  final String label;
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        border: Border.all(
-          color: selected
-              ? context.recodexColors.text
-              : color.withValues(alpha: 0.34),
-          width: selected ? 2 : 1,
+    final colors = context.recodexColors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 18,
+          height: 18,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: isDark ? const Color(0xff707070) : const Color(0xffbdbdbd),
+            ),
+          ),
         ),
-      ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            color: colors.text,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 }

@@ -227,30 +227,14 @@ class _NotificationHero extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 20, 18, 20),
       child: Row(
         children: [
-          SizedBox.square(
-            dimension: 58,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: (active ? colors.success : colors.icon).withValues(
-                  alpha: 0.12,
-                ),
-                borderRadius: BorderRadius.circular(17),
-                border: Border.all(
-                  color: (active ? colors.success : colors.icon).withValues(
-                    alpha: 0.20,
-                  ),
-                ),
-              ),
-              child: Icon(
-                active
-                    ? RecodexIcons.notificationsActive
-                    : RecodexIcons.notifications,
-                color: active ? colors.success : colors.icon,
-                size: 26,
-              ),
-            ),
+          Icon(
+            active
+                ? RecodexIcons.notificationsActive
+                : RecodexIcons.notifications,
+            color: active ? colors.success : colors.icon,
+            size: 29,
           ),
-          const SizedBox(width: 15),
+          const SizedBox(width: 18),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

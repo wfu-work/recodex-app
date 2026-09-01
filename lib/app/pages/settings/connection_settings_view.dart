@@ -213,28 +213,12 @@ class _ConnectionHero extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 20, 18, 20),
       child: Row(
         children: [
-          SizedBox.square(
-            dimension: 58,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: (connected ? colors.success : colors.icon).withValues(
-                  alpha: 0.12,
-                ),
-                borderRadius: BorderRadius.circular(17),
-                border: Border.all(
-                  color: (connected ? colors.success : colors.icon).withValues(
-                    alpha: 0.20,
-                  ),
-                ),
-              ),
-              child: Icon(
-                connected ? RecodexIcons.cloudDone : RecodexIcons.cloudOff,
-                color: connected ? colors.success : colors.icon,
-                size: 27,
-              ),
-            ),
+          Icon(
+            connected ? RecodexIcons.cloudDone : RecodexIcons.cloudOff,
+            color: connected ? colors.success : colors.icon,
+            size: 30,
           ),
-          const SizedBox(width: 15),
+          const SizedBox(width: 18),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

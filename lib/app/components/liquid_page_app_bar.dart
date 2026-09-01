@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 
 import '../theme/recodex_theme.dart';
@@ -23,108 +21,25 @@ class LiquidPageAppBar extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     return AppBar(
-      leadingWidth: 72,
-      leading: Padding(
-        padding: const EdgeInsets.only(left: 16),
-        child: _LiquidBackButton(
-          onPressed: onBack ?? () => Navigator.of(context).pop(),
-        ),
+      leadingWidth: 56,
+      leading: IconButton(
+        tooltip: '返回',
+        onPressed: onBack ?? () => Navigator.of(context).pop(),
+        icon: Icon(RecodexIcons.back, color: colors.text, size: 22),
       ),
       title: Text(
         title,
-        style: TextStyle(color: colors.icon, fontWeight: FontWeight.w900),
+        style: TextStyle(color: colors.text, fontWeight: FontWeight.w800),
       ),
       actions: [
         if (showMore)
           Padding(
             padding: const EdgeInsets.only(right: 18),
-            child: Icon(RecodexIcons.more, color: colors.icon, size: 24),
+            child: Icon(RecodexIcons.more, color: colors.text, size: 22),
           )
         else
           const SizedBox(width: 56),
       ],
-    );
-  }
-}
-
-class _LiquidBackButton extends StatelessWidget {
-  const _LiquidBackButton({required this.onPressed});
-
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Center(
-      child: SizedBox.square(
-        dimension: 38,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: colors.headerShadow.withValues(
-                  alpha: isDark ? 0.22 : 0.16,
-                ),
-                offset: Offset(0, isDark ? 6 : 10),
-                blurRadius: isDark ? 16 : 22,
-              ),
-              BoxShadow(
-                color: colors.glassHighlight.withValues(
-                  alpha: isDark ? 0.05 : 0.54,
-                ),
-                offset: Offset(isDark ? -3 : -4, isDark ? -3 : -4),
-                blurRadius: isDark ? 8 : 12,
-              ),
-            ],
-          ),
-          child: ClipOval(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 34, sigmaY: 34),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      colors.glassHighlight.withValues(
-                        alpha: isDark ? 0.22 : 0.92,
-                      ),
-                      colors.glassColor.withValues(alpha: isDark ? 0.70 : 0.66),
-                      colors.surfaceOverlay.withValues(
-                        alpha: isDark ? 0.38 : 0.58,
-                      ),
-                    ],
-                  ),
-                  border: Border.all(
-                    color: colors.glassBorder.withValues(
-                      alpha: isDark ? 0.72 : 1,
-                    ),
-                    width: 1.15,
-                  ),
-                ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: onPressed,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 0),
-                      child: Icon(
-                        RecodexIcons.back,
-                        color: colors.icon,
-                        size: 22,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

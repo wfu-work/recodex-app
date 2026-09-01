@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/bridge_models.dart';
+import '../pages/settings/theme_controller.dart';
 import '../theme/recodex_theme.dart';
 import 'recodex_dropdown.dart';
 import 'liquid_glass.dart';
@@ -21,6 +22,9 @@ class RemodexDrawer extends StatefulWidget {
     required this.onPairing,
     required this.onNewPairing,
     required this.onSettings,
+    required this.themePreference,
+    required this.onThemePreferenceChanged,
+    this.onRefreshProjects,
     super.key,
   });
 
@@ -37,27 +41,34 @@ class RemodexDrawer extends StatefulWidget {
   final VoidCallback onPairing;
   final VoidCallback onNewPairing;
   final VoidCallback onSettings;
+  final RecodexThemePreference themePreference;
+  final ValueChanged<RecodexThemePreference> onThemePreferenceChanged;
+  final VoidCallback? onRefreshProjects;
 
   @override
   State<RemodexDrawer> createState() => _RemodexDrawerState();
 }
 
 class _RemodexDrawerState extends State<RemodexDrawer> {
-  static const double _workspaceRowExtent = 56;
-  static const double _selectedWorkspaceTopPadding = 34;
-
   final ScrollController _sidebarScrollController = ScrollController();
+  final Set<String> _expandedWorkspaceKeys = <String>{};
+  final Map<String, GlobalKey> _workspaceItemKeys = <String, GlobalKey>{};
   String? _lastScrolledWorkspaceKey;
 
   @override
   void initState() {
     super.initState();
+    _expandSelectedWorkspace();
     _scheduleScrollToSelected(jump: true);
   }
 
   @override
   void didUpdateWidget(covariant RemodexDrawer oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (_workspaceKey(oldWidget.selectedWorkspace) !=
+        _workspaceKey(widget.selectedWorkspace)) {
+      _expandSelectedWorkspace();
+    }
     _scheduleScrollToSelected(
       jump:
           oldWidget.selectedWorkspace == null ||
@@ -69,6 +80,13 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
   void dispose() {
     _sidebarScrollController.dispose();
     super.dispose();
+  }
+
+  void _expandSelectedWorkspace() {
+    final key = _workspaceKey(widget.selectedWorkspace);
+    if (key != null) {
+      _expandedWorkspaceKeys.add(key);
+    }
   }
 
   String? _workspaceKey(WorkspaceInfo? workspace) {
@@ -97,9 +115,6 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
         workspace.name == selected.name;
   }
 
-  int get _selectedWorkspaceIndex =>
-      widget.workspaces.indexWhere(_isSelectedWorkspace);
-
   void _scheduleScrollToSelected({required bool jump}) {
     final selectedKey = _workspaceKey(widget.selectedWorkspace);
     if (selectedKey == null) {
@@ -119,24 +134,45 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
     if (!mounted || !_sidebarScrollController.hasClients) {
       return;
     }
-    final index = _selectedWorkspaceIndex;
-    if (index < 0) {
-      return;
-    }
-    final position = _sidebarScrollController.position;
-    final target = (index * _workspaceRowExtent - _selectedWorkspaceTopPadding)
-        .clamp(position.minScrollExtent, position.maxScrollExtent)
-        .toDouble();
-
-    if (jump) {
-      _sidebarScrollController.jumpTo(target);
-      return;
-    }
-    _sidebarScrollController.animateTo(
-      target,
-      duration: const Duration(milliseconds: 240),
+    final selectedKey = _workspaceKey(widget.selectedWorkspace);
+    if (selectedKey == null) return;
+    final itemContext = _workspaceItemKeys[selectedKey]?.currentContext;
+    if (itemContext == null) return;
+    Scrollable.ensureVisible(
+      itemContext,
+      duration: jump ? Duration.zero : const Duration(milliseconds: 240),
       curve: Curves.easeOutCubic,
+      alignment: 0.18,
     );
+  }
+
+  GlobalKey _workspaceItemKey(WorkspaceInfo workspace) {
+    final key = _workspaceKey(workspace);
+    if (key == null) return GlobalKey();
+    return _workspaceItemKeys.putIfAbsent(key, () => GlobalKey());
+  }
+
+  bool _isWorkspaceExpanded(WorkspaceInfo workspace) {
+    final key = _workspaceKey(workspace);
+    return key != null && _expandedWorkspaceKeys.contains(key);
+  }
+
+  void _toggleWorkspace(WorkspaceInfo workspace) {
+    final key = _workspaceKey(workspace);
+    if (key == null) return;
+    final selected = _isSelectedWorkspace(workspace);
+    setState(() {
+      if (_expandedWorkspaceKeys.contains(key)) {
+        _expandedWorkspaceKeys.remove(key);
+      } else {
+        _expandedWorkspaceKeys.add(key);
+      }
+    });
+    // Keep the active conversation when toggling its project. Selecting a
+    // different project still switches the working context.
+    if (!selected) {
+      widget.onSelectWorkspace(workspace);
+    }
   }
 
   @override
@@ -150,8 +186,10 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(0, 0, 12, 0),
           child: LiquidGlass(
-            radius: 26,
-            opacity: 0.78,
+            radius: 24,
+            // Keep the drawer surface opaque so the modal barrier does not
+            // wash the sidebar into the page content beneath it.
+            opacity: 1,
             padding: const EdgeInsets.fromLTRB(22, 22, 14, 18),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -184,6 +222,13 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                         fontWeight: FontWeight.w800,
                       ),
                     ),
+                    const SizedBox(width: 2),
+                    LiquidIconButton(
+                      icon: RecodexIcons.sync,
+                      tooltip: '刷新项目',
+                      onPressed: widget.onRefreshProjects,
+                      size: 32,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -193,49 +238,34 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                     padding: EdgeInsets.zero,
                     children: [
                       if (widget.workspaces.isEmpty)
-                        const _WorkspaceLine(name: '暂无项目', path: '连接 Relay 后同步')
+                        _WorkspaceLine(
+                          name: '暂无项目',
+                          path: widget.connected
+                              ? '点击右侧刷新按钮重新获取'
+                              : '连接 Relay 后同步',
+                        )
                       else
                         for (final workspace in widget.workspaces)
-                          _WorkspaceLine(
-                            name: workspace.name,
-                            path: workspace.path,
+                          _WorkspaceBranch(
+                            key: _workspaceItemKey(workspace),
+                            workspace: workspace,
                             active: _isSelectedWorkspace(workspace),
-                            onTap: () => widget.onSelectWorkspace(workspace),
-                          ),
-                      const SizedBox(height: 22),
-                      _SidebarSectionTitle(
-                        title: '任务',
-                        count: _sessionsForSelectedWorkspace.length,
-                      ),
-                      const SizedBox(height: 8),
-                      if (_sessionsForSelectedWorkspace.isEmpty)
-                        const _EmptySessionLine()
-                      else
-                        for (final session in _sessionsForSelectedWorkspace)
-                          _SessionLine(
-                            session: session,
-                            active: session.id == widget.selectedSessionId,
-                            onTap: () => widget.onSelectSession(session),
+                            expanded: _isWorkspaceExpanded(workspace),
+                            sessions: _sessionsForWorkspace(workspace),
+                            selectedSessionId: widget.selectedSessionId,
+                            onTap: () => _toggleWorkspace(workspace),
+                            onSelectSession: widget.onSelectSession,
                           ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 14),
                 _BottomDock(
-                  onPairing: widget.onPairing,
                   onSettings: widget.onSettings,
+                  themePreference: widget.themePreference,
+                  onThemePreferenceChanged: widget.onThemePreferenceChanged,
                 ),
                 const SizedBox(height: 12),
-                Center(
-                  child: Text(
-                    'Remodex v1.0.4',
-                    style: TextStyle(
-                      color: colors.textMuted.withValues(alpha: 0.86),
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
               ],
             ),
           ),
@@ -244,26 +274,43 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
     );
   }
 
-  List<SessionRecord> get _sessionsForSelectedWorkspace {
-    final selected = widget.selectedWorkspace;
-    if (selected == null) return const [];
-    final path = _normalizeWorkspaceKey(selected.path);
-    final name = _normalizeWorkspaceKey(selected.name);
+  List<SessionRecord> _sessionsForWorkspace(WorkspaceInfo workspace) {
+    final path = _normalizeWorkspaceKey(workspace.path);
+    final name = _normalizeWorkspaceKey(workspace.name);
     final strict = widget.sessions.where((session) {
       final value = _normalizeWorkspaceKey(session.workspace);
       return (path.isNotEmpty && value == path) ||
           (name.isNotEmpty && value == name);
     }).toList();
-    if (strict.isNotEmpty) return strict;
+    if (strict.isNotEmpty) return _dedupeSessions(strict);
     final selectedBase = _lastPathSegment(path.isNotEmpty ? path : name);
     if (selectedBase.isEmpty) return const [];
-    return widget.sessions
-        .where(
-          (session) =>
-              _lastPathSegment(_normalizeWorkspaceKey(session.workspace)) ==
-              selectedBase,
-        )
-        .toList();
+    return _dedupeSessions(
+      widget.sessions
+          .where(
+            (session) =>
+                _lastPathSegment(_normalizeWorkspaceKey(session.workspace)) ==
+                selectedBase,
+          )
+          .toList(),
+    );
+  }
+
+  List<SessionRecord> _dedupeSessions(Iterable<SessionRecord> records) {
+    final byId = <String, SessionRecord>{};
+    final order = <String>[];
+    for (final session in records) {
+      final id = session.id.trim();
+      if (id.isEmpty) continue;
+      final previous = byId[id];
+      if (previous == null) {
+        order.add(id);
+        byId[id] = session;
+      } else if (session.updatedAtDate.isAfter(previous.updatedAtDate)) {
+        byId[id] = session;
+      }
+    }
+    return [for (final id in order) byId[id]!];
   }
 
   String _normalizeWorkspaceKey(String value) {
@@ -379,17 +426,12 @@ class _PairingSwitcher extends StatelessWidget {
       ],
       child: Row(
         children: [
-          CircleAvatar(
-            radius: 19,
-            backgroundColor: const Color(0xffffe7d7),
-            child: Icon(
-              activePairing == null
-                  ? RecodexIcons.addLink
-                  : RecodexIcons.router,
-              color: const Color(0xff4b4b4b),
-            ),
+          Icon(
+            activePairing == null ? RecodexIcons.addLink : RecodexIcons.router,
+            color: colors.text,
+            size: 22,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -422,106 +464,182 @@ class _PairingSwitcher extends StatelessWidget {
   }
 }
 
-class _WorkspaceLine extends StatelessWidget {
-  const _WorkspaceLine({
-    required this.name,
-    required this.path,
-    this.active = false,
-    this.onTap,
+class _WorkspaceBranch extends StatelessWidget {
+  const _WorkspaceBranch({
+    super.key,
+    required this.workspace,
+    required this.active,
+    required this.expanded,
+    required this.sessions,
+    required this.selectedSessionId,
+    required this.onTap,
+    required this.onSelectSession,
   });
 
-  final String name;
-  final String path;
+  final WorkspaceInfo workspace;
   final bool active;
-  final VoidCallback? onTap;
+  final bool expanded;
+  final List<SessionRecord> sessions;
+  final String? selectedSessionId;
+  final VoidCallback onTap;
+  final ValueChanged<SessionRecord> onSelectSession;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final activeColor = colors.icon;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: active
-            ? activeColor.withValues(alpha: 0.12)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(16),
-        border: active
-            ? Border.all(color: activeColor.withValues(alpha: 0.26))
-            : null,
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          child: Row(
-            children: [
-              Icon(
-                active ? RecodexIcons.folder : RecodexIcons.folderOpen,
-                size: 18,
-                color: active ? activeColor : colors.textMuted,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            color: active ? colors.surfaceOverlay : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(7, 8, 8, 8),
+              child: Row(
+                children: [
+                  Icon(
+                    expanded
+                        ? RecodexIcons.chevronDown
+                        : RecodexIcons.chevronRight,
+                    size: 16,
+                    color: active ? activeColor : colors.textMuted,
+                  ),
+                  const SizedBox(width: 3),
+                  Icon(
+                    expanded ? RecodexIcons.folderOpen : RecodexIcons.folder,
+                    size: 18,
+                    color: active ? activeColor : colors.textMuted,
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          workspace.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w900,
+                            color: active ? activeColor : colors.text,
+                          ),
+                        ),
+                        if (workspace.path.trim().isNotEmpty)
+                          Text(
+                            workspace.path,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: colors.textMuted,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (sessions.isNotEmpty)
                     Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      '${sessions.length}',
                       style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w900,
-                        color: active ? activeColor : colors.text,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: active ? activeColor : colors.textMuted,
                       ),
                     ),
-                    Text(
-                      path,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 11, color: colors.textMuted),
-                    ),
-                  ],
-                ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
-      ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: expanded
+              ? Padding(
+                  padding: const EdgeInsets.only(left: 30, top: 4, bottom: 4),
+                  child: sessions.isEmpty
+                      ? const _EmptySessionLine()
+                      : Column(
+                          children: [
+                            for (final session in sessions)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 3),
+                                child: _SessionLine(
+                                  session: session,
+                                  active:
+                                      _sameSession(
+                                        session.id,
+                                        selectedSessionId,
+                                      ) &&
+                                      active,
+                                  onTap: () => onSelectSession(session),
+                                ),
+                              ),
+                          ],
+                        ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
     );
+  }
+
+  bool _sameSession(String left, String? right) {
+    final normalizedRight = right?.trim();
+    return normalizedRight != null &&
+        normalizedRight.isNotEmpty &&
+        left.trim() == normalizedRight;
   }
 }
 
-class _SidebarSectionTitle extends StatelessWidget {
-  const _SidebarSectionTitle({required this.title, required this.count});
+class _WorkspaceLine extends StatelessWidget {
+  const _WorkspaceLine({required this.name, required this.path});
 
-  final String title;
-  final int count;
+  final String name;
+  final String path;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return Row(
-      children: [
-        Text(
-          title,
-          style: TextStyle(
-            color: colors.textMuted,
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      child: Row(
+        children: [
+          Icon(RecodexIcons.folderOpen, size: 18, color: colors.textMuted),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                    color: colors.text,
+                  ),
+                ),
+                Text(
+                  path,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: colors.textMuted),
+                ),
+              ],
+            ),
           ),
-        ),
-        const Spacer(),
-        Text(
-          '$count',
-          style: TextStyle(
-            color: colors.textMuted,
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -558,24 +676,34 @@ class _SessionLine extends StatelessWidget {
     final colors = context.recodexColors;
     final activeColor = colors.icon;
     final statusColor = session.isRunning ? colors.icon : colors.textMuted;
-    return DecoratedBox(
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 140),
+      curve: Curves.easeOut,
       decoration: BoxDecoration(
-        color: active
-            ? activeColor.withValues(alpha: 0.12)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(14),
-        border: active
-            ? Border.all(color: activeColor.withValues(alpha: 0.24))
-            : null,
+        color: active ? colors.surfaceOverlay : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(8),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          padding: const EdgeInsets.fromLTRB(6, 7, 8, 7),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              SizedBox(
+                width: 3,
+                height: 34,
+                child: active
+                    ? DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: activeColor,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              const SizedBox(width: 7),
               Padding(
                 padding: const EdgeInsets.only(top: 2),
                 child: Icon(
@@ -584,7 +712,7 @@ class _SessionLine extends StatelessWidget {
                   color: statusColor,
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 9),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -596,8 +724,8 @@ class _SessionLine extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 12,
                         height: 1.25,
-                        fontWeight: FontWeight.w800,
-                        color: active ? activeColor : colors.text,
+                        fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                        color: colors.text,
                       ),
                     ),
                     const SizedBox(height: 3),
@@ -629,91 +757,90 @@ String _sessionDateLabel(SessionRecord session) {
 }
 
 class _BottomDock extends StatelessWidget {
-  const _BottomDock({required this.onPairing, required this.onSettings});
+  const _BottomDock({
+    required this.onSettings,
+    required this.themePreference,
+    required this.onThemePreferenceChanged,
+  });
 
-  final VoidCallback onPairing;
   final VoidCallback onSettings;
+  final RecodexThemePreference themePreference;
+  final ValueChanged<RecodexThemePreference> onThemePreferenceChanged;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.surfaceOverlay,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: colors.glassBorder),
-        boxShadow: [
-          BoxShadow(
-            color: colors.glassShadow,
-            offset: const Offset(0, 14),
-            blurRadius: 28,
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _DockButton(
-              icon: RecodexIcons.devices,
-              label: '配对',
-              onTap: onPairing,
-            ),
-            const SizedBox(height: 6),
-            _DockButton(
-              icon: RecodexIcons.settings,
-              label: '设置',
-              onTap: onSettings,
-            ),
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        _DockIconButton(
+          icon: RecodexIcons.settings,
+          tooltip: '设置',
+          onTap: onSettings,
+        ),
+        PopupMenuButton<RecodexThemePreference>(
+          tooltip: '当前主题：${themePreference.label}',
+          padding: EdgeInsets.zero,
+          iconSize: 22,
+          icon: Icon(_themeIcon(themePreference), color: colors.icon),
+          onSelected: onThemePreferenceChanged,
+          itemBuilder: (context) => [
+            for (final preference in RecodexThemePreference.values)
+              PopupMenuItem<RecodexThemePreference>(
+                value: preference,
+                child: Row(
+                  children: [
+                    Icon(
+                      preference == themePreference
+                          ? RecodexIcons.selectedCircle
+                          : RecodexIcons.circle,
+                      size: 18,
+                      color: preference == themePreference
+                          ? colors.icon
+                          : colors.textMuted,
+                    ),
+                    const SizedBox(width: 10),
+                    Text(preference.label),
+                  ],
+                ),
+              ),
           ],
         ),
-      ),
+      ],
     );
+  }
+
+  IconData _themeIcon(RecodexThemePreference preference) {
+    return switch (preference) {
+      RecodexThemePreference.system => RecodexIcons.devices,
+      RecodexThemePreference.light => RecodexIcons.sun,
+      RecodexThemePreference.dark => RecodexIcons.darkMode,
+    };
   }
 }
 
-class _DockButton extends StatelessWidget {
-  const _DockButton({
+class _DockIconButton extends StatelessWidget {
+  const _DockIconButton({
     required this.icon,
-    required this.label,
+    required this.tooltip,
     required this.onTap,
   });
 
   final IconData icon;
-  final String label;
+  final String tooltip;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    final color = colors.text;
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(18),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: Row(
-            children: [
-              Icon(icon, color: color, size: 19),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  label,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: color,
-                    fontWeight: FontWeight.w900,
-                    fontSize: 14,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
+    return Tooltip(
+      message: tooltip,
+      child: IconButton(
+        onPressed: onTap,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+        iconSize: 22,
+        icon: Icon(icon, color: colors.icon),
       ),
     );
   }
