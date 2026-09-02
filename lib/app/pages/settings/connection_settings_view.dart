@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
-import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../components/recodex_dropdown.dart';
 import '../../routes/app_pages.dart';
@@ -122,9 +121,7 @@ class ConnectionSettingsPage extends StatelessWidget {
                     subtitle: '仅测试当前配对，不会修改保存的配置',
                   ),
                   const SizedBox(height: 10),
-                  LiquidGlass(
-                    radius: 24,
-                    opacity: 0.66,
+                  SettingsCard(
                     padding: const EdgeInsets.fromLTRB(18, 17, 18, 17),
                     child: Row(
                       children: [
@@ -207,9 +204,8 @@ class _ConnectionHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return LiquidGlass(
-      radius: 28,
-      opacity: 0.72,
+    return SettingsCard(
+      radius: 20,
       padding: const EdgeInsets.fromLTRB(20, 20, 18, 20),
       child: Row(
         children: [
@@ -228,7 +224,7 @@ class _ConnectionHero extends StatelessWidget {
                   style: TextStyle(
                     color: colors.text,
                     fontSize: 20,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 5),
@@ -239,7 +235,8 @@ class _ConnectionHero extends StatelessWidget {
                   style: TextStyle(
                     color: colors.textMuted,
                     fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ],

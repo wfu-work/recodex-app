@@ -7,6 +7,50 @@ import 'package:recodex/app/pages/settings/theme_controller.dart';
 import 'package:recodex/app/theme/recodex_theme.dart';
 
 void main() {
+  testWidgets('shows a rotating indicator before running task titles', (
+    tester,
+  ) async {
+    SessionRecord? selected;
+    const workspace = WorkspaceInfo(name: 'recodex', path: '/work/recodex');
+    const runningSession = SessionRecord(
+      id: 'thread-running',
+      workspace: '/work/recodex',
+      prompt: '正在运行的任务',
+      status: 'running',
+      createdAt: '2026-08-31T00:00:00Z',
+      updatedAt: '2026-08-31T01:00:00Z',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.light,
+        home: RemodexDrawer(
+          connected: true,
+          pairings: const [],
+          activePairing: null,
+          workspaces: const [workspace],
+          selectedWorkspace: workspace,
+          sessions: const [runningSession],
+          selectedSessionId: null,
+          onSelectPairing: (_) {},
+          onSelectWorkspace: (_) {},
+          onSelectSession: (value) => selected = value,
+          onPairing: () {},
+          onNewPairing: () {},
+          onSettings: () {},
+          themePreference: RecodexThemePreference.system,
+          onThemePreferenceChanged: (_) {},
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('正在运行的任务'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    await tester.tap(find.text('正在运行的任务'));
+    expect(selected?.id, 'thread-running');
+  });
+
   testWidgets('shows project menu followed by tasks and selects a task', (
     tester,
   ) async {
@@ -23,6 +67,24 @@ void main() {
       createdAt: '2026-08-31T00:00:00Z',
       updatedAt: '2026-08-31T01:00:00Z',
     );
+    const pinnedSession = SessionRecord(
+      id: 'thread-pinned',
+      workspace: '/work/recodex',
+      prompt: '置顶任务',
+      status: 'done',
+      createdAt: '2026-08-31T00:00:00Z',
+      updatedAt: '2026-08-31T02:00:00Z',
+      isPinned: true,
+    );
+    const archivedSession = SessionRecord(
+      id: 'thread-archived',
+      workspace: '/work/recodex',
+      prompt: '归档任务',
+      status: 'done',
+      createdAt: '2026-08-31T00:00:00Z',
+      updatedAt: '2026-08-31T03:00:00Z',
+      isArchived: true,
+    );
 
     await tester.pumpWidget(
       MaterialApp(
@@ -35,7 +97,7 @@ void main() {
             activePairing: null,
             workspaces: const [workspace],
             selectedWorkspace: workspace,
-            sessions: const [session],
+            sessions: const [pinnedSession, session, archivedSession],
             selectedSessionId: null,
             onSelectPairing: (_) {},
             onSelectWorkspace: (_) {},
@@ -55,6 +117,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('项目'), findsOneWidget);
+    expect(find.text('置顶'), findsOneWidget);
+    expect(find.text('归档'), findsOneWidget);
+    expect(find.text('置顶任务'), findsOneWidget);
+    expect(find.text('归档任务'), findsOneWidget);
     expect(find.text('配对'), findsNothing);
     expect(find.byTooltip('设置'), findsOneWidget);
     expect(find.byTooltip('当前主题：跟随系统'), findsOneWidget);
@@ -66,12 +132,11 @@ void main() {
     await tester.tap(find.byTooltip('刷新项目'));
     expect(projectsRefreshed, isTrue);
 
-    await tester.tap(find.byTooltip('当前主题：跟随系统'));
-    await tester.pumpAndSettle();
-    expect(find.text('跟随系统'), findsOneWidget);
-    expect(find.text('浅色模式'), findsOneWidget);
-    expect(find.text('深色模式'), findsOneWidget);
-    await tester.tap(find.text('深色模式'));
+    expect(find.byTooltip('当前主题：跟随系统'), findsOneWidget);
+    expect(find.byKey(const ValueKey('theme-mode-system')), findsOneWidget);
+    expect(find.byKey(const ValueKey('theme-mode-light')), findsOneWidget);
+    expect(find.byKey(const ValueKey('theme-mode-dark')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('theme-mode-dark')));
     await tester.pumpAndSettle();
     expect(selectedTheme, RecodexThemePreference.dark);
 

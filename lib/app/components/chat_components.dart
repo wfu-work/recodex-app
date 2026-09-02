@@ -11,9 +11,10 @@ import '../theme/recodex_theme.dart';
 import 'recodex_dropdown.dart';
 
 class AssistantBubble extends StatelessWidget {
-  const AssistantBubble({required this.event, super.key});
+  const AssistantBubble({required this.event, this.cardRadius = 24, super.key});
 
   final SessionEvent event;
+  final double cardRadius;
 
   @override
   Widget build(BuildContext context) {
@@ -23,35 +24,42 @@ class AssistantBubble extends StatelessWidget {
     final isError = event.kind == 'error';
     final text = _cleanEventText(event);
     final imageAttachments = event.attachments
-        .where(
-          (attachment) =>
-              attachment.type == 'image' && attachment.dataUrl.isNotEmpty,
-        )
+        .where(_isRenderableImageAttachment)
         .toList();
-    final bubbleColor = isUser
-        ? colors.userBubble
-        : isError
-        ? colors.errorBubble
-        : colors.assistantBubble;
+
+    // Codex renders a user's attachments and message as two separate pieces:
+    // a compact thumbnail strip followed by a neutral text pill. Keeping that
+    // structure here also prevents a single screenshot from expanding into a
+    // large, answer-like card.
+    if (isUser) {
+      return _UserMessageContent(
+        text: text,
+        attachments: imageAttachments,
+        fontScale: fontScale,
+        cardRadius: cardRadius,
+      );
+    }
+
+    final bubbleColor = isError ? colors.errorBubble : colors.assistantBubble;
     final borderColor = isError ? colors.errorBorder : colors.glassBorder;
 
     return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: Alignment.centerLeft,
       child: FractionallySizedBox(
-        widthFactor: isUser ? 0.72 : 0.9,
-        alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+        widthFactor: 0.9,
+        alignment: Alignment.centerLeft,
         child: DecoratedBox(
           decoration: BoxDecoration(
             color: bubbleColor,
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(
+              _conversationCardRadius(cardRadius),
+            ),
             border: Border.all(color: borderColor),
           ),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
             child: Column(
-              crossAxisAlignment: isUser
-                  ? CrossAxisAlignment.end
-                  : CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (imageAttachments.isNotEmpty) ...[
@@ -63,12 +71,149 @@ class AssistantBubble extends StatelessWidget {
                     text.isEmpty ? '暂无输出' : text,
                     style: TextStyle(
                       fontSize: _scaledFontSize(16, fontScale),
-                      height: 1.62,
+                      height: 1.55,
                       color: isError ? colors.error : colors.text,
-                      fontWeight: isUser ? FontWeight.w500 : FontWeight.w500,
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UserMessageContent extends StatelessWidget {
+  const _UserMessageContent({
+    required this.text,
+    required this.attachments,
+    required this.fontScale,
+    required this.cardRadius,
+  });
+
+  final String text;
+  final List<EventAttachment> attachments;
+  final double fontScale;
+  final double cardRadius;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.9;
+    return Align(
+      alignment: Alignment.centerRight,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (attachments.isNotEmpty)
+              _UserImageStrip(attachments: attachments),
+            if (attachments.isNotEmpty && text.isNotEmpty)
+              const SizedBox(height: 8),
+            if (text.isNotEmpty)
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: colors.userBubble,
+                  borderRadius: BorderRadius.circular(
+                    _conversationCardRadius(cardRadius),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 9,
+                  ),
+                  child: SelectableText(
+                    text,
+                    style: TextStyle(
+                      fontSize: _scaledFontSize(16, fontScale),
+                      height: 1.55,
+                      color: colors.text,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ),
+              ),
+            if (text.isEmpty && attachments.isEmpty)
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  color: colors.userBubble,
+                  borderRadius: BorderRadius.circular(
+                    _conversationCardRadius(cardRadius),
+                  ),
+                ),
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                  child: SelectableText('暂无输出'),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _UserImageStrip extends StatelessWidget {
+  const _UserImageStrip({required this.attachments});
+
+  final List<EventAttachment> attachments;
+
+  @override
+  Widget build(BuildContext context) {
+    final images = attachments
+        .map(_EventImageData.tryParse)
+        .whereType<_EventImageData>()
+        .toList();
+    if (images.isEmpty) return const SizedBox.shrink();
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      reverse: true,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        textDirection: TextDirection.rtl,
+        children: [
+          for (var index = 0; index < images.length; index += 1) ...[
+            if (index > 0) const SizedBox(width: 8),
+            _UserImageTile(image: images[index]),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _UserImageTile extends StatelessWidget {
+  const _UserImageTile({required this.image});
+
+  final _EventImageData image;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Material(
+        color: colors.surfaceOverlay,
+        child: InkWell(
+          onTap: () => _showEventImagePreview(context, image),
+          child: Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              border: Border.all(color: colors.glassBorder),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: _EventImage(
+              image: image,
+              fit: BoxFit.cover,
+              errorColor: colors.textMuted,
             ),
           ),
         ),
@@ -135,19 +280,10 @@ class _EventImageTile extends StatelessWidget {
             child: SizedBox(
               width: width,
               height: height,
-              child: Image.memory(
-                image.bytes,
+              child: _EventImage(
+                image: image,
                 fit: BoxFit.contain,
-                gaplessPlayback: true,
-                errorBuilder: (context, error, stackTrace) {
-                  return Center(
-                    child: Icon(
-                      RecodexIcons.brokenImage,
-                      color: colors.textMuted,
-                      size: 22,
-                    ),
-                  );
-                },
+                errorColor: colors.textMuted,
               ),
             ),
           ),
@@ -198,10 +334,11 @@ class _EventImagePreviewDialog extends StatelessWidget {
                   child: InteractiveViewer(
                     minScale: 0.8,
                     maxScale: 5,
-                    child: Image.memory(
-                      image.bytes,
+                    child: _EventImage(
+                      image: image,
                       fit: BoxFit.contain,
-                      gaplessPlayback: true,
+                      preview: true,
+                      errorColor: Colors.white70,
                     ),
                   ),
                 ),
@@ -224,28 +361,149 @@ class _EventImagePreviewDialog extends StatelessWidget {
 }
 
 class _EventImageData {
-  const _EventImageData({required this.bytes});
+  const _EventImageData({
+    this.thumbnailBytes,
+    this.originalBytes,
+    this.resourceUri,
+  });
 
-  final Uint8List bytes;
+  final Uint8List? thumbnailBytes;
+  final Uint8List? originalBytes;
+  final Uri? resourceUri;
 
   static _EventImageData? tryParse(EventAttachment attachment) {
-    final dataUrl = attachment.dataUrl.trim();
-    final commaIndex = dataUrl.indexOf(',');
-    if (!dataUrl.startsWith('data:image/') || commaIndex < 0) {
+    final thumbnailBytes = _decodeImageDataUrl(attachment.thumbnailDataUrl);
+    final originalBytes = _decodeImageDataUrl(attachment.dataUrl);
+    final resourceUri = _isExpired(attachment.expiresAt)
+        ? null
+        : _safeImageUri(attachment.resourceUrl);
+    if (thumbnailBytes == null &&
+        originalBytes == null &&
+        resourceUri == null) {
       return null;
     }
-    final metadata = dataUrl.substring(0, commaIndex);
-    if (!metadata.contains(';base64')) {
-      return null;
-    }
-    try {
-      return _EventImageData(
-        bytes: base64Decode(dataUrl.substring(commaIndex + 1)),
-      );
-    } on FormatException {
-      return null;
-    }
+    return _EventImageData(
+      thumbnailBytes: thumbnailBytes,
+      originalBytes: originalBytes,
+      resourceUri: resourceUri,
+    );
   }
+}
+
+class _EventImage extends StatelessWidget {
+  const _EventImage({
+    required this.image,
+    required this.fit,
+    required this.errorColor,
+    this.preview = false,
+  });
+
+  final _EventImageData image;
+  final BoxFit fit;
+  final Color errorColor;
+  final bool preview;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = preview
+        ? image.originalBytes
+        : image.thumbnailBytes ?? image.originalBytes;
+    if (bytes != null) {
+      return Image.memory(
+        bytes,
+        fit: fit,
+        gaplessPlayback: true,
+        errorBuilder: (context, error, stackTrace) => _brokenImage(errorColor),
+      );
+    }
+    final uri = image.resourceUri;
+    if (preview && uri == null && image.thumbnailBytes != null) {
+      return Image.memory(
+        image.thumbnailBytes!,
+        fit: fit,
+        gaplessPlayback: true,
+      );
+    }
+    if (uri == null) return _brokenImage(errorColor);
+    return Image.network(
+      uri.toString(),
+      fit: fit,
+      errorBuilder: (context, error, stackTrace) => _brokenImage(errorColor),
+      loadingBuilder: (context, child, progress) {
+        if (progress == null) return child;
+        return Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.8,
+              value: progress.expectedTotalBytes == null
+                  ? null
+                  : progress.cumulativeBytesLoaded /
+                        progress.expectedTotalBytes!,
+              color: errorColor,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _brokenImage(Color color) {
+    return Center(
+      child: Icon(RecodexIcons.brokenImage, color: color, size: 22),
+    );
+  }
+}
+
+const _maxInlineImageBytes = 2 * 1024 * 1024;
+
+bool _isRenderableImageAttachment(EventAttachment attachment) {
+  final type = attachment.type.trim().toLowerCase();
+  final mime = attachment.mime.trim().toLowerCase();
+  final isImage = type == 'image' || mime.startsWith('image/');
+  return isImage && attachment.hasImageSource;
+}
+
+Uint8List? _decodeImageDataUrl(String value) {
+  final dataUrl = value.trim();
+  if (!dataUrl.startsWith('data:image/')) return null;
+  final commaIndex = dataUrl.indexOf(',');
+  if (commaIndex < 0 || !dataUrl.substring(0, commaIndex).contains(';base64')) {
+    return null;
+  }
+  try {
+    final bytes = base64Decode(dataUrl.substring(commaIndex + 1));
+    return bytes.length <= _maxInlineImageBytes ? bytes : null;
+  } on FormatException {
+    return null;
+  }
+}
+
+Uri? _safeImageUri(String value) {
+  final uri = Uri.tryParse(value.trim());
+  if (uri == null || uri.userInfo.isNotEmpty || uri.host.isEmpty) return null;
+  if (uri.scheme == 'https') return uri;
+  if (uri.scheme == 'http' &&
+      (uri.host == '127.0.0.1' ||
+          uri.host == 'localhost' ||
+          uri.host == '::1')) {
+    return uri;
+  }
+  return null;
+}
+
+bool _isExpired(String? value) {
+  final raw = value?.trim() ?? '';
+  if (raw.isEmpty) return false;
+  final parsedDate = DateTime.tryParse(raw);
+  if (parsedDate != null) return !parsedDate.isAfter(DateTime.now());
+  final numeric = num.tryParse(raw);
+  if (numeric == null) return true;
+  final milliseconds = numeric.abs() < 100000000000
+      ? (numeric * 1000).round()
+      : numeric.round();
+  return milliseconds <= DateTime.now().millisecondsSinceEpoch;
 }
 
 class EventTimelineItem extends StatelessWidget {
@@ -288,10 +546,16 @@ class EventTimelineItem extends StatelessWidget {
   }
 }
 
-class AssistantAnswerBlock extends StatelessWidget {
+class AssistantAnswerBlock extends StatefulWidget {
   const AssistantAnswerBlock({
     required this.events,
     required this.completed,
+    this.showReasoning = true,
+    this.collapseReasoningByDefault = true,
+    this.showToolCallDetails = true,
+    this.showUsageMetrics = true,
+    this.cardRadius = 24,
+    this.maxWidth = 960,
     this.gitChangeSummary,
     this.onGitFileTap,
     this.onUndoGitChanges,
@@ -300,44 +564,99 @@ class AssistantAnswerBlock extends StatelessWidget {
 
   final List<SessionEvent> events;
   final bool completed;
+  final bool showReasoning;
+  final bool collapseReasoningByDefault;
+  final bool showToolCallDetails;
+  final bool showUsageMetrics;
+  final double cardRadius;
+  final double maxWidth;
   final GitChangeSummary? gitChangeSummary;
   final ValueChanged<GitFileChange>? onGitFileTap;
   final VoidCallback? onUndoGitChanges;
 
   @override
+  State<AssistantAnswerBlock> createState() => _AssistantAnswerBlockState();
+}
+
+class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
+  late bool _reasoningExpanded;
+
+  @override
+  void initState() {
+    super.initState();
+    // Codex keeps the live reasoning visible while a turn is running, then
+    // folds it when the final answer arrives.
+    _reasoningExpanded =
+        !widget.completed || !widget.collapseReasoningByDefault;
+  }
+
+  @override
+  void didUpdateWidget(covariant AssistantAnswerBlock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.completed && widget.completed) {
+      _reasoningExpanded = false;
+    } else if (oldWidget.completed && !widget.completed) {
+      _reasoningExpanded = true;
+    } else if (oldWidget.collapseReasoningByDefault !=
+            widget.collapseReasoningByDefault &&
+        widget.completed) {
+      _reasoningExpanded = !widget.collapseReasoningByDefault;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final textBuffer = StringBuffer();
-    final children = <Widget>[];
+    final reasoningBuffer = StringBuffer();
+    final answerChildren = <Widget>[];
+    final reasoningSteps = <_AnswerStep>[];
     final gitSummaries = <GitChangeSummary>[];
-    final steps = <_AnswerStep>[];
+    TokenUsage? usage;
     var hasTerminalEvent = false;
     SessionEvent? latestLiveEvent;
 
-    void flushText() {
+    void mergeUsage(TokenUsage next) {
+      final previous = usage;
+      if (previous == null || next.totalTokens >= previous.totalTokens) {
+        usage = next;
+        return;
+      }
+      usage = TokenUsage(
+        inputTokens: previous.inputTokens + next.inputTokens,
+        outputTokens: previous.outputTokens + next.outputTokens,
+        totalTokens: previous.totalTokens + next.totalTokens,
+      );
+    }
+
+    void flushAnswerText() {
       final text = textBuffer.toString().trim();
       if (text.isEmpty) return;
-      if (children.isNotEmpty) {
-        children.add(const SizedBox(height: 18));
+      if (answerChildren.isNotEmpty) {
+        answerChildren.add(const SizedBox(height: 18));
       }
-      children.add(
+      answerChildren.add(
         _AnswerText(
           text: text,
-          gitChangeSummary: gitChangeSummary,
-          onFileTap: onGitFileTap,
+          cardRadius: widget.cardRadius,
+          gitChangeSummary: widget.gitChangeSummary,
+          onFileTap: widget.onGitFileTap,
         ),
       );
       textBuffer.clear();
     }
 
-    void appendStep(_AnswerStep step) {
-      steps.add(step);
-      if (children.isNotEmpty) {
-        children.add(const SizedBox(height: 7));
-      }
-      children.add(_AnswerStepRow(step: step));
+    void flushReasoningText() {
+      final text = reasoningBuffer.toString().trim();
+      if (text.isEmpty) return;
+      reasoningSteps.add(
+        _AnswerStep(icon: RecodexIcons.reasoning, title: text),
+      );
+      reasoningBuffer.clear();
     }
 
-    for (final event in events) {
+    for (final event in widget.events) {
+      final eventUsage = event.usage;
+      if (eventUsage != null) mergeUsage(eventUsage);
       if (_isDoneEvent(event.kind)) {
         hasTerminalEvent = true;
         continue;
@@ -346,131 +665,207 @@ class AssistantAnswerBlock extends StatelessWidget {
         continue;
       }
       if (event.kind == 'running') {
-        flushText();
+        flushAnswerText();
         latestLiveEvent = event;
         continue;
       }
       if (event.kind == 'interrupted') {
         hasTerminalEvent = true;
-        flushText();
-        const step = _AnswerStep(
-          icon: RecodexIcons.pause,
-          title: '已中断',
-          detail: '用户取消',
+        flushAnswerText();
+        reasoningSteps.add(
+          const _AnswerStep(
+            icon: RecodexIcons.pause,
+            title: '已中断',
+            detail: '用户取消',
+          ),
         );
-        appendStep(step);
+        continue;
+      }
+      if (event.kind.toLowerCase().contains('reason')) {
+        if (!widget.showReasoning) continue;
+        reasoningBuffer.write(_cleanEventText(event));
         continue;
       }
       if (_isToolEvent(event.kind)) {
-        flushText();
-        final step = _AnswerStep.fromToolEvent(event);
-        appendStep(step);
+        if (!widget.showToolCallDetails) {
+          latestLiveEvent = null;
+          continue;
+        }
+        flushReasoningText();
+        reasoningSteps.add(
+          _AnswerStep.fromToolEvent(
+            event,
+            includeDetail: widget.showToolCallDetails,
+          ),
+        );
         latestLiveEvent = event;
         continue;
       }
       final gitSummary = GitChangeSummary.tryParse(event.text);
       if (gitSummary != null) {
-        flushText();
+        flushAnswerText();
         gitSummaries.add(gitSummary);
-        final step = _AnswerStep(
-          icon: RecodexIcons.gitCompare,
-          title: '已更新文件',
-          detail: '${gitSummary.files.length} 个文件',
+        reasoningSteps.add(
+          _AnswerStep(
+            icon: RecodexIcons.gitCompare,
+            title: '已更新文件',
+            detail: '${gitSummary.files.length} 个文件',
+          ),
         );
-        appendStep(step);
         continue;
       }
       final imageCount = event.attachments
-          .where(
-            (attachment) =>
-                attachment.type == 'image' && attachment.dataUrl.isNotEmpty,
-          )
+          .where(_isRenderableImageAttachment)
           .length;
       if (imageCount > 0) {
-        flushText();
-        final step = _AnswerStep(
-          icon: RecodexIcons.image,
-          title: '已查看 $imageCount 张图像',
+        reasoningSteps.add(
+          _AnswerStep(icon: RecodexIcons.image, title: '已查看 $imageCount 张图像'),
         );
-        appendStep(step);
       }
       final text = _cleanEventText(event);
       if (text.isEmpty) continue;
+      flushReasoningText();
       if (textBuffer.isNotEmpty && _shouldSeparateText(event.kind)) {
         textBuffer.writeln();
         textBuffer.writeln();
       }
       textBuffer.write(text);
     }
-    flushText();
+    flushAnswerText();
+    flushReasoningText();
     final mergedGitSummary = _mergeGitSummaries(gitSummaries);
     if (mergedGitSummary != null) {
-      if (children.isNotEmpty) {
-        children.add(const SizedBox(height: 18));
+      if (answerChildren.isNotEmpty) {
+        answerChildren.add(const SizedBox(height: 18));
       }
-      children.add(
+      answerChildren.add(
         _GitChangePanel(
           summary: mergedGitSummary,
-          onUndo: onUndoGitChanges,
-          onFileTap: onGitFileTap,
+          cardRadius: widget.cardRadius,
+          onUndo: widget.onUndoGitChanges,
+          onFileTap: widget.onGitFileTap,
         ),
       );
     }
-    if (!completed && !hasTerminalEvent) {
-      if (children.isNotEmpty) {
-        children.add(const SizedBox(height: 18));
+    if (!widget.completed && !hasTerminalEvent) {
+      if (answerChildren.isNotEmpty) {
+        answerChildren.add(const SizedBox(height: 18));
       }
-      children.add(
+      answerChildren.add(
         latestLiveEvent == null
             ? const _LiveActivityRow(text: '正在生成回答...')
             : _LiveActivityRow.fromEvent(latestLiveEvent),
       );
     }
 
-    final isDone = completed || hasTerminalEvent;
-    if (children.isEmpty) {
-      children.add(
+    final isDone = widget.completed || hasTerminalEvent;
+    if (answerChildren.isEmpty && (isDone || reasoningSteps.isEmpty)) {
+      answerChildren.add(
         isDone
             ? _AnswerText(
                 text: '完成。',
-                gitChangeSummary: gitChangeSummary,
-                onFileTap: onGitFileTap,
+                cardRadius: widget.cardRadius,
+                gitChangeSummary: widget.gitChangeSummary,
+                onFileTap: widget.onGitFileTap,
               )
             : const _LiveActivityRow(text: '正在思考...'),
       );
     }
-    final elapsed = _elapsedLabel(events);
-    final isActive = !isDone;
-    final summarySteps = steps.isEmpty && isActive
-        ? const [_AnswerStep(icon: RecodexIcons.reasoning, title: '正在思考')]
-        : steps;
-
+    if (!isDone && reasoningSteps.isEmpty) {
+      reasoningSteps.add(
+        const _AnswerStep(icon: RecodexIcons.reasoning, title: '正在思考'),
+      );
+    }
+    final elapsed = _elapsedLabel(widget.events);
+    final hasReasoning = reasoningSteps.isNotEmpty;
+    final reduceAnimations = MediaQuery.of(context).disableAnimations;
     return Align(
-      alignment: Alignment.centerLeft,
-      child: FractionallySizedBox(
-        widthFactor: 0.96,
-        alignment: Alignment.centerLeft,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _AnswerStatusHeader(done: isDone, elapsed: elapsed),
-              const SizedBox(height: 16),
-              ...children,
-              if (summarySteps.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.center,
-                  child: _StepSummaryPill(
-                    steps: summarySteps,
-                    active: isActive,
-                  ),
+      alignment: Alignment.centerRight,
+      child: ConstrainedBox(
+        // Codex keeps assistant output in a readable desktop column instead
+        // of stretching a response card across the entire conversation pane.
+        constraints: BoxConstraints(maxWidth: widget.maxWidth),
+        child: SizedBox(
+          width: double.infinity,
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _AnswerStatusHeader(
+                  done: isDone,
+                  elapsed: widget.showUsageMetrics ? elapsed : null,
+                  usage: widget.showUsageMetrics ? usage : null,
+                  expanded: _reasoningExpanded,
+                  hasReasoning: hasReasoning,
+                  onToggle: hasReasoning
+                      ? () => setState(
+                          () => _reasoningExpanded = !_reasoningExpanded,
+                        )
+                      : null,
                 ),
+                if (hasReasoning && _reasoningExpanded) ...[
+                  const SizedBox(height: 16),
+                  AnimatedSize(
+                    duration: reduceAnimations
+                        ? Duration.zero
+                        : const Duration(milliseconds: 180),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topCenter,
+                    child: _ReasoningContent(steps: reasoningSteps),
+                  ),
+                ],
+                if (answerChildren.isNotEmpty) ...[
+                  if (hasReasoning && _reasoningExpanded)
+                    const SizedBox(height: 22),
+                  ...answerChildren,
+                ],
               ],
-            ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ReasoningContent extends StatelessWidget {
+  const _ReasoningContent({required this.steps});
+
+  final List<_AnswerStep> steps;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var index = 0; index < steps.length; index += 1) ...[
+          if (index > 0) const SizedBox(height: 12),
+          steps[index].icon == RecodexIcons.reasoning
+              ? _ReasoningTextRow(text: steps[index].title)
+              : _AnswerStepRow(step: steps[index]),
+        ],
+      ],
+    );
+  }
+}
+
+class _ReasoningTextRow extends StatelessWidget {
+  const _ReasoningTextRow({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final fontScale = Get.find<ThemeController>().fontScale.value;
+    return Text(
+      text,
+      style: TextStyle(
+        color: colors.text.withValues(alpha: 0.92),
+        fontSize: _scaledFontSize(15, fontScale),
+        height: 1.5,
+        fontWeight: FontWeight.w400,
       ),
     );
   }
@@ -479,7 +874,10 @@ class AssistantAnswerBlock extends StatelessWidget {
 class _AnswerStep {
   const _AnswerStep({required this.icon, required this.title, this.detail});
 
-  factory _AnswerStep.fromToolEvent(SessionEvent event) {
+  factory _AnswerStep.fromToolEvent(
+    SessionEvent event, {
+    bool includeDetail = true,
+  }) {
     final command = _extractCommand(event.text);
     final raw = event.text.toLowerCase();
     final title = command != null
@@ -490,7 +888,16 @@ class _AnswerStep {
               raw.contains('文件')
         ? '加载了工具读取文件'
         : '已运行工具';
-    return _AnswerStep(icon: RecodexIcons.terminal, title: title);
+    final detail = includeDetail
+        ? command == null
+              ? _shortenText(event.text, fallback: '')
+              : _formatCommand(command)
+        : null;
+    return _AnswerStep(
+      icon: RecodexIcons.edit,
+      title: title,
+      detail: detail?.isEmpty == true ? null : detail,
+    );
   }
 
   final IconData icon;
@@ -520,7 +927,7 @@ class _AnswerStepRow extends StatelessWidget {
             style: TextStyle(
               color: colors.textMuted,
               fontSize: _scaledFontSize(13.5, fontScale),
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),
@@ -539,174 +946,6 @@ class _AnswerStepRow extends StatelessWidget {
             ),
           ),
         ],
-      ],
-    );
-  }
-}
-
-class _StepSummaryPill extends StatelessWidget {
-  const _StepSummaryPill({required this.steps, required this.active});
-
-  final List<_AnswerStep> steps;
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final fontScale = Get.find<ThemeController>().fontScale.value;
-    final total = math.max(1, steps.length);
-    final current = active ? math.max(1, steps.length) : total;
-    final label = active ? '第 $current / $total 步' : '已完成 ${steps.length} 步';
-    return Tooltip(
-      message: '查看步骤',
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(999),
-          onTap: () => showDialog<void>(
-            context: context,
-            builder: (_) => _StepSummaryDialog(steps: steps),
-          ),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: colors.surfaceOverlay.withValues(alpha: 0.28),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(
-                color: colors.glassBorder.withValues(alpha: 0.56),
-              ),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    RecodexIcons.circle,
-                    size: 15,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: colors.textMuted,
-                      fontSize: _scaledFontSize(12.5, fontScale),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StepSummaryDialog extends StatelessWidget {
-  const _StepSummaryDialog({required this.steps});
-
-  final List<_AnswerStep> steps;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final fontScale = Get.find<ThemeController>().fontScale.value;
-    return Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      backgroundColor: colors.glassColor,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
-        side: BorderSide(color: colors.glassBorder.withValues(alpha: 0.72)),
-      ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 430),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '执行步骤',
-                      style: TextStyle(
-                        color: colors.text,
-                        fontSize: _scaledFontSize(16, fontScale),
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: '关闭',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: Icon(RecodexIcons.close, color: colors.textMuted),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: steps.length,
-                  separatorBuilder: (_, _) => const SizedBox(height: 13),
-                  itemBuilder: (_, index) => _StepDialogRow(step: steps[index]),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StepDialogRow extends StatelessWidget {
-  const _StepDialogRow({required this.step});
-
-  final _AnswerStep step;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final fontScale = Get.find<ThemeController>().fontScale.value;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 3),
-          child: Icon(RecodexIcons.circle, size: 17, color: colors.textMuted),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(text: step.title),
-                if ((step.detail ?? '').trim().isNotEmpty) ...[
-                  const TextSpan(text: '  '),
-                  TextSpan(
-                    text: step.detail,
-                    style: TextStyle(
-                      color: colors.textMuted.withValues(alpha: 0.82),
-                      fontWeight: FontWeight.w400,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            style: TextStyle(
-              color: colors.textMuted,
-              fontSize: _scaledFontSize(14.5, fontScale),
-              height: 1.35,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
       ],
     );
   }
@@ -886,7 +1125,7 @@ class _LiveActivityRow extends StatelessWidget {
               style: TextStyle(
                 color: colors.text.withValues(alpha: 0.92),
                 fontSize: _scaledFontSize(15, fontScale),
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ),
@@ -899,7 +1138,7 @@ class _LiveActivityRow extends StatelessWidget {
               style: TextStyle(
                 color: colors.textMuted,
                 fontSize: _scaledFontSize(13, fontScale),
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w400,
               ),
             ),
           ],
@@ -910,41 +1149,81 @@ class _LiveActivityRow extends StatelessWidget {
 }
 
 class _AnswerStatusHeader extends StatelessWidget {
-  const _AnswerStatusHeader({required this.done, required this.elapsed});
+  const _AnswerStatusHeader({
+    required this.done,
+    required this.elapsed,
+    required this.usage,
+    required this.expanded,
+    required this.hasReasoning,
+    this.onToggle,
+  });
 
   final bool done;
   final String? elapsed;
+  final TokenUsage? usage;
+  final bool expanded;
+  final bool hasReasoning;
+  final VoidCallback? onToggle;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
-    final label = done
-        ? elapsed == null
-              ? '已处理'
-              : '已处理 $elapsed'
-        : elapsed == null
-        ? '正在处理'
-        : '正在处理 $elapsed';
-    return Column(
+    final metrics = <String>[
+      if (elapsed != null) '用时 $elapsed',
+      if (usage != null) 'Token ${_formatTokenCount(usage!.totalTokens)}',
+    ];
+    final label = metrics.isEmpty
+        ? done
+              ? '已完成'
+              : '正在处理'
+        : metrics.join(' · ');
+    final header = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            color: colors.textMuted,
+            fontSize: _scaledFontSize(15, fontScale),
+            height: 1.2,
+            fontWeight: FontWeight.w400,
+          ),
+        ),
+        if (hasReasoning) ...[
+          const SizedBox(width: 8),
+          Icon(
+            expanded ? RecodexIcons.chevronDown : RecodexIcons.chevronRight,
+            size: 16,
+            color: colors.textMuted,
+          ),
+        ],
+      ],
+    );
+    final content = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              label,
-              style: TextStyle(
-                color: colors.textMuted,
-                fontSize: _scaledFontSize(14, fontScale),
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
+        header,
+        const SizedBox(height: 12),
         Divider(height: 1, color: colors.textMuted.withValues(alpha: 0.16)),
       ],
+    );
+    if (!hasReasoning || onToggle == null) return content;
+    return Semantics(
+      button: true,
+      label: expanded ? '收起思考内容' : '展开思考内容',
+      child: Tooltip(
+        message: expanded ? '收起思考内容' : '展开思考内容',
+        child: InkWell(
+          key: const ValueKey('answer-reasoning-toggle'),
+          borderRadius: BorderRadius.circular(6),
+          onTap: onToggle,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: content,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -952,11 +1231,13 @@ class _AnswerStatusHeader extends StatelessWidget {
 class _AnswerText extends StatelessWidget {
   const _AnswerText({
     required this.text,
+    this.cardRadius = 24,
     this.gitChangeSummary,
     this.onFileTap,
   });
 
   final String text;
+  final double cardRadius;
   final GitChangeSummary? gitChangeSummary;
   final ValueChanged<GitFileChange>? onFileTap;
 
@@ -972,6 +1253,7 @@ class _AnswerText extends StatelessWidget {
       widgets.add(
         _ModifiedFilesBlock(
           files: List<_ModifiedFileReference>.of(modifiedFiles),
+          cardRadius: cardRadius,
           onFileTap: onFileTap,
         ),
       );
@@ -1021,19 +1303,27 @@ class _AnswerLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
+    final leadingWhitespace = RegExp(r'^\s*').firstMatch(text)?.group(0);
+    final depth = math.min(3, (leadingWhitespace?.length ?? 0) ~/ 2);
     final trimmed = text.trimLeft();
-    final isBullet = trimmed.startsWith('- ') || trimmed.startsWith('• ');
-    final isHeading =
+    final bullet = RegExp(r'^[-*+•◦○]\s+').firstMatch(trimmed);
+    final isBullet = bullet != null;
+    final heading = RegExp(r'^#{1,6}\s+(.+)$').firstMatch(trimmed);
+    final isLabelHeading =
         !isBullet &&
-        trimmed.length <= 18 &&
-        !trimmed.contains(RegExp(r'[。.:：]'));
-    final content = isBullet ? trimmed.substring(2).trimLeft() : text;
+        heading == null &&
+        trimmed.length <= 36 &&
+        RegExp(r'[：:]$').hasMatch(trimmed);
+    final isHeading = !isBullet && (heading != null || isLabelHeading);
+    final content = isBullet
+        ? trimmed.substring(bullet.end).trimLeft()
+        : heading?.group(1) ?? text;
     final richText = Text.rich(
       TextSpan(children: _inlineSpans(context, content)),
       style: TextStyle(
         color: colors.text,
         fontSize: _scaledFontSize(isHeading ? 16.5 : 15.5, fontScale),
-        height: 1.62,
+        height: 1.55,
         fontWeight: isHeading ? FontWeight.w600 : FontWeight.w400,
         letterSpacing: 0,
       ),
@@ -1046,7 +1336,7 @@ class _AnswerLine extends StatelessWidget {
       );
     }
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: EdgeInsets.only(left: depth * 20.0, bottom: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1054,7 +1344,7 @@ class _AnswerLine extends StatelessWidget {
             padding: const EdgeInsets.only(top: 10),
             child: Icon(
               RecodexIcons.circle,
-              size: 5.5,
+              size: depth == 0 ? 6 : 5,
               color: colors.textMuted,
             ),
           ),
@@ -1079,9 +1369,14 @@ class _ModifiedFileReference {
 }
 
 class _ModifiedFilesBlock extends StatelessWidget {
-  const _ModifiedFilesBlock({required this.files, this.onFileTap});
+  const _ModifiedFilesBlock({
+    required this.files,
+    this.cardRadius = 22,
+    this.onFileTap,
+  });
 
   final List<_ModifiedFileReference> files;
+  final double cardRadius;
   final ValueChanged<GitFileChange>? onFileTap;
 
   @override
@@ -1106,7 +1401,9 @@ class _ModifiedFilesBlock extends StatelessWidget {
           color: isDark
               ? const Color(0xff171717).withValues(alpha: 0.86)
               : colors.assistantBubble.withValues(alpha: 0.78),
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(
+            _conversationCardRadius(cardRadius),
+          ),
           border: Border.all(color: colors.glassBorder.withValues(alpha: 0.92)),
         ),
         child: Column(
@@ -1140,7 +1437,7 @@ class _ModifiedFilesBlock extends StatelessWidget {
                       style: TextStyle(
                         color: colors.textMuted,
                         fontSize: _scaledFontSize(16, fontScale),
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w500,
                         height: 1.15,
                       ),
                     ),
@@ -1210,7 +1507,7 @@ class _ModifiedFileBlockRow extends StatelessWidget {
               style: TextStyle(
                 color: colors.text,
                 fontSize: _scaledFontSize(15.5, fontScale),
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w500,
                 height: 1.12,
               ),
             ),
@@ -1233,6 +1530,7 @@ class ToolCallRow extends StatelessWidget {
     required this.title,
     required this.status,
     this.icon = RecodexIcons.checkCircle,
+    this.cardRadius = 20,
     this.onTap,
     super.key,
   });
@@ -1240,6 +1538,7 @@ class ToolCallRow extends StatelessWidget {
   final String title;
   final String status;
   final IconData icon;
+  final double cardRadius;
   final VoidCallback? onTap;
 
   @override
@@ -1249,7 +1548,9 @@ class ToolCallRow extends StatelessWidget {
     final content = DecoratedBox(
       decoration: BoxDecoration(
         color: colors.surfaceOverlay,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(
+          _conversationCardRadius(cardRadius),
+        ),
         border: Border.all(color: colors.glassBorder),
       ),
       child: Padding(
@@ -1266,7 +1567,7 @@ class ToolCallRow extends StatelessWidget {
                 style: TextStyle(
                   color: colors.textMuted,
                   fontSize: _scaledFontSize(14, fontScale),
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ),
@@ -1276,7 +1577,7 @@ class ToolCallRow extends StatelessWidget {
               style: TextStyle(
                 color: colors.textMuted,
                 fontSize: _scaledFontSize(14, fontScale),
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w400,
               ),
             ),
           ],
@@ -1290,9 +1591,13 @@ class ToolCallRow extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: Material(
           color: Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(
+            _conversationCardRadius(cardRadius),
+          ),
           child: InkWell(
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(
+              _conversationCardRadius(cardRadius),
+            ),
             onTap: onTap,
             child: content,
           ),
@@ -1305,12 +1610,14 @@ class ToolCallRow extends StatelessWidget {
 class GitChangeCard extends StatelessWidget {
   const GitChangeCard({
     required this.summary,
+    this.cardRadius = 22,
     this.onUndo,
     this.onFileTap,
     super.key,
   });
 
   final GitChangeSummary summary;
+  final double cardRadius;
   final VoidCallback? onUndo;
   final ValueChanged<GitFileChange>? onFileTap;
 
@@ -1323,6 +1630,7 @@ class GitChangeCard extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: _GitChangePanel(
           summary: summary,
+          cardRadius: cardRadius,
           onUndo: onUndo,
           onFileTap: onFileTap,
         ),
@@ -1332,9 +1640,15 @@ class GitChangeCard extends StatelessWidget {
 }
 
 class _GitChangePanel extends StatelessWidget {
-  const _GitChangePanel({required this.summary, this.onUndo, this.onFileTap});
+  const _GitChangePanel({
+    required this.summary,
+    this.cardRadius = 22,
+    this.onUndo,
+    this.onFileTap,
+  });
 
   final GitChangeSummary summary;
+  final double cardRadius;
   final VoidCallback? onUndo;
   final ValueChanged<GitFileChange>? onFileTap;
 
@@ -1351,7 +1665,9 @@ class _GitChangePanel extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         color: panelColor,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(
+          _conversationCardRadius(cardRadius),
+        ),
         border: Border.all(color: colors.glassBorder.withValues(alpha: 0.92)),
         boxShadow: [
           BoxShadow(
@@ -1382,7 +1698,7 @@ class _GitChangePanel extends StatelessWidget {
                           style: TextStyle(
                             color: colors.text,
                             fontSize: _scaledFontSize(16, fontScale),
-                            fontWeight: FontWeight.w900,
+                            fontWeight: FontWeight.w600,
                             height: 1.1,
                           ),
                         ),
@@ -1578,7 +1894,7 @@ class _GitFileRow extends StatelessWidget {
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.primary,
                   fontSize: _scaledFontSize(15.5, fontScale),
-                  fontWeight: FontWeight.w900,
+                  fontWeight: FontWeight.w500,
                   height: 1.12,
                 ),
               ),
@@ -1623,7 +1939,7 @@ class _DeltaText extends StatelessWidget {
       ),
       style: TextStyle(
         fontSize: _scaledFontSize(14, fontScale),
-        fontWeight: FontWeight.w900,
+        fontWeight: FontWeight.w600,
       ),
     );
   }
@@ -1643,6 +1959,7 @@ class ComposerBar extends StatelessWidget {
     this.running = false,
     this.onStop,
     this.listening = false,
+    this.focusNode,
     super.key,
   });
 
@@ -1660,6 +1977,7 @@ class ComposerBar extends StatelessWidget {
   final ValueChanged<String> onPermissionModeChanged;
   final VoidCallback onVoicePressed;
   final bool listening;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -1669,13 +1987,15 @@ class ComposerBar extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         _ComposerGlassPanel(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-          radius: 32,
+          // Codex keeps a compact desktop rhythm: a short input row with a
+          // single control row below it, rather than a tall mobile field.
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          radius: 28,
           child: Column(
             children: [
               DecoratedBox(
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(23),
+                  borderRadius: BorderRadius.circular(20),
                   border: Border.all(
                     color: colors.glassBorder.withValues(
                       alpha: isDark ? 0.24 : 0.72,
@@ -1684,25 +2004,26 @@ class ComposerBar extends StatelessWidget {
                 ),
                 child: TextField(
                   controller: controller,
+                  focusNode: focusNode,
                   enabled: enabled && !running,
                   minLines: 1,
                   maxLines: 4,
                   style: TextStyle(
                     color: colors.text,
                     fontSize: 16,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w400,
                   ),
                   decoration: InputDecoration(
                     hintText: 'Ask anything... @files, \$skills, /commands',
                     hintStyle: TextStyle(
                       color: colors.textMuted.withValues(alpha: 0.72),
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.w400,
                     ),
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,
                     focusedBorder: InputBorder.none,
                     filled: false,
-                    contentPadding: const EdgeInsets.fromLTRB(14, 10, 14, 13),
+                    contentPadding: const EdgeInsets.fromLTRB(14, 6, 14, 8),
                   ),
                 ),
               ),
@@ -1766,7 +2087,7 @@ class ComposerBar extends StatelessWidget {
                   Tooltip(
                     message: running ? '停止任务' : '发送消息',
                     child: SizedBox.square(
-                      dimension: 48,
+                      dimension: 42,
                       child: FilledButton(
                         onPressed: running
                             ? onStop
@@ -1802,60 +2123,6 @@ class ComposerBar extends StatelessWidget {
             ],
           ),
         ),
-        if (!running) ...[
-          const SizedBox(height: 12),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                _ContextMenuPill(
-                  icon: RecodexIcons.laptop,
-                  label: this.context.transport,
-                  items: [
-                    _ContextMenuItem(
-                      icon: RecodexIcons.laptop,
-                      title: this.context.transport,
-                      subtitle: '本机 Bridge 上下文',
-                    ),
-                    _ContextMenuItem(
-                      icon: RecodexIcons.accountTree,
-                      title: this.context.branch.isEmpty
-                          ? '未读取分支'
-                          : this.context.branch,
-                      subtitle: '当前 Git 分支',
-                    ),
-                    _ContextMenuItem(
-                      icon: RecodexIcons.shield,
-                      title: this.context.requireConfirmGitWrite
-                          ? 'Git 写操作需确认'
-                          : '信任当前工作区',
-                      subtitle: '权限策略',
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 10),
-                _PermissionModePill(
-                  icon: RecodexIcons.shield,
-                  value: permissionMode,
-                  values: permissionModes,
-                  onChanged: onPermissionModeChanged,
-                ),
-                const SizedBox(width: 18),
-                _ContextPill(
-                  icon: RecodexIcons.accountTree,
-                  label: this.context.branch.isEmpty
-                      ? 'branch'
-                      : this.context.branch,
-                ),
-                const SizedBox(width: 10),
-                _ContextPill(
-                  icon: RecodexIcons.cloudDone,
-                  label: this.context.approvalPolicy,
-                ),
-              ],
-            ),
-          ),
-        ],
       ],
     );
   }
@@ -1881,7 +2148,7 @@ class _RunningModelLabel extends StatelessWidget {
       style: TextStyle(
         color: colors.textMuted,
         fontSize: 14,
-        fontWeight: FontWeight.w700,
+        fontWeight: FontWeight.w500,
       ),
     );
   }
@@ -1948,7 +2215,7 @@ class _ComposerIconButton extends StatelessWidget {
       iconSize: 24,
       style: IconButton.styleFrom(
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        minimumSize: const Size(42, 42),
+        minimumSize: const Size(38, 38),
       ),
     );
   }
@@ -1995,60 +2262,6 @@ class _ComposerMenuButton extends StatelessWidget {
   }
 }
 
-class _ContextPill extends StatelessWidget {
-  const _ContextPill({required this.icon, required this.label, this.trailing});
-
-  final IconData icon;
-  final String label;
-  final IconData? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final foreground = colors.textMuted;
-    final background = isDark
-        ? colors.glassColor.withValues(alpha: 0.44)
-        : Colors.white.withValues(alpha: 0.62);
-    final border = isDark
-        ? colors.glassBorder.withValues(alpha: 0.72)
-        : Colors.white.withValues(alpha: 0.76);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: border),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 17, color: foreground),
-            const SizedBox(width: 7),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 110),
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: foreground,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ),
-            if (trailing != null) ...[
-              const SizedBox(width: 2),
-              Icon(trailing, size: 17, color: foreground),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class _PermissionModePill extends StatelessWidget {
   const _PermissionModePill({
     required this.icon,
@@ -2080,92 +2293,15 @@ class _PermissionModePill extends StatelessWidget {
   }
 }
 
-class _ContextMenuPill extends StatelessWidget {
-  const _ContextMenuPill({
-    required this.icon,
-    required this.label,
-    required this.items,
-  });
-
-  final IconData icon;
-  final String label;
-  final List<_ContextMenuItem> items;
-
-  @override
-  Widget build(BuildContext context) {
-    return RecodexPopupMenuButton<int>(
-      itemBuilder: (context) => [
-        for (var index = 0; index < items.length; index += 1)
-          PopupMenuItem<int>(
-            value: index,
-            enabled: false,
-            child: _ContextMenuItemView(item: items[index]),
-          ),
-      ],
-      child: _ContextPill(
-        icon: icon,
-        label: label,
-        trailing: RecodexIcons.chevronDown,
-      ),
-    );
-  }
-}
-
-class _ContextMenuItem {
-  const _ContextMenuItem({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-}
-
-class _ContextMenuItemView extends StatelessWidget {
-  const _ContextMenuItemView({required this.item});
-
-  final _ContextMenuItem item;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(item.icon, size: 19, color: context.recodexColors.textMuted),
-        const SizedBox(width: 12),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              item.title,
-              style: const TextStyle(
-                color: Color(0xff303132),
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              item.subtitle,
-              style: const TextStyle(
-                color: Color(0xff747878),
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
 String _reasoningLabel(String value) {
   return switch (value) {
+    'minimal' => '最低',
     'low' => '低',
     'medium' => '中',
     'high' => '高',
     'xhigh' => '极高',
+    'max' => '最高',
+    'ultra' => '极致',
     _ => value,
   };
 }
@@ -2216,9 +2352,9 @@ List<InlineSpan> _inlineSpans(BuildContext context, String text) {
                 'Consolas',
                 'monospace',
               ],
-              fontSize: 14.5,
+              fontSize: 14,
               height: 1.12,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w500,
               letterSpacing: 0,
             ),
           ),
@@ -2375,15 +2511,30 @@ String? _elapsedLabel(List<SessionEvent> events) {
   if (seconds < 1) return '少于 1 秒';
   final minutes = seconds ~/ 60;
   final remainingSeconds = seconds % 60;
-  if (minutes == 0) return '$remainingSeconds 秒';
+  if (minutes == 0) return '$remainingSeconds秒';
   final hours = minutes ~/ 60;
   final remainingMinutes = minutes % 60;
   if (hours == 0) {
-    if (remainingSeconds == 0) return '$minutes 分钟';
-    return '$minutes 分 $remainingSeconds 秒';
+    if (remainingSeconds == 0) return '$minutes分钟';
+    return '$minutes分钟 $remainingSeconds秒';
   }
-  if (remainingMinutes == 0) return '$hours 小时';
-  return '$hours 小时 $remainingMinutes 分';
+  if (remainingMinutes == 0) {
+    if (remainingSeconds == 0) return '$hours小时';
+    return '$hours小时 $remainingSeconds秒';
+  }
+  if (remainingSeconds == 0) return '$hours小时 $remainingMinutes分钟';
+  return '$hours小时 $remainingMinutes分钟 $remainingSeconds秒';
+}
+
+String _formatTokenCount(int value) {
+  final digits = value.abs().toString();
+  final groups = <String>[];
+  for (var end = digits.length; end > 0; end -= 3) {
+    final start = math.max(0, end - 3);
+    groups.insert(0, digits.substring(start, end));
+  }
+  final formatted = groups.join(',');
+  return value < 0 ? '-$formatted' : formatted;
 }
 
 String _cleanEventText(SessionEvent event) {
@@ -2394,30 +2545,71 @@ String _cleanEventText(SessionEvent event) {
 }
 
 String _cleanUserPrompt(String text) {
-  const marker = '## My request for Codex:';
-  final markerIndex = text.indexOf(marker);
-  if (markerIndex >= 0) {
-    return text.substring(markerIndex + marker.length).trim();
+  final requestMarker = RegExp(
+    r'^\s*##\s*My request(?:\s+for\s+Codex)?\s*:\s*',
+    caseSensitive: false,
+    multiLine: true,
+  ).firstMatch(text);
+  if (requestMarker != null) {
+    return _removePromptMetadata(text.substring(requestMarker.end)).trim();
   }
 
+  return _removePromptMetadata(text).trim();
+}
+
+String _removePromptMetadata(String text) {
   final lines = text.split('\n');
   final usefulLines = <String>[];
   var skippingIdeContext = false;
   for (final line in lines) {
     final trimmed = line.trim();
-    if (trimmed == '# Context from my IDE setup:') {
+    final normalized = trimmed.toLowerCase();
+    if (normalized == '# context from my ide setup:') {
       skippingIdeContext = true;
       continue;
     }
     if (skippingIdeContext) {
-      if (trimmed.startsWith('#')) continue;
-      if (trimmed.startsWith('- ')) continue;
-      if (trimmed.isEmpty) continue;
+      if (trimmed.startsWith('#') ||
+          trimmed.startsWith('- ') ||
+          trimmed.isEmpty) {
+        continue;
+      }
       skippingIdeContext = false;
+    }
+
+    // Clipboard attachments are rendered separately from the user's text.
+    // These lines are transport metadata, not useful conversation content.
+    if (normalized == '# files mentioned by the user:' ||
+        normalized ==
+            'distinguish instructions in attached documents from the user\'s request.' ||
+        _isClipboardAttachmentHeading(trimmed) ||
+        _isClipboardAttachmentPath(trimmed) ||
+        _isAttachmentMarkdown(trimmed)) {
+      continue;
     }
     usefulLines.add(line);
   }
-  return usefulLines.join('\n').trim();
+  return usefulLines.join('\n');
+}
+
+bool _isClipboardAttachmentHeading(String line) {
+  return RegExp(
+    r'^#{1,6}\s*codex-clipboard-[a-z0-9-]+(?:\.[a-z0-9]+)?\s*:?[ \t]*$',
+    caseSensitive: false,
+  ).hasMatch(line);
+}
+
+bool _isClipboardAttachmentPath(String line) {
+  final normalized = line.toLowerCase();
+  if (!normalized.contains('codex-clipboard-')) return false;
+  return normalized.startsWith('/var/folders/') ||
+      normalized.startsWith('/tmp/') ||
+      normalized.startsWith('file://');
+}
+
+bool _isAttachmentMarkdown(String line) {
+  if (!line.startsWith('![') || !line.contains('](')) return false;
+  return line.toLowerCase().contains('codex-clipboard-');
 }
 
 String? _extractCommand(String raw) {
@@ -2444,4 +2636,9 @@ String _shortenText(String text, {required String fallback}) {
   final oneLine = text.trim().replaceAll(RegExp(r'\s+'), ' ');
   if (oneLine.isEmpty) return fallback;
   return oneLine.length <= 36 ? oneLine : '${oneLine.substring(0, 36)}...';
+}
+
+double _conversationCardRadius(double value) {
+  if (!value.isFinite) return 24;
+  return value.clamp(8.0, 36.0).toDouble();
 }

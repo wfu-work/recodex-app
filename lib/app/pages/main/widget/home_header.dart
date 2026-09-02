@@ -85,9 +85,11 @@ class HomeHeader extends StatelessWidget {
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(
-                      context,
-                    ).textTheme.headlineMedium?.copyWith(fontSize: 28),
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontSize: 24,
+                      height: 1.12,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   if (subtitle.isNotEmpty) ...[
                     const SizedBox(height: 4),
@@ -99,7 +101,7 @@ class HomeHeader extends StatelessWidget {
                       style: TextStyle(
                         color: colors.textMuted,
                         fontSize: 13,
-                        fontWeight: FontWeight.w800,
+                        fontWeight: FontWeight.w500,
                         height: 1.08,
                       ),
                     ),
@@ -199,20 +201,10 @@ class _HeaderActionMenu extends StatelessWidget {
       ],
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(RecodexIcons.more, size: 20, color: colors.text),
-            const SizedBox(width: 5),
-            Text(
-              '操作',
-              style: TextStyle(
-                color: colors.text,
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
+        child: Semantics(
+          label: '工作台操作',
+          button: true,
+          child: Icon(RecodexIcons.more, size: 20, color: colors.text),
         ),
       ),
     );

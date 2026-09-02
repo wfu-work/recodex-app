@@ -96,6 +96,8 @@ class BridgeController extends GetxController {
   String? _requestedEventsPrompt;
   String? _storedWorkspaceName;
   String? _storedWorkspacePath;
+  String? _storedSessionId;
+  bool _sessionRestoreAttempted = false;
   final _sessionLifecycles = <String, _SessionLifecycle>{};
   final _notifiedTerminalSessions = <String>{};
 
@@ -184,6 +186,7 @@ class BridgeController extends GetxController {
       grantExpiresAt: grantExpiresAt.value,
       selectedWorkspaceName: _storedWorkspaceName,
       selectedWorkspacePath: _storedWorkspacePath,
+      selectedSessionId: _storedSessionId,
       createdAt: previous?.createdAt,
       updatedAt: DateTime.now().toUtc().toIso8601String(),
     );
@@ -295,6 +298,8 @@ class BridgeController extends GetxController {
     grantExpiresAt.value = profile.grantExpiresAt;
     _storedWorkspaceName = profile.selectedWorkspaceName;
     _storedWorkspacePath = profile.selectedWorkspacePath;
+    _storedSessionId = profile.selectedSessionId;
+    _sessionRestoreAttempted = false;
     _keyPair = null;
   }
 
@@ -327,6 +332,7 @@ class BridgeController extends GetxController {
     _seenIncomingMessageIds.clear();
     _sessionLifecycles.clear();
     _notifiedTerminalSessions.clear();
+    _sessionRestoreAttempted = false;
   }
 
   void _resetToEmptyConfiguration() {
@@ -344,6 +350,8 @@ class BridgeController extends GetxController {
     grantExpiresAt.value = 0;
     _storedWorkspaceName = null;
     _storedWorkspacePath = null;
+    _storedSessionId = null;
+    _sessionRestoreAttempted = false;
     _keyPair = null;
     _resetHostState();
   }
@@ -646,6 +654,10 @@ class BridgeController extends GetxController {
     gitSnapshot.value = null;
     currentSessionId.value = null;
     selectedSessionId.value = null;
+    // An explicit project switch is a user choice. Do not immediately
+    // replace it with the previously opened task while the new catalog is
+    // synchronizing.
+    _sessionRestoreAttempted = true;
     timelineSessionRunning.value = false;
     _requestedEventsSessionId = null;
     _requestedEventsPrompt = null;
@@ -677,6 +689,9 @@ class BridgeController extends GetxController {
 
     selectedSessionId.value = session.id;
     currentSessionId.value = session.id;
+    _sessionRestoreAttempted = true;
+    _storedSessionId = session.id;
+    unawaited(_storeSelectedSession(session.id));
     timelineSessionRunning.value = session.isRunning;
     _requestedEventsSessionId = session.id;
     _requestedEventsPrompt = session.prompt;
@@ -688,6 +703,25 @@ class BridgeController extends GetxController {
       return;
     }
     _sendCommand('thread.read', {}, threadId: session.id);
+  }
+
+  /// Clears the visible transcript so the composer can start a fresh task.
+  ///
+  /// The last persisted task is intentionally kept in [_storedSessionId];
+  /// that value is used to restore the previous task after a Relay reconnect.
+  void startNewConversation() {
+    currentSessionId.value = null;
+    selectedSessionId.value = null;
+    timelineSessionRunning.value = false;
+    _pendingSessionStart = false;
+    _interruptRequested = false;
+    _pendingPrompt = null;
+    _currentTurnId = null;
+    _requestedEventsSessionId = null;
+    _requestedEventsPrompt = null;
+    _sessionRestoreAttempted = true;
+    events.clear();
+    _bumpTimelineRevision();
   }
 
   void startSession(String prompt) {
@@ -703,16 +737,30 @@ class BridgeController extends GetxController {
     _pendingSessionStart = true;
     _pendingPrompt = trimmedPrompt;
     selectedSessionId.value = null;
+    _sessionRestoreAttempted = true;
     _sendCommand('thread.create', {
       if (workspace.path.trim().isNotEmpty) 'cwd': workspace.path,
     });
   }
 
   void setComposerModel(String model) {
-    composerContext.value = composerContext.value.copyWith(model: model);
+    final context = composerContext.value;
+    final efforts = context.modelReasoningEfforts[model] ?? const <String>[];
+    final effort = _resolveReasoningEffort(
+      requested: context.reasoningEffort,
+      available: efforts,
+      advertisedDefault: context.modelDefaultReasoningEfforts[model],
+    );
+    composerContext.value = context.copyWith(
+      model: model,
+      reasoningEfforts: efforts,
+      reasoningEffort: effort,
+    );
   }
 
   void setReasoningEffort(String effort) {
+    final available = composerContext.value.reasoningEfforts;
+    if (available.isNotEmpty && !available.contains(effort)) return;
     composerContext.value = composerContext.value.copyWith(
       reasoningEffort: effort,
     );
@@ -732,9 +780,19 @@ class BridgeController extends GetxController {
               ? composerContext.value.model
               : composerContext.value.models.first
         : model;
+    final availableEfforts =
+        composerContext.value.modelReasoningEfforts[selectedModel] ??
+        composerContext.value.reasoningEfforts;
+    final selectedEffort = _resolveReasoningEffort(
+      requested: preferences.defaultReasoningEffort.value,
+      available: availableEfforts,
+      advertisedDefault:
+          composerContext.value.modelDefaultReasoningEfforts[selectedModel],
+    );
     composerContext.value = composerContext.value.copyWith(
       model: selectedModel,
-      reasoningEffort: preferences.defaultReasoningEffort.value,
+      reasoningEffort: selectedEffort,
+      reasoningEfforts: availableEfforts,
       requireConfirmGitWrite: preferences.confirmSensitiveActions.value,
       approvalPolicy: _approvalPolicyFor(
         preferences.defaultPermissionMode.value,
@@ -983,6 +1041,9 @@ class BridgeController extends GetxController {
         Get.find<TaskNotificationController>().notifyRelayReconnected(),
       );
     }
+    if (selectedSessionId.value == null) {
+      _sessionRestoreAttempted = false;
+    }
     _clearRemoteModels();
     _pendingCommands.clear();
     unawaited(_storeConnectionHints());
@@ -1104,7 +1165,11 @@ class BridgeController extends GetxController {
       ).map(_sessionFromThread).whereType<SessionRecord>(),
     );
     _syncSessionCompletionNotifications(next);
-    sessions.assignAll(next);
+    // App Server can briefly report an idle thread while its turn.started
+    // event is already in flight. Keep the local running marker visible until
+    // the matching terminal event arrives instead of making the sidebar
+    // flicker back to a completed state on every catalog refresh.
+    sessions.assignAll(next.map(_sessionWithLiveStatus));
     final selectedId = selectedSessionId.value;
     if (selectedId != null &&
         !next.any((session) => session.id == selectedId)) {
@@ -1113,6 +1178,7 @@ class BridgeController extends GetxController {
     _deriveWorkspaces(next);
     selectedWorkspace.value ??= _restoreSelectedWorkspace();
     selectedWorkspace.value ??= _defaultWorkspace();
+    _restoreLastSelectedSession(next);
     // The catalog refresh only updates an already selected timeline once.
     // Older Codex threads can contain megabytes of tool output, so forcing a
     // full read here would make the Relay connection flap while polling.
@@ -1169,8 +1235,58 @@ class BridgeController extends GetxController {
   void _upsertSession(SessionRecord record) {
     final id = record.id.trim();
     if (id.isEmpty) return;
+    record = _sessionWithLiveStatus(record);
     sessions.removeWhere((item) => item.id.trim() == id);
     sessions.insert(0, record);
+  }
+
+  SessionRecord _sessionWithLiveStatus(SessionRecord session) {
+    if (session.isRunning) return session;
+    final lifecycle = _sessionLifecycles[session.id.trim()];
+    final selectedRunning =
+        session.id.trim() == currentSessionId.value?.trim() &&
+        timelineSessionRunning.value;
+    if (lifecycle?.visibleRunning != true && !selectedRunning) return session;
+    return session.copyWith(status: 'running');
+  }
+
+  void _restoreLastSelectedSession(List<SessionRecord> records) {
+    if (_sessionRestoreAttempted || selectedSessionId.value != null) return;
+    if (records.isEmpty) return;
+
+    final storedId = _storedSessionId?.trim() ?? '';
+    SessionRecord? selected;
+    if (storedId.isNotEmpty) {
+      for (final session in records) {
+        if (session.id.trim() == storedId) {
+          selected = session;
+          break;
+        }
+      }
+    }
+    // Profiles created before selectedSessionId was introduced have no saved
+    // task. The server returns newest-first, so opening the first non-archived
+    // task is the least surprising migration fallback.
+    selected ??= records.cast<SessionRecord?>().firstWhere(
+      (session) => session != null && !session.isArchived,
+      orElse: () => null,
+    );
+    if (selected == null) return;
+
+    _sessionRestoreAttempted = true;
+    final workspace = _workspaceForSession(selected.workspace);
+    if (workspace != null &&
+        !_sameWorkspace(selectedWorkspace.value, workspace)) {
+      selectedWorkspace.value = workspace;
+      unawaited(_storeSelectedWorkspace(workspace));
+    }
+    selectedSessionId.value = selected.id;
+    currentSessionId.value = selected.id;
+    timelineSessionRunning.value = selected.isRunning;
+    // Leave the read request unset so the normal timeline loader issues a
+    // fresh thread.read for the restored task below.
+    _requestedEventsSessionId = null;
+    _requestedEventsPrompt = selected.prompt;
   }
 
   void _deriveWorkspaces(List<SessionRecord> records) {
@@ -1199,11 +1315,12 @@ class BridgeController extends GetxController {
         _readString(thread['sessionId']);
     if (id == null || id.isEmpty) return null;
     final workspace = _threadWorkspace(thread);
-    final prompt =
-        _readString(thread['preview']) ??
-        _readString(thread['name']) ??
-        _readString(thread['title']) ??
-        '';
+    final title =
+        _readString(thread['name']) ?? _readString(thread['title']) ?? '';
+    // Keep the raw preview for thread/read prompt matching. The sidebar uses
+    // SessionRecord.displayTitle, which prefers the official name and cleans
+    // legacy attachment metadata when a name is unavailable.
+    final prompt = _readString(thread['preview']) ?? title;
     final status = _threadStatus(thread);
     final created = _dateString(thread['createdAt'] ?? thread['created_at']);
     final updated = _dateString(thread['updatedAt'] ?? thread['updated_at']);
@@ -1214,6 +1331,15 @@ class BridgeController extends GetxController {
       status: status,
       createdAt: created,
       updatedAt: updated.isEmpty ? created : updated,
+      title: title,
+      isPinned: _readBool(
+        thread['isPinned'] ?? thread['is_pinned'] ?? thread['pinned'],
+      ),
+      isArchived:
+          _readBool(
+            thread['isArchived'] ?? thread['is_archived'] ?? thread['archived'],
+          ) ||
+          status == 'archived',
     );
   }
 
@@ -1251,21 +1377,48 @@ class BridgeController extends GetxController {
   }
 
   String _threadStatus(Map<String, dynamic> thread) {
+    // Some App Server versions expose the lifecycle both as a status object
+    // and as a top-level active/running flag. The explicit flag must win over
+    // a stale idle status while a turn is still executing.
+    if (_readBool(thread['active']) || _readBool(thread['running'])) {
+      return 'running';
+    }
     final status = thread['status'];
     if (status is String) return _normalizeThreadStatus(status);
     if (status is Map) {
-      return _normalizeThreadStatus(_readString(status['type']) ?? 'done');
+      return _normalizeThreadStatus(
+        _readString(status['type']) ??
+            _readString(status['state']) ??
+            _readString(status['status']) ??
+            'done',
+      );
     }
-    return thread['active'] == true ? 'running' : 'done';
+    return 'done';
   }
 
   String _normalizeThreadStatus(String value) {
     final normalized = value.trim().toLowerCase();
-    return normalized == 'active' || normalized == 'inprogress'
-        ? 'running'
-        : normalized == 'idle' || normalized == 'notloaded'
-        ? 'done'
-        : normalized;
+    return switch (normalized) {
+      'active' ||
+      'running' ||
+      'inprogress' ||
+      'in_progress' ||
+      'processing' ||
+      'queued' ||
+      'starting' ||
+      'pending' ||
+      'executing' ||
+      'working' => 'running',
+      'idle' || 'notloaded' => 'done',
+      _ => normalized,
+    };
+  }
+
+  bool _readBool(Object? value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    final normalized = value?.toString().trim().toLowerCase();
+    return normalized == 'true' || normalized == '1' || normalized == 'yes';
   }
 
   void _handleThreadCreated(Object? value) {
@@ -1283,13 +1436,17 @@ class BridgeController extends GetxController {
     _pendingSessionStart = false;
     currentSessionId.value = record.id;
     selectedSessionId.value = record.id;
+    _storedSessionId = record.id;
+    _sessionRestoreAttempted = true;
+    unawaited(_storeSelectedSession(record.id));
     timelineSessionRunning.value = true;
     _markSessionRunningForNotification(record.id);
     _requestedEventsSessionId = record.id;
     _requestedEventsPrompt = _pendingPrompt ?? record.prompt;
     _upsertSession(record);
-    events.add(const SessionEvent(kind: 'running', text: '正在启动 Codex 任务...'));
-    _bumpTimelineRevision();
+    _appendSessionEvent(
+      const SessionEvent(kind: 'running', text: '正在启动 Codex 任务...'),
+    );
     final prompt = _pendingPrompt;
     _pendingPrompt = null;
     if (prompt != null && prompt.isNotEmpty) {
@@ -1299,6 +1456,8 @@ class BridgeController extends GetxController {
         if ((selectedWorkspace.value?.path ?? '').trim().isNotEmpty)
           'cwd': selectedWorkspace.value!.path,
         if (context.model.trim().isNotEmpty) 'model': context.model,
+        if (context.reasoningEfforts.contains(context.reasoningEffort))
+          'effort': context.reasoningEffort,
       }, threadId: record.id);
     }
   }
@@ -1325,7 +1484,19 @@ class BridgeController extends GetxController {
         if (event == null) continue;
         if (promptWasAdded &&
             event.kind == 'user' &&
-            event.text.trim() == prompt!.trim()) {
+            (_matchesRequestedPrompt(event.text, prompt!) ||
+                (event.text.trim().isEmpty && event.attachments.isNotEmpty))) {
+          final promptEvent = loaded.first;
+          loaded[0] = SessionEvent(
+            kind: promptEvent.kind,
+            text: promptEvent.text,
+            time: event.time ?? promptEvent.time,
+            usage: event.usage ?? promptEvent.usage,
+            attachments: _mergeEventAttachments(
+              promptEvent.attachments,
+              event.attachments,
+            ),
+          );
           promptWasAdded = false;
           continue;
         }
@@ -1345,7 +1516,16 @@ class BridgeController extends GetxController {
     if (item == null) return null;
     final type = (_readString(item['type']) ?? '').toLowerCase();
     final text = _extractText(item);
-    if (text.isEmpty && type.isEmpty) return null;
+    final attachments = _extractAttachments(item);
+    final usage = _extractTokenUsage(item);
+    if (text.isEmpty && type.isEmpty && attachments.isEmpty && usage == null) {
+      return null;
+    }
+    final usageEvent =
+        usage != null &&
+        text.isEmpty &&
+        attachments.isEmpty &&
+        (type.contains('usage') || type.contains('token'));
     final kind = type == 'usermessage' || type.contains('user_message')
         ? 'user'
         : type.contains('message') || type.contains('text')
@@ -1354,8 +1534,18 @@ class BridgeController extends GetxController {
         ? 'tool_call'
         : type.contains('reason')
         ? 'reasoning'
+        : usageEvent
+        ? 'token_usage'
         : 'event';
-    return SessionEvent(kind: kind, text: text.isEmpty ? type : text);
+    return SessionEvent(
+      kind: kind,
+      // Attachment-only items do not have user-visible copy. Leaving their
+      // text empty lets the timeline render the thumbnail without leaking
+      // protocol type names such as "userMessage" or "image".
+      text: text.isEmpty && attachments.isEmpty ? type : text,
+      usage: usage,
+      attachments: attachments,
+    );
   }
 
   void _handleCodexEvent(Map<String, dynamic> message) {
@@ -1363,15 +1553,24 @@ class BridgeController extends GetxController {
     if (event == null) return;
     final type = _readString(event['type']) ?? '';
     final data = _asMap(event['data']) ?? const <String, dynamic>{};
+    final eventUsage = _extractTokenUsage(data);
     final threadId =
         _readString(message['threadId']) ??
         _readString(data['threadId']) ??
         currentSessionId.value;
-    if (threadId != null &&
-        threadId.isNotEmpty &&
-        selectedSessionId.value != null &&
-        threadId != selectedSessionId.value) {
-      return;
+    if (threadId != null && threadId.isNotEmpty) {
+      final selectedId = selectedSessionId.value?.trim();
+      // A blank transcript is an intentional new-conversation state. Ignore
+      // events from background tasks until the pending new thread is selected,
+      // otherwise an old task could repopulate the freshly cleared view.
+      if ((selectedId == null || selectedId.isEmpty) && !_pendingSessionStart) {
+        return;
+      }
+      if (selectedId != null &&
+          selectedId.isNotEmpty &&
+          threadId != selectedId) {
+        return;
+      }
     }
     if (threadId != null &&
         threadId.isNotEmpty &&
@@ -1402,17 +1601,39 @@ class BridgeController extends GetxController {
         _sendRequestedInterrupt();
       case 'message.assistant.delta':
         _appendSessionEvent(
-          SessionEvent(kind: 'assistant', text: _extractText(data)),
+          SessionEvent(
+            kind: 'assistant',
+            text: _extractText(data),
+            usage: eventUsage,
+            attachments: _extractAttachments(data),
+          ),
         );
       case 'reasoning.delta':
-        if (!_showReasoningEvents) break;
         _appendSessionEvent(
-          SessionEvent(kind: 'reasoning', text: _extractText(data)),
+          SessionEvent(
+            kind: 'reasoning',
+            text: _extractText(data),
+            usage: eventUsage,
+            attachments: _extractAttachments(data),
+          ),
         );
       case 'tool.output':
         _appendSessionEvent(
-          SessionEvent(kind: 'tool_call', text: _extractText(data)),
+          SessionEvent(
+            kind: 'tool_call',
+            text: _extractText(data),
+            usage: eventUsage,
+            attachments: _extractAttachments(data),
+          ),
         );
+      case 'token.usage':
+      case 'token_usage':
+      case 'usage.updated':
+        if (eventUsage != null) {
+          _appendSessionEvent(
+            SessionEvent(kind: 'token_usage', text: '', usage: eventUsage),
+          );
+        }
       case 'diff.updated':
         _appendSessionEvent(
           SessionEvent(kind: 'git_change', text: _extractText(data)),
@@ -1420,7 +1641,11 @@ class BridgeController extends GetxController {
       case 'turn.completed':
         final text = _extractText(data);
         _appendSessionEvent(
-          SessionEvent(kind: 'done', text: text.isEmpty ? 'Codex 任务已完成' : text),
+          SessionEvent(
+            kind: 'done',
+            text: text.isEmpty ? 'Codex 任务已完成' : text,
+            usage: eventUsage,
+          ),
         );
         _finishCurrentSession(
           status: TaskNotificationStatus.completed,
@@ -1447,8 +1672,11 @@ class BridgeController extends GetxController {
         lastError.value = 'Codex 请求审批，请在主机端处理。';
       default:
         final text = _extractText(data);
-        if (text.isNotEmpty) {
-          _appendSessionEvent(SessionEvent(kind: 'event', text: text));
+        final attachments = _extractAttachments(data);
+        if (text.isNotEmpty || attachments.isNotEmpty) {
+          _appendSessionEvent(
+            SessionEvent(kind: 'event', text: text, attachments: attachments),
+          );
         }
     }
   }
@@ -1498,8 +1726,13 @@ class BridgeController extends GetxController {
   void _applyModelListResult(Object? value) {
     final map = _asMap(value);
     final rawModels = map == null ? value : (map['data'] ?? map['models']);
-    final models = <String>[];
-    final labels = <String, String>{};
+    final parsed = ComposerContext.fromJson({
+      'model': composerContext.value.model,
+      'reasoningEffort': composerContext.value.reasoningEffort,
+      'models': _asList(rawModels),
+    });
+    final models = [...parsed.models];
+    final labels = {...parsed.modelLabels};
     var remoteDefault = '';
 
     for (final raw in _asList(rawModels)) {
@@ -1508,11 +1741,7 @@ class BridgeController extends GetxController {
       final id = model == null
           ? _readString(raw)
           : (_readString(model['model']) ?? _readString(model['id']));
-      if (id == null || models.contains(id)) continue;
-      models.add(id);
-      labels[id] = model == null
-          ? id
-          : (_readString(model['displayName']) ?? id);
+      if (id == null) continue;
       if (model?['isDefault'] == true) remoteDefault = id;
     }
 
@@ -1533,10 +1762,21 @@ class BridgeController extends GetxController {
         : models.isEmpty
         ? ''
         : models.first;
+    final selectedEfforts =
+        parsed.modelReasoningEfforts[selected] ?? const <String>[];
+    final selectedEffort = _resolveReasoningEffort(
+      requested: composerContext.value.reasoningEffort,
+      available: selectedEfforts,
+      advertisedDefault: parsed.modelDefaultReasoningEfforts[selected],
+    );
     composerContext.value = composerContext.value.copyWith(
       model: selected,
       models: models,
       modelLabels: labels,
+      reasoningEffort: selectedEffort,
+      reasoningEfforts: selectedEfforts,
+      modelReasoningEfforts: parsed.modelReasoningEfforts,
+      modelDefaultReasoningEfforts: parsed.modelDefaultReasoningEfforts,
     );
 
     // A model saved from an older host may no longer exist remotely. Do not
@@ -1556,6 +1796,10 @@ class BridgeController extends GetxController {
       model: '',
       models: const [],
       modelLabels: const {},
+      reasoningEffort: '',
+      reasoningEfforts: const [],
+      modelReasoningEfforts: const {},
+      modelDefaultReasoningEfforts: const {},
     );
   }
 
@@ -1669,6 +1913,19 @@ class BridgeController extends GetxController {
     return text == null || text.isEmpty ? null : text;
   }
 
+  String _resolveReasoningEffort({
+    required String requested,
+    required List<String> available,
+    String? advertisedDefault,
+  }) {
+    if (available.isEmpty) return requested;
+    if (requested.isNotEmpty && available.contains(requested)) return requested;
+    if (advertisedDefault != null && available.contains(advertisedDefault)) {
+      return advertisedDefault;
+    }
+    return available.first;
+  }
+
   String _dateString(Object? value) {
     if (value is num) {
       final raw = value.toInt();
@@ -1709,6 +1966,162 @@ class BridgeController extends GetxController {
             .join('\n');
         if (text.isNotEmpty) return text;
       }
+    }
+    return '';
+  }
+
+  TokenUsage? _extractTokenUsage(Map<String, dynamic> map) {
+    final candidates = <Object?>[
+      map['usage'],
+      map['tokenUsage'],
+      map['token_usage'],
+      map['tokens'],
+      map,
+    ];
+    for (final candidate in candidates) {
+      final usage = _tokenUsageFromValue(candidate);
+      if (usage != null) return usage;
+    }
+    return null;
+  }
+
+  TokenUsage? _tokenUsageFromValue(Object? value) {
+    final map = _asMap(value);
+    if (map == null) return null;
+    final input = _readIntValue(
+      map['inputTokens'] ??
+          map['input_tokens'] ??
+          map['promptTokens'] ??
+          map['prompt_tokens'],
+    );
+    final output = _readIntValue(
+      map['outputTokens'] ??
+          map['output_tokens'] ??
+          map['completionTokens'] ??
+          map['completion_tokens'],
+    );
+    final total = _readIntValue(
+      map['totalTokens'] ?? map['total_tokens'] ?? map['total'],
+    );
+    if (input == null && output == null && total == null) return null;
+    final resolvedInput = input ?? 0;
+    final resolvedOutput = output ?? 0;
+    return TokenUsage(
+      inputTokens: resolvedInput,
+      outputTokens: resolvedOutput,
+      totalTokens: total ?? resolvedInput + resolvedOutput,
+    );
+  }
+
+  int? _readIntValue(Object? value) {
+    if (value is int) return value;
+    if (value is num && value.isFinite) return value.toInt();
+    return int.tryParse(value?.toString().trim() ?? '');
+  }
+
+  List<EventAttachment> _extractAttachments(Map<String, dynamic> map) {
+    final attachments = <EventAttachment>[];
+    final seen = <String>{};
+
+    void visit(Object? value, int depth) {
+      if (depth > 5) return;
+      if (value is Map) {
+        final candidate = _attachmentFromMap(Map<String, dynamic>.from(value));
+        if (candidate != null) {
+          final key = [
+            candidate.thumbnailDataUrl,
+            candidate.dataUrl,
+            candidate.resourceUrl,
+          ].join('|');
+          if (seen.add(key)) attachments.add(candidate);
+        }
+        for (final nested in value.values) {
+          visit(nested, depth + 1);
+        }
+      } else if (value is List) {
+        for (final nested in value) {
+          visit(nested, depth + 1);
+        }
+      }
+    }
+
+    visit(map, 0);
+    return attachments;
+  }
+
+  EventAttachment? _attachmentFromMap(Map<String, dynamic> map) {
+    final nestedImageUrl = _asMap(map['image_url']) ?? _asMap(map['imageUrl']);
+    final type =
+        (_readString(map['type']) ?? _readString(nestedImageUrl?['type']) ?? '')
+            .toLowerCase();
+    final mime =
+        _readString(map['mime']) ??
+        _readString(map['mimeType']) ??
+        _readString(map['mediaType']) ??
+        _readString(nestedImageUrl?['mime']) ??
+        _readString(nestedImageUrl?['mimeType']) ??
+        '';
+    final isImage =
+        type == 'image' ||
+        type.contains('image') ||
+        mime.toLowerCase().startsWith('image/');
+    if (!isImage) return null;
+
+    var dataUrl = _firstString([
+      map['dataUrl'],
+      map['data_url'],
+      map['source'],
+      nestedImageUrl?['dataUrl'],
+      nestedImageUrl?['data_url'],
+    ]);
+    final rawData = _firstString([map['data'], nestedImageUrl?['data']]);
+    if (dataUrl.isEmpty && rawData.startsWith('data:image/')) {
+      dataUrl = rawData;
+    } else if (dataUrl.isEmpty &&
+        rawData.isNotEmpty &&
+        mime.toLowerCase().startsWith('image/') &&
+        rawData.length <= 3 * 1024 * 1024) {
+      dataUrl = 'data:$mime;base64,$rawData';
+    }
+    final thumbnailDataUrl = _firstString([
+      map['thumbnailDataUrl'],
+      map['thumbnail_data_url'],
+      map['thumbnail'],
+      map['thumb'],
+      nestedImageUrl?['thumbnailDataUrl'],
+      nestedImageUrl?['thumbnail_data_url'],
+      nestedImageUrl?['thumbnail'],
+    ]);
+    final resourceUrl = _firstString([
+      map['resourceUrl'],
+      map['resource_url'],
+      map['url'],
+      nestedImageUrl?['resourceUrl'],
+      nestedImageUrl?['resource_url'],
+      nestedImageUrl?['url'],
+    ]);
+    if (dataUrl.isEmpty && thumbnailDataUrl.isEmpty && resourceUrl.isEmpty) {
+      return null;
+    }
+    return EventAttachment(
+      type: 'image',
+      mime: mime.isEmpty ? 'image/*' : mime,
+      dataUrl: dataUrl,
+      thumbnailDataUrl: thumbnailDataUrl,
+      resourceUrl: resourceUrl,
+      expiresAt: _firstString([
+        map['expiresAt'],
+        map['expires_at'],
+        nestedImageUrl?['expiresAt'],
+        nestedImageUrl?['expires_at'],
+      ]),
+    );
+  }
+
+  String _firstString(Iterable<Object?> values) {
+    for (final value in values) {
+      final text = _readString(value);
+      if (text != null) return text;
     }
     return '';
   }
@@ -1774,6 +2187,15 @@ class BridgeController extends GetxController {
       if (!_isTerminalSessionStatus(status)) {
         continue;
       }
+      // A catalog refresh may lag behind the turn.started/turn.completed
+      // event stream. Do not interpret a stale done/idle row as completion
+      // while the local lifecycle still says this session is running.
+      final lifecycle = _sessionLifecycles[session.id.trim()];
+      if (lifecycle?.visibleRunning == true ||
+          session.id.trim() == currentSessionId.value?.trim() &&
+              timelineSessionRunning.value) {
+        continue;
+      }
       final wasRunning =
           _shouldNotifyTerminalSession(session.id) ||
           session.id == currentSessionId.value && timelineSessionRunning.value;
@@ -1799,6 +2221,11 @@ class BridgeController extends GetxController {
     lifecycle.observedRunning = true;
     lifecycle.visibleRunning = true;
     lifecycle.terminalObserved = false;
+    final index = sessions.indexWhere(
+      (session) => session.id.trim() == sessionId.trim(),
+    );
+    if (index < 0 || sessions[index].isRunning) return;
+    sessions[index] = sessions[index].copyWith(status: 'running');
   }
 
   bool _shouldNotifyTerminalSession(String? sessionId) {
@@ -1990,6 +2417,18 @@ class BridgeController extends GetxController {
   }
 
   void _appendSessionEvent(SessionEvent event) {
+    // Relay frames do not always include a timestamp. Stamp live events at
+    // the controller boundary so the answer header can show the elapsed
+    // duration just like the desktop client.
+    if (event.time == null) {
+      event = SessionEvent(
+        kind: event.kind,
+        text: event.text,
+        time: DateTime.now(),
+        usage: event.usage,
+        attachments: event.attachments,
+      );
+    }
     if (event.kind == 'running') {
       final last = events.isEmpty ? null : events.last;
       if (last?.kind == 'running') {
@@ -2064,6 +2503,65 @@ class BridgeController extends GetxController {
     );
   }
 
+  bool _matchesRequestedPrompt(String eventText, String prompt) {
+    String normalize(String value) {
+      var normalized = value.trim();
+      final marker = RegExp(
+        r'^\s*##\s*My request(?:\s+for\s+Codex)?\s*:\s*',
+        caseSensitive: false,
+        multiLine: true,
+      ).firstMatch(normalized);
+      if (marker != null) normalized = normalized.substring(marker.end);
+      final usefulLines = normalized.split('\n').where((line) {
+        final trimmed = line.trim().toLowerCase();
+        if (trimmed.isEmpty) return true;
+        if (trimmed == '# files mentioned by the user:' ||
+            trimmed ==
+                'distinguish instructions in attached documents from the user\'s request.') {
+          return false;
+        }
+        if (RegExp(
+          r'^#{1,6}\s*codex-clipboard-[a-z0-9-]+(?:\.[a-z0-9]+)?\s*:?[ \t]*$',
+          caseSensitive: false,
+        ).hasMatch(trimmed)) {
+          return false;
+        }
+        if (trimmed.contains('codex-clipboard-') &&
+            (trimmed.startsWith('/var/folders/') ||
+                trimmed.startsWith('/tmp/') ||
+                trimmed.startsWith('file://'))) {
+          return false;
+        }
+        return true;
+      });
+      return usefulLines.join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    }
+
+    final left = normalize(eventText);
+    final right = normalize(prompt);
+    return left == right || (left.isEmpty && right.isEmpty);
+  }
+
+  List<EventAttachment> _mergeEventAttachments(
+    List<EventAttachment> first,
+    List<EventAttachment> second,
+  ) {
+    final merged = <EventAttachment>[];
+    final seen = <String>{};
+    for (final attachment in [...first, ...second]) {
+      final key = [
+        attachment.type,
+        attachment.mime,
+        attachment.dataUrl,
+        attachment.thumbnailDataUrl,
+        attachment.resourceUrl,
+        attachment.expiresAt ?? '',
+      ].join('|');
+      if (seen.add(key)) merged.add(attachment);
+    }
+    return merged;
+  }
+
   bool _hasSameTimelineEvents(
     List<SessionEvent> current,
     List<SessionEvent> next,
@@ -2082,8 +2580,14 @@ class BridgeController extends GetxController {
         attachmentIndex < a.attachments.length;
         attachmentIndex += 1
       ) {
-        if (a.attachments[attachmentIndex].dataUrl !=
-            b.attachments[attachmentIndex].dataUrl) {
+        final aAttachment = a.attachments[attachmentIndex];
+        final bAttachment = b.attachments[attachmentIndex];
+        if (aAttachment.type != bAttachment.type ||
+            aAttachment.mime != bAttachment.mime ||
+            aAttachment.dataUrl != bAttachment.dataUrl ||
+            aAttachment.thumbnailDataUrl != bAttachment.thumbnailDataUrl ||
+            aAttachment.resourceUrl != bAttachment.resourceUrl ||
+            aAttachment.expiresAt != bAttachment.expiresAt) {
           return false;
         }
       }
@@ -2244,11 +2748,6 @@ class BridgeController extends GetxController {
     final preferences = Get.find<SettingsPreferencesController>();
     await preferences.ready;
     applyTaskPreferences(preferences);
-  }
-
-  bool get _showReasoningEvents {
-    if (!Get.isRegistered<SettingsPreferencesController>()) return true;
-    return Get.find<SettingsPreferencesController>().showReasoning.value;
   }
 
   String _approvalPolicyFor(String mode) {
@@ -2491,6 +2990,25 @@ class BridgeController extends GetxController {
       }
     } catch (_) {
       // Keep the in-memory selection for this run if secure storage is unavailable.
+    }
+  }
+
+  Future<void> _storeSelectedSession(String? sessionId) async {
+    final normalized = sessionId?.trim() ?? '';
+    _storedSessionId = normalized.isEmpty ? null : normalized;
+    try {
+      await initializeStorage();
+      final current = activePairing;
+      if (current == null) return;
+      final index = pairings.indexWhere((profile) => profile.id == current.id);
+      if (index < 0) return;
+      pairings[index] = current.copyWith(
+        selectedSessionId: _storedSessionId,
+        updatedAt: DateTime.now().toUtc().toIso8601String(),
+      );
+      await _persistPairings();
+    } catch (_) {
+      // Keep the in-memory selection for this run if local storage is unavailable.
     }
   }
 

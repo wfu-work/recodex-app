@@ -22,6 +22,7 @@ abstract final class RecodexIcons {
   static const IconData circle = LucideIcons.circle300;
   static const IconData close = LucideIcons.x300;
   static const IconData copy = LucideIcons.copy300;
+  static const IconData contrast = LucideIcons.contrast300;
   static const IconData cloudDone = LucideIcons.cloudCheck300;
   static const IconData cloudOff = LucideIcons.cloudOff300;
   static const IconData darkMode = LucideIcons.moon300;
@@ -42,9 +43,12 @@ abstract final class RecodexIcons {
   static const IconData link = LucideIcons.link300;
   static const IconData linkOff = LucideIcons.unlink300;
   static const IconData laptop = LucideIcons.laptopMinimal300;
+  static const IconData monitor = LucideIcons.monitor300;
   static const IconData search = LucideIcons.search300;
   static const IconData cpu = LucideIcons.cpu300;
   static const IconData menu = LucideIcons.menu300;
+  static const IconData archive = LucideIcons.archive300;
+  static const IconData message = LucideIcons.messageSquare300;
   static const IconData mic = LucideIcons.mic300;
   static const IconData more = LucideIcons.ellipsisVertical300;
   static const IconData updates = LucideIcons.badgeAlert300;
@@ -53,6 +57,7 @@ abstract final class RecodexIcons {
   static const IconData notifications = LucideIcons.bell300;
   static const IconData pause = LucideIcons.circlePause300;
   static const IconData payments = LucideIcons.banknote300;
+  static const IconData pin = LucideIcons.pin300;
   static const IconData globe = LucideIcons.globe2300;
   static const IconData qrCode = LucideIcons.qrCode300;
   static const IconData selectedCircle = LucideIcons.circleCheck300;

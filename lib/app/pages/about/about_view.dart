@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
-import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../routes/app_pages.dart';
 import '../../theme/recodex_theme.dart';
+import '../settings/settings_widgets.dart';
 
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
@@ -94,9 +94,8 @@ class _AboutBrandHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return LiquidGlass(
-      radius: 28,
-      opacity: 0.72,
+    return SettingsCard(
+      radius: 20,
       padding: const EdgeInsets.all(20),
       child: Row(
         children: [
@@ -122,7 +121,7 @@ class _AboutBrandHeader extends StatelessWidget {
                     color: colors.text,
                     fontSize: 28,
                     height: 1.08,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -132,7 +131,7 @@ class _AboutBrandHeader extends StatelessWidget {
                     color: colors.textMuted,
                     fontSize: 17,
                     height: 1.1,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -202,8 +201,8 @@ class _AboutSectionLabel extends StatelessWidget {
         label,
         style: TextStyle(
           color: context.recodexColors.textMuted,
-          fontSize: 12,
-          fontWeight: FontWeight.w800,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -216,9 +215,7 @@ class _AboutPurposeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return LiquidGlass(
-      radius: 24,
-      opacity: 0.66,
+    return SettingsCard(
       padding: const EdgeInsets.fromLTRB(18, 16, 20, 18),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -232,7 +229,7 @@ class _AboutPurposeCard extends StatelessWidget {
                 color: colors.text,
                 fontSize: 14,
                 height: 1.55,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w400,
               ),
             ),
           ),
@@ -249,9 +246,7 @@ class _AboutInfoGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LiquidGlass(
-      radius: 24,
-      opacity: 0.66,
+    return SettingsCard(
       padding: EdgeInsets.zero,
       child: Column(children: children),
     );
@@ -280,15 +275,15 @@ class _AboutInfoRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       child: Row(
         children: [
-          Icon(icon, size: 22, color: colors.icon),
+          Icon(icon, size: 21, color: colors.icon),
           const SizedBox(width: 14),
           Expanded(
             child: Text(
               title,
               style: TextStyle(
                 color: colors.text,
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
+                fontSize: 15.5,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
@@ -302,7 +297,7 @@ class _AboutInfoRow extends StatelessWidget {
               style: TextStyle(
                 color: colors.textMuted,
                 fontSize: 13,
-                fontWeight: FontWeight.w700,
+                fontWeight: FontWeight.w400,
               ),
             ),
           ),

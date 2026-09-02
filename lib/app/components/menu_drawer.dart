@@ -25,6 +25,7 @@ class RemodexDrawer extends StatefulWidget {
     required this.themePreference,
     required this.onThemePreferenceChanged,
     this.onRefreshProjects,
+    this.compact = false,
     super.key,
   });
 
@@ -44,6 +45,7 @@ class RemodexDrawer extends StatefulWidget {
   final RecodexThemePreference themePreference;
   final ValueChanged<RecodexThemePreference> onThemePreferenceChanged;
   final VoidCallback? onRefreshProjects;
+  final bool compact;
 
   @override
   State<RemodexDrawer> createState() => _RemodexDrawerState();
@@ -115,6 +117,13 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
         workspace.name == selected.name;
   }
 
+  bool _sameSession(String left, String? right) {
+    final normalizedRight = right?.trim();
+    return normalizedRight != null &&
+        normalizedRight.isNotEmpty &&
+        left.trim() == normalizedRight;
+  }
+
   void _scheduleScrollToSelected({required bool jump}) {
     final selectedKey = _workspaceKey(widget.selectedWorkspace);
     if (selectedKey == null) {
@@ -140,7 +149,9 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
     if (itemContext == null) return;
     Scrollable.ensureVisible(
       itemContext,
-      duration: jump ? Duration.zero : const Duration(milliseconds: 240),
+      duration: jump || MediaQuery.of(context).disableAnimations
+          ? Duration.zero
+          : const Duration(milliseconds: 240),
       curve: Curves.easeOutCubic,
       alignment: 0.18,
     );
@@ -178,19 +189,34 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
+    final verticalGap = widget.compact ? 14.0 : 22.0;
     return Drawer(
-      width: 292,
+      width: widget.compact ? 272 : 292,
       backgroundColor: Colors.transparent,
       elevation: 0,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.only(
+          topRight: Radius.circular(24),
+          bottomRight: Radius.circular(24),
+        ),
+      ),
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(0, 0, 12, 0),
           child: LiquidGlass(
-            radius: 24,
+            borderRadius: const BorderRadius.only(
+              topRight: Radius.circular(24),
+              bottomRight: Radius.circular(24),
+            ),
             // Keep the drawer surface opaque so the modal barrier does not
             // wash the sidebar into the page content beneath it.
             opacity: 1,
-            padding: const EdgeInsets.fromLTRB(22, 22, 14, 18),
+            padding: EdgeInsets.fromLTRB(
+              widget.compact ? 16 : 22,
+              widget.compact ? 16 : 22,
+              widget.compact ? 10 : 14,
+              8,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -202,41 +228,52 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                   onPairing: widget.onPairing,
                   onNewPairing: widget.onNewPairing,
                 ),
-                const SizedBox(height: 30),
-                Row(
-                  children: [
-                    Text(
-                      '项目',
-                      style: TextStyle(
-                        color: colors.textMuted,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      '${widget.workspaces.length}',
-                      style: TextStyle(
-                        color: colors.textMuted,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    LiquidIconButton(
-                      icon: RecodexIcons.sync,
-                      tooltip: '刷新项目',
-                      onPressed: widget.onRefreshProjects,
-                      size: 32,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
+                SizedBox(height: verticalGap),
                 Expanded(
                   child: ListView(
                     controller: _sidebarScrollController,
                     padding: EdgeInsets.zero,
                     children: [
+                      if (_pinnedSessions.isNotEmpty) ...[
+                        const _SidebarSectionTitle(title: '置顶'),
+                        SizedBox(height: widget.compact ? 5 : 8),
+                        for (final session in _pinnedSessions)
+                          _SidebarSessionLine(
+                            session: session,
+                            active: _sameSession(
+                              session.id,
+                              widget.selectedSessionId,
+                            ),
+                            icon: RecodexIcons.message,
+                            compact: widget.compact,
+                            onTap: () => widget.onSelectSession(session),
+                          ),
+                        SizedBox(height: widget.compact ? 12 : 18),
+                      ],
+                      _SidebarSectionTitle(
+                        title: '项目',
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              '${widget.workspaces.length}',
+                              style: TextStyle(
+                                color: colors.textMuted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                            LiquidIconButton(
+                              icon: RecodexIcons.sync,
+                              tooltip: '刷新项目',
+                              onPressed: widget.onRefreshProjects,
+                              size: 32,
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(height: widget.compact ? 5 : 8),
                       if (widget.workspaces.isEmpty)
                         _WorkspaceLine(
                           name: '暂无项目',
@@ -253,19 +290,36 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                             expanded: _isWorkspaceExpanded(workspace),
                             sessions: _sessionsForWorkspace(workspace),
                             selectedSessionId: widget.selectedSessionId,
+                            compact: widget.compact,
                             onTap: () => _toggleWorkspace(workspace),
                             onSelectSession: widget.onSelectSession,
                           ),
+                      if (_archivedSessions.isNotEmpty) ...[
+                        SizedBox(height: widget.compact ? 12 : 18),
+                        const _SidebarSectionTitle(title: '归档'),
+                        SizedBox(height: widget.compact ? 5 : 8),
+                        for (final session in _archivedSessions)
+                          _SidebarSessionLine(
+                            session: session,
+                            active: _sameSession(
+                              session.id,
+                              widget.selectedSessionId,
+                            ),
+                            icon: RecodexIcons.archive,
+                            compact: widget.compact,
+                            onTap: () => widget.onSelectSession(session),
+                          ),
+                      ],
                     ],
                   ),
                 ),
-                const SizedBox(height: 14),
+                SizedBox(height: widget.compact ? 6 : 10),
                 _BottomDock(
                   onSettings: widget.onSettings,
                   themePreference: widget.themePreference,
                   onThemePreferenceChanged: widget.onThemePreferenceChanged,
                 ),
-                const SizedBox(height: 12),
+                SizedBox(height: widget.compact ? 2 : 4),
               ],
             ),
           ),
@@ -274,10 +328,19 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
     );
   }
 
+  List<SessionRecord> get _pinnedSessions => widget.sessions
+      .where((session) => session.isPinned && !session.isArchived)
+      .toList(growable: false);
+
+  List<SessionRecord> get _archivedSessions => widget.sessions
+      .where((session) => session.isArchived)
+      .toList(growable: false);
+
   List<SessionRecord> _sessionsForWorkspace(WorkspaceInfo workspace) {
     final path = _normalizeWorkspaceKey(workspace.path);
     final name = _normalizeWorkspaceKey(workspace.name);
     final strict = widget.sessions.where((session) {
+      if (session.isPinned || session.isArchived) return false;
       final value = _normalizeWorkspaceKey(session.workspace);
       return (path.isNotEmpty && value == path) ||
           (name.isNotEmpty && value == name);
@@ -289,8 +352,10 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
       widget.sessions
           .where(
             (session) =>
+                !session.isPinned &&
+                !session.isArchived &&
                 _lastPathSegment(_normalizeWorkspaceKey(session.workspace)) ==
-                selectedBase,
+                    selectedBase,
           )
           .toList(),
     );
@@ -379,7 +444,7 @@ class _PairingSwitcher extends StatelessWidget {
               style: TextStyle(
                 color: colors.textMuted,
                 fontSize: 12,
-                fontWeight: FontWeight.w800,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
@@ -442,7 +507,7 @@ class _PairingSwitcher extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 17,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                     color: colors.text,
                   ),
                 ),
@@ -474,6 +539,7 @@ class _WorkspaceBranch extends StatelessWidget {
     required this.selectedSessionId,
     required this.onTap,
     required this.onSelectSession,
+    this.compact = false,
   });
 
   final WorkspaceInfo workspace;
@@ -483,95 +549,75 @@ class _WorkspaceBranch extends StatelessWidget {
   final String? selectedSessionId;
   final VoidCallback onTap;
   final ValueChanged<SessionRecord> onSelectSession;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    final activeColor = colors.icon;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         DecoratedBox(
           decoration: BoxDecoration(
-            color: active ? colors.surfaceOverlay : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(9),
           ),
           child: InkWell(
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(9),
             onTap: onTap,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(7, 8, 8, 8),
+              padding: EdgeInsets.fromLTRB(
+                7,
+                compact ? 5 : 8,
+                8,
+                compact ? 5 : 8,
+              ),
               child: Row(
                 children: [
                   Icon(
-                    expanded
-                        ? RecodexIcons.chevronDown
-                        : RecodexIcons.chevronRight,
-                    size: 16,
-                    color: active ? activeColor : colors.textMuted,
-                  ),
-                  const SizedBox(width: 3),
-                  Icon(
                     expanded ? RecodexIcons.folderOpen : RecodexIcons.folder,
-                    size: 18,
-                    color: active ? activeColor : colors.textMuted,
+                    size: 19,
+                    color: colors.textMuted,
                   ),
-                  const SizedBox(width: 11),
+                  const SizedBox(width: 10),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          workspace.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w900,
-                            color: active ? activeColor : colors.text,
-                          ),
-                        ),
-                        if (workspace.path.trim().isNotEmpty)
-                          Text(
-                            workspace.path,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: colors.textMuted,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  if (sessions.isNotEmpty)
-                    Text(
-                      '${sessions.length}',
+                    child: Text(
+                      workspace.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w800,
-                        color: active ? activeColor : colors.textMuted,
+                        fontSize: 14.5,
+                        height: 1.2,
+                        fontWeight: FontWeight.w500,
+                        color: colors.text,
                       ),
                     ),
+                  ),
                 ],
               ),
             ),
           ),
         ),
         AnimatedSize(
-          duration: const Duration(milliseconds: 200),
+          duration: MediaQuery.of(context).disableAnimations
+              ? Duration.zero
+              : const Duration(milliseconds: 200),
           curve: Curves.easeOutCubic,
           alignment: Alignment.topCenter,
           child: expanded
               ? Padding(
-                  padding: const EdgeInsets.only(left: 30, top: 4, bottom: 4),
+                  padding: EdgeInsets.only(
+                    left: 29,
+                    top: compact ? 1 : 2,
+                    bottom: compact ? 3 : 5,
+                  ),
                   child: sessions.isEmpty
                       ? const _EmptySessionLine()
                       : Column(
                           children: [
                             for (final session in sessions)
                               Padding(
-                                padding: const EdgeInsets.only(bottom: 3),
+                                padding: const EdgeInsets.only(bottom: 2),
                                 child: _SessionLine(
                                   session: session,
                                   active:
@@ -580,6 +626,7 @@ class _WorkspaceBranch extends StatelessWidget {
                                         selectedSessionId,
                                       ) &&
                                       active,
+                                  compact: compact,
                                   onTap: () => onSelectSession(session),
                                 ),
                               ),
@@ -625,7 +672,7 @@ class _WorkspaceLine extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 13,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                     color: colors.text,
                   ),
                 ),
@@ -644,98 +691,87 @@ class _WorkspaceLine extends StatelessWidget {
   }
 }
 
-class _EmptySessionLine extends StatelessWidget {
-  const _EmptySessionLine();
+class _SidebarSectionTitle extends StatelessWidget {
+  const _SidebarSectionTitle({required this.title, this.trailing});
+
+  final String title;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
-      child: Text(
-        '当前项目暂无任务',
-        style: TextStyle(color: colors.textMuted, fontSize: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 7),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          if (trailing != null) ...[const Spacer(), trailing!],
+        ],
       ),
     );
   }
 }
 
-class _SessionLine extends StatelessWidget {
-  const _SessionLine({
+class _SidebarSessionLine extends StatelessWidget {
+  const _SidebarSessionLine({
     required this.session,
     required this.active,
     required this.onTap,
+    this.icon = RecodexIcons.message,
+    this.compact = false,
   });
 
   final SessionRecord session;
   final bool active;
   final VoidCallback onTap;
+  final IconData icon;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    final activeColor = colors.icon;
-    final statusColor = session.isRunning ? colors.icon : colors.textMuted;
+    final radius = BorderRadius.circular(9);
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 140),
+      duration: MediaQuery.of(context).disableAnimations
+          ? Duration.zero
+          : const Duration(milliseconds: 140),
       curve: Curves.easeOut,
       decoration: BoxDecoration(
-        color: active ? colors.surfaceOverlay : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
+        color: active
+            ? colors.surfaceOverlay.withValues(alpha: 0.86)
+            : Colors.transparent,
+        borderRadius: radius,
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: radius,
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(6, 7, 8, 7),
+          padding: EdgeInsets.fromLTRB(7, compact ? 5 : 7, 9, compact ? 5 : 7),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SizedBox(
-                width: 3,
-                height: 34,
-                child: active
-                    ? DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: activeColor,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              const SizedBox(width: 7),
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Icon(
-                  session.isRunning ? RecodexIcons.sync : RecodexIcons.fileText,
-                  size: 16,
-                  color: statusColor,
-                ),
-              ),
-              const SizedBox(width: 9),
+              if (session.isRunning)
+                _RunningTaskIndicator(color: colors.icon)
+              else
+                Icon(icon, size: 19, color: colors.textMuted),
+              const SizedBox(width: 10),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      session.displayTitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1.25,
-                        fontWeight: active ? FontWeight.w800 : FontWeight.w600,
-                        color: colors.text,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      _sessionDateLabel(session),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 10, color: colors.textMuted),
-                    ),
-                  ],
+                child: Text(
+                  session.displayTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.25,
+                    fontWeight: active ? FontWeight.w500 : FontWeight.w400,
+                    color: colors.text,
+                  ),
                 ),
               ),
             ],
@@ -746,14 +782,103 @@ class _SessionLine extends StatelessWidget {
   }
 }
 
-String _sessionDateLabel(SessionRecord session) {
-  if (session.isRunning) return '进行中';
-  final value = session.updatedAtDate;
-  if (value.millisecondsSinceEpoch == 0) return '已完成';
-  final local = value.toLocal();
-  final hour = local.hour.toString().padLeft(2, '0');
-  final minute = local.minute.toString().padLeft(2, '0');
-  return '${local.month}/${local.day} $hour:$minute';
+class _EmptySessionLine extends StatelessWidget {
+  const _EmptySessionLine();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(9, 6, 10, 7),
+      child: Text(
+        '当前项目暂无任务',
+        style: TextStyle(color: colors.textMuted, fontSize: 12.5),
+      ),
+    );
+  }
+}
+
+class _SessionLine extends StatelessWidget {
+  const _SessionLine({
+    required this.session,
+    required this.active,
+    required this.onTap,
+    this.compact = false,
+  });
+
+  final SessionRecord session;
+  final bool active;
+  final VoidCallback onTap;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return AnimatedContainer(
+      duration: MediaQuery.of(context).disableAnimations
+          ? Duration.zero
+          : const Duration(milliseconds: 140),
+      curve: Curves.easeOut,
+      decoration: BoxDecoration(
+        color: active
+            ? colors.surfaceOverlay.withValues(alpha: 0.86)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(9),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(9),
+        onTap: onTap,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(9, compact ? 5 : 7, 9, compact ? 5 : 7),
+          child: Row(
+            children: [
+              if (session.isRunning) ...[
+                _RunningTaskIndicator(color: colors.icon),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: Text(
+                  session.displayTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.25,
+                    fontWeight: active ? FontWeight.w500 : FontWeight.w400,
+                    color: colors.text,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact running-state marker used in the sidebar task rows.
+///
+/// [CircularProgressIndicator] provides the same subtle rotation treatment as
+/// Codex's desktop task list while keeping the marker narrow enough that task
+/// titles retain their available width.
+class _RunningTaskIndicator extends StatelessWidget {
+  const _RunningTaskIndicator({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: '任务运行中',
+      liveRegion: true,
+      child: SizedBox(
+        width: 15,
+        height: 15,
+        child: CircularProgressIndicator(strokeWidth: 1.5, color: color),
+      ),
+    );
+  }
 }
 
 class _BottomDock extends StatelessWidget {
@@ -769,7 +894,6 @@ class _BottomDock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.recodexColors;
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -778,43 +902,112 @@ class _BottomDock extends StatelessWidget {
           tooltip: '设置',
           onTap: onSettings,
         ),
-        PopupMenuButton<RecodexThemePreference>(
-          tooltip: '当前主题：${themePreference.label}',
-          padding: EdgeInsets.zero,
-          iconSize: 22,
-          icon: Icon(_themeIcon(themePreference), color: colors.icon),
-          onSelected: onThemePreferenceChanged,
-          itemBuilder: (context) => [
-            for (final preference in RecodexThemePreference.values)
-              PopupMenuItem<RecodexThemePreference>(
-                value: preference,
-                child: Row(
-                  children: [
-                    Icon(
-                      preference == themePreference
-                          ? RecodexIcons.selectedCircle
-                          : RecodexIcons.circle,
-                      size: 18,
-                      color: preference == themePreference
-                          ? colors.icon
-                          : colors.textMuted,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(preference.label),
-                  ],
-                ),
-              ),
-          ],
+        _ThemeModeToggle(
+          preference: themePreference,
+          onChanged: onThemePreferenceChanged,
         ),
       ],
+    );
+  }
+}
+
+class _ThemeModeToggle extends StatelessWidget {
+  const _ThemeModeToggle({required this.preference, required this.onChanged});
+
+  // Match the compact desktop control order: light, dark, then system.
+  static const _options = <RecodexThemePreference>[
+    RecodexThemePreference.light,
+    RecodexThemePreference.dark,
+    RecodexThemePreference.system,
+  ];
+
+  final RecodexThemePreference preference;
+  final ValueChanged<RecodexThemePreference> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return Tooltip(
+      message: '当前主题：${preference.label}',
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.surfaceOverlay.withValues(alpha: 0.72),
+          borderRadius: BorderRadius.circular(9),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(2),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final value in _options)
+                _ThemeModeSegment(
+                  key: ValueKey<String>('theme-mode-${value.name}'),
+                  preference: value,
+                  selected:
+                      value == preference ||
+                      (value == RecodexThemePreference.system &&
+                          preference == RecodexThemePreference.scheduled),
+                  onPressed: () => onChanged(value),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ThemeModeSegment extends StatelessWidget {
+  const _ThemeModeSegment({
+    super.key,
+    required this.preference,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final RecodexThemePreference preference;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final radius = BorderRadius.circular(7);
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: preference.label,
+      child: Tooltip(
+        message: preference.label,
+        child: Material(
+          color: selected
+              ? colors.text.withValues(alpha: 0.16)
+              : Colors.transparent,
+          borderRadius: radius,
+          child: InkWell(
+            borderRadius: radius,
+            onTap: onPressed,
+            child: SizedBox(
+              width: 32,
+              height: 32,
+              child: Icon(
+                _themeIcon(preference),
+                size: 18,
+                color: selected ? colors.icon : colors.textMuted,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
   IconData _themeIcon(RecodexThemePreference preference) {
     return switch (preference) {
-      RecodexThemePreference.system => RecodexIcons.devices,
+      RecodexThemePreference.system => RecodexIcons.monitor,
       RecodexThemePreference.light => RecodexIcons.sun,
       RecodexThemePreference.dark => RecodexIcons.darkMode,
+      RecodexThemePreference.scheduled => RecodexIcons.calendar,
     };
   }
 }

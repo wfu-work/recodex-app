@@ -11,6 +11,9 @@ import '../pages/settings/connection_settings_view.dart';
 import '../pages/settings/notification_settings_view.dart';
 import '../pages/settings/security_settings_view.dart';
 import '../pages/settings/task_settings_view.dart';
+import '../pages/settings/task_history_view.dart';
+import '../pages/settings/conversation_display_settings_view.dart';
+import '../pages/settings/shortcuts_settings_view.dart';
 import '../pages/settings/theme_settings_view.dart';
 
 part 'app_routes.dart';
@@ -44,6 +47,21 @@ class AppPages {
     GetPage(
       name: _Paths.taskSettings,
       page: () => const TaskSettingsPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
+      name: _Paths.taskHistory,
+      page: () => const TaskHistoryPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
+      name: _Paths.conversationDisplay,
+      page: () => const ConversationDisplaySettingsPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
+      name: _Paths.shortcuts,
+      page: () => const ShortcutsSettingsPage(),
       preventDuplicates: true,
     ),
     GetPage(

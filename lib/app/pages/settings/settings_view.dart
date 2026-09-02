@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
-import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../routes/app_pages.dart';
 import '../../services/task_notification_controller.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
 import 'settings_preferences_controller.dart';
+import 'settings_widgets.dart';
 import 'theme_controller.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -108,6 +108,43 @@ class _SettingsPageState extends State<SettingsPage> {
                         '${preferences.defaultModel.value} · ${_reasoningLabel(preferences.defaultReasoningEffort.value)}',
                     trailingIcon: RecodexIcons.chevronRight,
                     onTap: () => _openPage(Routes.taskSettings),
+                  ),
+                  _DividerLine(),
+                  _SettingsTile(
+                    icon: RecodexIcons.message,
+                    title: '对话显示',
+                    subtitle: '思考、时间线、索引和回答区域布局',
+                    trailingIcon: RecodexIcons.chevronRight,
+                    onTap: () => _openPage(Routes.conversationDisplay),
+                  ),
+                  _DividerLine(),
+                  _SettingsTile(
+                    icon: RecodexIcons.fileText,
+                    title: '任务历史',
+                    subtitle: controller.sessions.isEmpty
+                        ? '搜索和重新打开历史任务'
+                        : '${controller.sessions.length} 个任务 · 支持搜索和筛选',
+                    trailingIcon: RecodexIcons.chevronRight,
+                    onTap: () => _openPage(Routes.taskHistory),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              _SettingsGroup(
+                title: '快捷键',
+                children: [
+                  _SettingsTile(
+                    icon: RecodexIcons.key,
+                    title: '桌面快捷键',
+                    subtitle: preferences.shortcutsEnabled.value
+                        ? '已启用 · 查看全部快捷操作'
+                        : '已停用桌面快捷键',
+                    trailing: Switch(
+                      value: preferences.shortcutsEnabled.value,
+                      onChanged: preferences.setShortcutsEnabled,
+                    ),
+                    trailingIcon: RecodexIcons.chevronRight,
+                    onTap: () => _openPage(Routes.shortcuts),
                   ),
                 ],
               ),
@@ -249,14 +286,12 @@ class _SettingsGroup extends StatelessWidget {
             title,
             style: TextStyle(
               color: colors.textMuted,
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ),
-        LiquidGlass(
-          radius: 24,
-          opacity: 0.66,
+        SettingsCard(
           padding: EdgeInsets.zero,
           child: Column(children: children),
         ),
@@ -291,7 +326,7 @@ class _SettingsTile extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 13, 14, 13),
       child: Row(
         children: [
-          Icon(icon, color: colors.icon, size: 23),
+          Icon(icon, color: colors.icon, size: 21),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -301,7 +336,7 @@ class _SettingsTile extends StatelessWidget {
                   title,
                   style: TextStyle(
                     fontSize: 16,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w600,
                     color: colors.text,
                   ),
                 ),
@@ -313,7 +348,8 @@ class _SettingsTile extends StatelessWidget {
                   style: TextStyle(
                     color: colors.textMuted,
                     fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ],

@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
-import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
+import '../settings/settings_widgets.dart';
 
 class ServicePage extends StatelessWidget {
   const ServicePage({super.key});
@@ -165,9 +165,8 @@ class _StatusHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return LiquidGlass(
-      radius: 28,
-      opacity: 0.7,
+    return SettingsCard(
+      radius: 20,
       padding: const EdgeInsets.all(22),
       child: Row(
         children: [
@@ -186,7 +185,7 @@ class _StatusHero extends StatelessWidget {
                   style: TextStyle(
                     color: colors.text,
                     fontSize: 20,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -194,7 +193,9 @@ class _StatusHero extends StatelessWidget {
                   connected ? '可以操作远程 Codex 主机' : '检查 Relay 连接地址和接入端凭证',
                   style: TextStyle(
                     color: colors.textMuted,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    height: 1.35,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ],
@@ -224,14 +225,12 @@ class _ServiceGroup extends StatelessWidget {
             title,
             style: TextStyle(
               color: colors.textMuted,
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ),
-        LiquidGlass(
-          radius: 24,
-          opacity: 0.66,
+        SettingsCard(
           padding: EdgeInsets.zero,
           child: Column(children: children),
         ),
@@ -262,7 +261,7 @@ class _ServiceTile extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 13, 14, 13),
       child: Row(
         children: [
-          Icon(icon, color: colors.icon, size: 23),
+          Icon(icon, color: colors.icon, size: 21),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -272,8 +271,8 @@ class _ServiceTile extends StatelessWidget {
                   title,
                   style: TextStyle(
                     color: colors.text,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 3),
@@ -284,7 +283,8 @@ class _ServiceTile extends StatelessWidget {
                   style: TextStyle(
                     color: colors.textMuted,
                     fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ],

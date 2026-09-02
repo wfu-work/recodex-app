@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
-import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
@@ -106,9 +105,7 @@ class SecuritySettingsPage extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 24),
-                  LiquidGlass(
-                    radius: 24,
-                    opacity: 0.60,
+                  SettingsCard(
                     padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
                     child: Text(
                       '如果你怀疑连接令牌已经泄露，请先在 relay-web 撤销旧令牌，再清除本机凭证并重新配对。',
@@ -228,9 +225,8 @@ class _SecurityHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return LiquidGlass(
-      radius: 28,
-      opacity: 0.72,
+    return SettingsCard(
+      radius: 20,
       padding: const EdgeInsets.fromLTRB(20, 20, 18, 20),
       child: Row(
         children: [
@@ -245,7 +241,7 @@ class _SecurityHero extends StatelessWidget {
                   style: TextStyle(
                     color: colors.text,
                     fontSize: 20,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 5),
@@ -254,7 +250,8 @@ class _SecurityHero extends StatelessWidget {
                   style: TextStyle(
                     color: colors.textMuted,
                     fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ],

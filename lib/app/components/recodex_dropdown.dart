@@ -205,7 +205,10 @@ class RecodexDropdown<T> extends StatelessWidget {
                   style: TextStyle(
                     color: foreground,
                     fontSize: compact ? 13 : 14,
-                    fontWeight: FontWeight.w800,
+                    // Codex uses a medium-weight label for compact composer
+                    // controls; heavier weights make the pills look denser
+                    // than the surrounding input text.
+                    fontWeight: compact ? FontWeight.w600 : FontWeight.w800,
                   ),
                 ),
               ),

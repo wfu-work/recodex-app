@@ -44,6 +44,7 @@ class PairingProfile {
     required this.grantExpiresAt,
     this.selectedWorkspaceName,
     this.selectedWorkspacePath,
+    this.selectedSessionId,
     this.createdAt,
     this.updatedAt,
   });
@@ -64,6 +65,7 @@ class PairingProfile {
   final int grantExpiresAt;
   final String? selectedWorkspaceName;
   final String? selectedWorkspacePath;
+  final String? selectedSessionId;
   final String? createdAt;
   final String? updatedAt;
 
@@ -102,6 +104,9 @@ class PairingProfile {
       grantExpiresAt: _int(json['grantExpiresAt']),
       selectedWorkspaceName: _nullableString(json['selectedWorkspaceName']),
       selectedWorkspacePath: _nullableString(json['selectedWorkspacePath']),
+      selectedSessionId: _nullableString(
+        json['selectedSessionId'] ?? json['selected_session_id'],
+      ),
       createdAt: _nullableString(json['createdAt']),
       updatedAt: _nullableString(json['updatedAt']),
     );
@@ -126,6 +131,7 @@ class PairingProfile {
       'selectedWorkspaceName': selectedWorkspaceName,
     if (selectedWorkspacePath != null)
       'selectedWorkspacePath': selectedWorkspacePath,
+    if (selectedSessionId != null) 'selectedSessionId': selectedSessionId,
     if (createdAt != null) 'createdAt': createdAt,
     if (updatedAt != null) 'updatedAt': updatedAt,
   };
@@ -147,9 +153,11 @@ class PairingProfile {
     int? grantExpiresAt,
     String? selectedWorkspaceName,
     String? selectedWorkspacePath,
+    String? selectedSessionId,
     String? createdAt,
     String? updatedAt,
     bool clearSelectedWorkspace = false,
+    bool clearSelectedSession = false,
   }) {
     return PairingProfile(
       id: id ?? this.id,
@@ -172,6 +180,9 @@ class PairingProfile {
       selectedWorkspacePath: clearSelectedWorkspace
           ? null
           : selectedWorkspacePath ?? this.selectedWorkspacePath,
+      selectedSessionId: clearSelectedSession
+          ? null
+          : selectedSessionId ?? this.selectedSessionId,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -201,6 +212,9 @@ class SessionRecord {
     required this.status,
     required this.createdAt,
     required this.updatedAt,
+    this.title = '',
+    this.isPinned = false,
+    this.isArchived = false,
   });
 
   final String id;
@@ -210,11 +224,43 @@ class SessionRecord {
   final String createdAt;
   final String updatedAt;
 
+  /// Official Codex thread name. This is a generated, user-facing title and
+  /// is preferred over [prompt] when it is available.
+  final String title;
+  final bool isPinned;
+  final bool isArchived;
+
+  SessionRecord copyWith({
+    String? id,
+    String? workspace,
+    String? prompt,
+    String? status,
+    String? createdAt,
+    String? updatedAt,
+    String? title,
+    bool? isPinned,
+    bool? isArchived,
+  }) {
+    return SessionRecord(
+      id: id ?? this.id,
+      workspace: workspace ?? this.workspace,
+      prompt: prompt ?? this.prompt,
+      status: status ?? this.status,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      title: title ?? this.title,
+      isPinned: isPinned ?? this.isPinned,
+      isArchived: isArchived ?? this.isArchived,
+    );
+  }
+
   /// A stable label for compact task navigation. Codex may not provide a
   /// title for older threads, so fall back to the first prompt and finally
   /// the thread id instead of rendering an empty row.
   String get displayTitle {
-    final value = prompt.trim();
+    final named = _cleanTaskTitle(title);
+    if (named.isNotEmpty) return named;
+    final value = _cleanTaskTitle(prompt);
     if (value.isNotEmpty) return value;
     return id.trim().isEmpty ? '未命名任务' : id;
   }
@@ -224,17 +270,32 @@ class SessionRecord {
     return value == 'running' ||
         value == 'active' ||
         value == 'in_progress' ||
-        value == 'inprogress';
+        value == 'inprogress' ||
+        value == 'processing' ||
+        value == 'queued' ||
+        value == 'starting' ||
+        value == 'pending' ||
+        value == 'executing' ||
+        value == 'working';
   }
 
   factory SessionRecord.fromJson(Map<String, dynamic> json) {
+    final status = json['status'] as String? ?? '';
+    final archived = _jsonBool(
+      json['isArchived'] ?? json['is_archived'] ?? json['archived'],
+    );
     return SessionRecord(
       id: json['id'] as String? ?? '',
       workspace: json['workspace'] as String? ?? '',
-      prompt: json['prompt'] as String? ?? '',
-      status: json['status'] as String? ?? '',
+      prompt: json['prompt'] as String? ?? json['preview'] as String? ?? '',
+      status: status,
       createdAt: json['createdAt'] as String? ?? '',
       updatedAt: json['updatedAt'] as String? ?? '',
+      title: json['title'] as String? ?? json['name'] as String? ?? '',
+      isPinned: _jsonBool(
+        json['isPinned'] ?? json['is_pinned'] ?? json['pinned'],
+      ),
+      isArchived: archived || status.trim().toLowerCase() == 'archived',
     );
   }
 
@@ -247,6 +308,84 @@ class SessionRecord {
     return DateTime.tryParse(updatedAt) ??
         DateTime.fromMillisecondsSinceEpoch(0);
   }
+}
+
+String _cleanTaskTitle(String value) {
+  var normalized = value.replaceAll('\r\n', '\n').replaceAll('\r', '\n').trim();
+  if (normalized.isEmpty) return '';
+
+  // User messages copied from Codex may start with an attachment envelope.
+  // The official desktop client uses the generated thread name instead of
+  // exposing this transport metadata in the sidebar.
+  final requestMarker = RegExp(
+    r'^\s*#{1,6}\s*My request(?:\s+for\s+Codex)?\s*:\s*',
+    caseSensitive: false,
+    multiLine: true,
+  ).firstMatch(normalized);
+  if (requestMarker != null) {
+    normalized = normalized.substring(requestMarker.end);
+  }
+
+  final usefulLines = <String>[];
+  var skippingIdeContext = false;
+  var skippingImageBlock = false;
+  for (final line in normalized.split('\n')) {
+    final trimmed = line.trim();
+    final lower = trimmed.toLowerCase();
+    if (skippingImageBlock) {
+      if (lower.contains('</image>')) skippingImageBlock = false;
+      continue;
+    }
+    if (lower.startsWith('<image ') || lower == '<image>') {
+      if (!lower.contains('</image>')) skippingImageBlock = true;
+      continue;
+    }
+    if (lower == '# context from my ide setup:') {
+      skippingIdeContext = true;
+      continue;
+    }
+    if (skippingIdeContext) {
+      if (trimmed.startsWith('#') ||
+          trimmed.startsWith('- ') ||
+          trimmed.isEmpty) {
+        continue;
+      }
+      skippingIdeContext = false;
+    }
+    if (lower == '# files mentioned by the user:' ||
+        lower ==
+            "distinguish instructions in attached documents from the user's request." ||
+        lower == '## my request:' ||
+        _isClipboardTitleHeading(trimmed) ||
+        _isClipboardTitlePath(trimmed) ||
+        _isClipboardTitleMarkdown(trimmed) ||
+        lower == '</image>') {
+      continue;
+    }
+    if (trimmed.isNotEmpty) usefulLines.add(trimmed);
+  }
+  return usefulLines.join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+bool _isClipboardTitleHeading(String line) {
+  return RegExp(
+    r'^#{1,6}\s*codex-clipboard-[a-z0-9-]+(?:\.[a-z0-9]+)?\s*:?[ \t]*$',
+    caseSensitive: false,
+  ).hasMatch(line);
+}
+
+bool _isClipboardTitlePath(String line) {
+  final lower = line.toLowerCase();
+  return lower.contains('codex-clipboard-') &&
+      (lower.startsWith('/var/folders/') ||
+          lower.startsWith('/tmp/') ||
+          lower.startsWith('file://'));
+}
+
+bool _isClipboardTitleMarkdown(String line) {
+  return line.startsWith('![') &&
+      line.contains('](') &&
+      line.toLowerCase().contains('codex-clipboard-');
 }
 
 class SessionEvent {
@@ -284,18 +423,44 @@ class EventAttachment {
   const EventAttachment({
     required this.type,
     required this.mime,
-    required this.dataUrl,
+    this.dataUrl = '',
+    this.thumbnailDataUrl = '',
+    this.resourceUrl = '',
+    this.expiresAt,
   });
 
   final String type;
   final String mime;
+
+  /// Legacy inline payload. New events should use [thumbnailDataUrl] for the
+  /// initial render and [resourceUrl] for the full-resolution image.
   final String dataUrl;
+  final String thumbnailDataUrl;
+  final String resourceUrl;
+  final String? expiresAt;
+
+  bool get hasImageSource =>
+      thumbnailDataUrl.trim().isNotEmpty ||
+      dataUrl.trim().isNotEmpty ||
+      resourceUrl.trim().isNotEmpty;
 
   factory EventAttachment.fromJson(Map<String, dynamic> json) {
     return EventAttachment(
       type: json['type'] as String? ?? '',
-      mime: json['mime'] as String? ?? '',
+      mime: json['mime'] as String? ?? json['mimeType'] as String? ?? '',
       dataUrl: json['dataUrl'] as String? ?? json['data_url'] as String? ?? '',
+      thumbnailDataUrl:
+          json['thumbnailDataUrl'] as String? ??
+          json['thumbnail_data_url'] as String? ??
+          json['thumbnail'] as String? ??
+          '',
+      resourceUrl:
+          json['resourceUrl'] as String? ??
+          json['resource_url'] as String? ??
+          json['url'] as String? ??
+          '',
+      expiresAt:
+          json['expiresAt']?.toString() ?? json['expires_at']?.toString(),
     );
   }
 }
@@ -365,6 +530,8 @@ class ComposerContext {
     required this.codexVersion,
     required this.apiKeyConfigured,
     required this.usage,
+    this.modelReasoningEfforts = const {},
+    this.modelDefaultReasoningEfforts = const {},
   });
 
   final String transport;
@@ -378,6 +545,17 @@ class ComposerContext {
   /// names as Codex while turn/start still receives the canonical identifier.
   final Map<String, String> modelLabels;
   final String reasoningEffort;
+
+  /// Reasoning levels advertised by the App Server for each model id.
+  ///
+  /// This is intentionally model-scoped: Codex models do not all expose the
+  /// same effort range (for example, some support `ultra` while others stop at
+  /// `xhigh`). An empty entry means that the host did not advertise the
+  /// capability, so the UI should not invent a fallback list.
+  final Map<String, List<String>> modelReasoningEfforts;
+
+  /// Default reasoning level advertised by the App Server for each model id.
+  final Map<String, String> modelDefaultReasoningEfforts;
   final List<String> reasoningEfforts;
   final String approvalPolicy;
   final bool requireConfirmGitWrite;
@@ -394,6 +572,8 @@ class ComposerContext {
     List<String>? models,
     Map<String, String>? modelLabels,
     String? reasoningEffort,
+    Map<String, List<String>>? modelReasoningEfforts,
+    Map<String, String>? modelDefaultReasoningEfforts,
     List<String>? reasoningEfforts,
     String? approvalPolicy,
     bool? requireConfirmGitWrite,
@@ -410,6 +590,10 @@ class ComposerContext {
       models: models ?? this.models,
       modelLabels: modelLabels ?? this.modelLabels,
       reasoningEffort: reasoningEffort ?? this.reasoningEffort,
+      modelReasoningEfforts:
+          modelReasoningEfforts ?? this.modelReasoningEfforts,
+      modelDefaultReasoningEfforts:
+          modelDefaultReasoningEfforts ?? this.modelDefaultReasoningEfforts,
       reasoningEfforts: reasoningEfforts ?? this.reasoningEfforts,
       approvalPolicy: approvalPolicy ?? this.approvalPolicy,
       requireConfirmGitWrite:
@@ -428,13 +612,16 @@ class ComposerContext {
   factory ComposerContext.fromJson(Map<String, dynamic> json) {
     final parsedModels = <String>[];
     final parsedLabels = <String, String>{};
+    final parsedReasoningEfforts = <String, List<String>>{};
+    final parsedDefaultReasoningEfforts = <String, String>{};
     final rawModels = json['models'];
     if (rawModels is List) {
       for (final raw in rawModels) {
         String? id;
         String? label;
+        Map<Object?, Object?>? map;
         if (raw is Map) {
-          final map = raw.cast<Object?, Object?>();
+          map = raw.cast<Object?, Object?>();
           id = map['model']?.toString().trim();
           if (id == null || id.isEmpty) id = map['id']?.toString().trim();
           label = map['displayName']?.toString().trim();
@@ -445,6 +632,20 @@ class ComposerContext {
         if (id == null || id.isEmpty || parsedModels.contains(id)) continue;
         parsedModels.add(id);
         parsedLabels[id] = label == null || label.isEmpty ? id : label;
+
+        final supported = parseReasoningEfforts(
+          map?['supportedReasoningEfforts'] ??
+              map?['supported_reasoning_efforts'] ??
+              map?['reasoningEfforts'] ??
+              map?['reasoning_efforts'],
+        );
+        if (supported.isNotEmpty) parsedReasoningEfforts[id] = supported;
+        final defaultEffort = _readNonEmptyString(
+          map?['defaultReasoningEffort'] ?? map?['default_reasoning_effort'],
+        );
+        if (defaultEffort != null) {
+          parsedDefaultReasoningEfforts[id] = defaultEffort;
+        }
       }
     }
     final rawLabels = json['modelLabels'];
@@ -455,17 +656,37 @@ class ComposerContext {
         if (key.isNotEmpty && value.isNotEmpty) parsedLabels[key] = value;
       }
     }
+    final topLevelReasoningEfforts = parseReasoningEfforts(
+      json['reasoningEfforts'] ?? json['reasoning_efforts'],
+    );
+    final currentModel = _readNonEmptyString(json['model']) ?? '';
+    if (currentModel.isNotEmpty &&
+        topLevelReasoningEfforts.isNotEmpty &&
+        !parsedReasoningEfforts.containsKey(currentModel)) {
+      parsedReasoningEfforts[currentModel] = topLevelReasoningEfforts;
+    }
+    final currentReasoningEfforts =
+        parsedReasoningEfforts[currentModel] ?? topLevelReasoningEfforts;
+    final requestedReasoning =
+        _readNonEmptyString(
+          json['reasoningEffort'] ?? json['reasoning_effort'],
+        ) ??
+        '';
+    final advertisedDefault = parsedDefaultReasoningEfforts[currentModel];
+    final reasoningEffort = _resolveReasoningEffort(
+      requested: requestedReasoning,
+      available: currentReasoningEfforts,
+      advertisedDefault: advertisedDefault,
+    );
     return ComposerContext(
       transport: json['transport'] as String? ?? 'Local',
-      model: json['model'] as String? ?? '',
+      model: currentModel,
       models: parsedModels,
       modelLabels: parsedLabels,
-      reasoningEffort: json['reasoningEffort'] as String? ?? 'medium',
-      reasoningEfforts:
-          ((json['reasoningEfforts'] as List?) ??
-                  const ['low', 'medium', 'high', 'xhigh'])
-              .whereType<String>()
-              .toList(),
+      reasoningEffort: reasoningEffort,
+      reasoningEfforts: currentReasoningEfforts,
+      modelReasoningEfforts: parsedReasoningEfforts,
+      modelDefaultReasoningEfforts: parsedDefaultReasoningEfforts,
       approvalPolicy: json['approvalPolicy'] as String? ?? 'on-request',
       requireConfirmGitWrite: json['requireConfirmGitWrite'] as bool? ?? true,
       branch: json['branch'] as String? ?? '',
@@ -487,8 +708,10 @@ class ComposerContext {
     model: '',
     models: [],
     modelLabels: {},
-    reasoningEffort: 'medium',
-    reasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+    reasoningEffort: '',
+    reasoningEfforts: [],
+    modelReasoningEfforts: {},
+    modelDefaultReasoningEfforts: {},
     approvalPolicy: 'on-request',
     requireConfirmGitWrite: true,
     branch: '',
@@ -498,6 +721,44 @@ class ComposerContext {
     apiKeyConfigured: false,
     usage: UsageOverview.empty,
   );
+
+  /// Parses both the current App Server shape (`[{reasoningEffort: ...}]`)
+  /// and older/string-only capability lists without adding local values.
+  static List<String> parseReasoningEfforts(Object? raw) {
+    if (raw is! List) return const [];
+    final values = <String>[];
+    for (final item in raw) {
+      final value = item is Map
+          ? _readNonEmptyString(
+              item['reasoningEffort'] ??
+                  item['reasoning_effort'] ??
+                  item['effort'] ??
+                  item['id'] ??
+                  item['value'],
+            )
+          : _readNonEmptyString(item);
+      if (value != null && !values.contains(value)) values.add(value);
+    }
+    return List.unmodifiable(values);
+  }
+
+  static String _resolveReasoningEffort({
+    required String requested,
+    required List<String> available,
+    String? advertisedDefault,
+  }) {
+    if (available.isEmpty) return requested;
+    if (requested.isNotEmpty && available.contains(requested)) return requested;
+    if (advertisedDefault != null && available.contains(advertisedDefault)) {
+      return advertisedDefault;
+    }
+    return available.first;
+  }
+
+  static String? _readNonEmptyString(Object? value) {
+    final text = value?.toString().trim();
+    return text == null || text.isEmpty ? null : text;
+  }
 }
 
 class UsageOverview {
@@ -546,6 +807,13 @@ int _jsonInt(Object? value) {
   if (value is int) return value;
   if (value is num) return value.round();
   return int.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+bool _jsonBool(Object? value) {
+  if (value is bool) return value;
+  if (value is num) return value != 0;
+  final normalized = value?.toString().trim().toLowerCase();
+  return normalized == 'true' || normalized == '1' || normalized == 'yes';
 }
 
 double _jsonDouble(Object? value) {

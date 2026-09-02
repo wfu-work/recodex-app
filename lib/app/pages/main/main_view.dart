@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
@@ -7,6 +8,7 @@ import '../../components/liquid_background.dart';
 import '../../components/menu_drawer.dart';
 import '../../models/bridge_models.dart';
 import '../../routes/app_pages.dart';
+import '../../theme/recodex_theme.dart';
 import '../pairing/pairing_view.dart';
 import '../settings/settings_preferences_controller.dart';
 import '../settings/theme_controller.dart';
@@ -32,10 +34,15 @@ class _MainPageState extends State<MainPage> {
 
   final BridgeController controller = Get.find();
   final TextEditingController _promptController = TextEditingController();
+  final FocusNode _composerFocusNode = FocusNode(debugLabel: 'composer');
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _timelineBottomKey = GlobalKey();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final List<GlobalKey> _timelineEntryKeys = <GlobalKey>[];
   double _headerBackgroundProgress = 0;
   bool _composerVisible = true;
+  bool _drawerOpen = false;
+  bool? _lastAutoScrollEnabled;
   String _lastAutoScrollSignature = '';
 
   @override
@@ -52,6 +59,7 @@ class _MainPageState extends State<MainPage> {
       ..dispose();
     controller.stopLiveTimelineRefresh();
     _promptController.dispose();
+    _composerFocusNode.dispose();
     super.dispose();
   }
 
@@ -60,203 +68,402 @@ class _MainPageState extends State<MainPage> {
     return Obx(() {
       final themeController = Get.find<ThemeController>();
       themeController.fontScale.value;
-      final compactTimeline = Get.isRegistered<SettingsPreferencesController>()
-          ? Get.find<SettingsPreferencesController>().compactTimeline.value
-          : false;
-      if (controller.events.isNotEmpty ||
-          controller.currentSessionId.value != null) {
+      final settingsPreferences =
+          Get.isRegistered<SettingsPreferencesController>()
+          ? Get.find<SettingsPreferencesController>()
+          : null;
+      final compactTimeline =
+          settingsPreferences?.compactTimeline.value ?? false;
+      final shortcutsEnabled =
+          settingsPreferences?.shortcutsEnabled.value ?? true;
+      final showConversationIndex =
+          settingsPreferences?.showConversationIndex.value ?? true;
+      final autoScrollToLatest =
+          settingsPreferences?.autoScrollToLatest.value ?? true;
+      final showReasoning = settingsPreferences?.showReasoning.value ?? true;
+      final collapseReasoningByDefault =
+          settingsPreferences?.collapseReasoningByDefault.value ?? true;
+      final showToolCallDetails =
+          settingsPreferences?.showToolCallDetails.value ?? true;
+      final showUsageMetrics =
+          settingsPreferences?.showUsageMetrics.value ?? true;
+      final compactSidebar = settingsPreferences?.compactSidebar.value ?? false;
+      final showTopTitleBar =
+          settingsPreferences?.showTopTitleBar.value ?? true;
+      final showIndexHoverPreview =
+          settingsPreferences?.showIndexHoverPreview.value ?? true;
+      final reduceAnimations =
+          settingsPreferences?.reduceAnimations.value ?? false;
+      final answerCardRadius =
+          settingsPreferences?.answerCardRadius.value ?? 24;
+      final answerMaxWidth = settingsPreferences?.answerMaxWidth.value ?? 960;
+      final answerHorizontalPadding =
+          settingsPreferences?.answerHorizontalPadding.value ?? 16;
+      if (_lastAutoScrollEnabled != autoScrollToLatest) {
+        _lastAutoScrollEnabled = autoScrollToLatest;
+        if (autoScrollToLatest) _lastAutoScrollSignature = '';
+      }
+      final timelineEntries = _timelineEntries;
+      final timelineEntryKeys = _keysForTimelineEntries(timelineEntries.length);
+      final effectiveMediaQuery = MediaQuery.of(context).copyWith(
+        disableAnimations:
+            MediaQuery.of(context).disableAnimations || reduceAnimations,
+      );
+      if (autoScrollToLatest &&
+          (controller.events.isNotEmpty ||
+              controller.currentSessionId.value != null)) {
         _scheduleScrollToLatest(_timelineSignature);
       }
       final mediaQuery = MediaQuery.of(context);
       final topInset = mediaQuery.padding.top;
+      // The macOS titlebar is transparent/full-size now. Reserve a small
+      // traffic-light-safe strip so the page menu remains draggable and does
+      // not sit underneath the close/minimize controls.
+      final windowTopInset =
+          topInset +
+          (defaultTargetPlatform == TargetPlatform.macOS ? 28.0 : 0.0);
+      final headerReservedHeight = showTopTitleBar
+          ? _headerReservedHeight
+          : 0.0;
       final bottomInset = mediaQuery.padding.bottom;
-      final composerSlideDuration = mediaQuery.disableAnimations
+      final composerSlideDuration = effectiveMediaQuery.disableAnimations
           ? Duration.zero
           : const Duration(milliseconds: 430);
-      final composerFadeDuration = mediaQuery.disableAnimations
+      final composerFadeDuration = effectiveMediaQuery.disableAnimations
           ? Duration.zero
           : const Duration(milliseconds: 300);
       final isDark = Theme.of(context).brightness == Brightness.dark;
-      return LiquidBackground(
-        child: AnnotatedRegion<SystemUiOverlayStyle>(
-          value: SystemUiOverlayStyle(
-            statusBarColor: Colors.transparent,
-            statusBarIconBrightness: isDark
-                ? Brightness.light
-                : Brightness.dark,
-            statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
-          ),
-          child: Scaffold(
-            backgroundColor: Colors.transparent,
-            drawer: RemodexDrawer(
-              connected: controller.connected.value,
-              pairings: controller.pairings,
-              activePairing: controller.activePairing,
-              workspaces: controller.workspaces,
-              selectedWorkspace: controller.selectedWorkspace.value,
-              sessions: controller.sessions,
-              selectedSessionId: controller.selectedSessionId.value,
-              onSelectPairing: (profile) {
-                controller.switchPairing(profile.id);
-              },
-              onSelectWorkspace: (workspace) {
-                controller.selectWorkspace(workspace);
-              },
-              onSelectSession: (session) {
-                controller.selectSession(session);
-                Navigator.of(context).pop();
-              },
-              onPairing: () => _openPage(Routes.pairing),
-              onNewPairing: () => _openPage(
-                Routes.pairing,
-                arguments: const PairingPageArgs(createNew: true),
+      final useMetaModifier = defaultTargetPlatform == TargetPlatform.macOS;
+      final shortcutMap = shortcutsEnabled
+          ? <ShortcutActivator, Intent>{
+              SingleActivator(
+                LogicalKeyboardKey.keyN,
+                meta: useMetaModifier,
+                control: !useMetaModifier,
+              ): const _NewConversationIntent(),
+              SingleActivator(
+                LogicalKeyboardKey.keyK,
+                meta: useMetaModifier,
+                control: !useMetaModifier,
+              ): const _CommandPaletteIntent(),
+              SingleActivator(
+                LogicalKeyboardKey.keyB,
+                meta: useMetaModifier,
+                control: !useMetaModifier,
+              ): const _ToggleSidebarIntent(),
+              SingleActivator(
+                LogicalKeyboardKey.keyL,
+                meta: useMetaModifier,
+                control: !useMetaModifier,
+              ): const _FocusComposerIntent(),
+              SingleActivator(
+                LogicalKeyboardKey.enter,
+                meta: useMetaModifier,
+                control: !useMetaModifier,
+              ): const _SendPromptIntent(),
+              const SingleActivator(LogicalKeyboardKey.escape):
+                  const _StopTaskIntent(),
+            }
+          : const <ShortcutActivator, Intent>{};
+      return MediaQuery(
+        data: effectiveMediaQuery,
+        child: Shortcuts(
+          shortcuts: shortcutMap,
+          child: Actions(
+            actions: <Type, Action<Intent>>{
+              _NewConversationIntent: CallbackAction<_NewConversationIntent>(
+                onInvoke: (_) {
+                  _startNewConversation();
+                  return null;
+                },
               ),
-              onSettings: () => _openPage(Routes.settings),
-              themePreference: themeController.preference.value,
-              onThemePreferenceChanged: themeController.setPreference,
-              onRefreshProjects: controller.connected.value
-                  ? controller.refreshProjects
-                  : null,
-            ),
-            body: Stack(
-              children: [
-                NotificationListener<ScrollNotification>(
-                  onNotification: _handleScrollNotification,
-                  child: CustomScrollView(
-                    controller: _scrollController,
-                    slivers: [
-                      SliverToBoxAdapter(
-                        child: SizedBox(
-                          height: _headerReservedHeight + topInset,
+              _CommandPaletteIntent: CallbackAction<_CommandPaletteIntent>(
+                onInvoke: (_) {
+                  _showCommandPalette();
+                  return null;
+                },
+              ),
+              _ToggleSidebarIntent: CallbackAction<_ToggleSidebarIntent>(
+                onInvoke: (_) {
+                  _toggleSidebar();
+                  return null;
+                },
+              ),
+              _FocusComposerIntent: CallbackAction<_FocusComposerIntent>(
+                onInvoke: (_) {
+                  _focusComposer();
+                  return null;
+                },
+              ),
+              _SendPromptIntent: CallbackAction<_SendPromptIntent>(
+                onInvoke: (_) {
+                  _sendPrompt();
+                  return null;
+                },
+              ),
+              _StopTaskIntent: CallbackAction<_StopTaskIntent>(
+                onInvoke: (_) {
+                  controller.interrupt();
+                  return null;
+                },
+              ),
+            },
+            child: LiquidBackground(
+              child: AnnotatedRegion<SystemUiOverlayStyle>(
+                value: SystemUiOverlayStyle(
+                  statusBarColor: Colors.transparent,
+                  statusBarIconBrightness: isDark
+                      ? Brightness.light
+                      : Brightness.dark,
+                  statusBarBrightness: isDark
+                      ? Brightness.dark
+                      : Brightness.light,
+                ),
+                child: Scaffold(
+                  key: _scaffoldKey,
+                  backgroundColor: Colors.transparent,
+                  drawerEnableOpenDragGesture: !compactSidebar,
+                  drawer: RemodexDrawer(
+                    connected: controller.connected.value,
+                    pairings: controller.pairings,
+                    activePairing: controller.activePairing,
+                    workspaces: controller.workspaces,
+                    selectedWorkspace: controller.selectedWorkspace.value,
+                    sessions: controller.sessions,
+                    selectedSessionId: controller.selectedSessionId.value,
+                    onSelectPairing: (profile) {
+                      controller.switchPairing(profile.id);
+                    },
+                    onSelectWorkspace: (workspace) {
+                      controller.selectWorkspace(workspace);
+                    },
+                    onSelectSession: (session) {
+                      controller.selectSession(session);
+                      Navigator.of(context).pop();
+                    },
+                    onPairing: () => _openPage(Routes.pairing),
+                    onNewPairing: () => _openPage(
+                      Routes.pairing,
+                      arguments: const PairingPageArgs(createNew: true),
+                    ),
+                    onSettings: () => _openPage(Routes.settings),
+                    themePreference: themeController.preference.value,
+                    onThemePreferenceChanged: themeController.setPreference,
+                    onRefreshProjects: controller.connected.value
+                        ? controller.refreshProjects
+                        : null,
+                    compact: compactSidebar,
+                  ),
+                  onDrawerChanged: (open) {
+                    if (_drawerOpen == open || !mounted) return;
+                    setState(() => _drawerOpen = open);
+                  },
+                  body: Stack(
+                    children: [
+                      NotificationListener<ScrollNotification>(
+                        onNotification: _handleScrollNotification,
+                        child: CustomScrollView(
+                          controller: _scrollController,
+                          slivers: [
+                            SliverToBoxAdapter(
+                              child: SizedBox(
+                                height: headerReservedHeight + windowTopInset,
+                              ),
+                            ),
+                            if (controller.lastError.value.isNotEmpty)
+                              SliverToBoxAdapter(
+                                child: InlineError(
+                                  message: controller.lastError.value,
+                                  onDismiss: () =>
+                                      controller.lastError.value = '',
+                                ),
+                              ),
+                            if (_gitChangeSummary != null)
+                              SliverPadding(
+                                padding: EdgeInsets.fromLTRB(
+                                  answerHorizontalPadding,
+                                  26,
+                                  answerHorizontalPadding,
+                                  0,
+                                ),
+                                sliver: SliverToBoxAdapter(
+                                  child: GitChangeCard(
+                                    summary: _gitChangeSummary!,
+                                    cardRadius: answerCardRadius,
+                                    onUndo: _confirmUndoChanges,
+                                    onFileTap: _openGitDiff,
+                                  ),
+                                ),
+                              ),
+                            SliverPadding(
+                              padding: EdgeInsets.fromLTRB(
+                                answerHorizontalPadding,
+                                26,
+                                answerHorizontalPadding,
+                                0,
+                              ),
+                              sliver: SliverList.separated(
+                                itemCount: controller.events.isEmpty
+                                    ? 1
+                                    : timelineEntries.length,
+                                separatorBuilder: (context, index) =>
+                                    SizedBox(height: compactTimeline ? 14 : 26),
+                                itemBuilder: (context, index) {
+                                  if (controller.events.isEmpty) {
+                                    if (controller.selectedSessionId.value !=
+                                        null) {
+                                      return AssistantBubble(
+                                        event: const SessionEvent(
+                                          kind: 'running',
+                                          text: '正在加载任务对话...',
+                                        ),
+                                        cardRadius: answerCardRadius,
+                                      );
+                                    }
+                                    return WelcomeTimeline(
+                                      connected: controller.connected.value,
+                                      connectionLabel:
+                                          controller.connectionLabel.value,
+                                      workspaceCount:
+                                          controller.workspaces.length,
+                                      onPairing: () =>
+                                          _openPage(Routes.pairing),
+                                    );
+                                  }
+                                  final entry = timelineEntries[index];
+                                  if (entry.userEvent != null) {
+                                    return KeyedSubtree(
+                                      key: timelineEntryKeys[index],
+                                      child: AssistantBubble(
+                                        event: entry.userEvent!,
+                                        cardRadius: answerCardRadius,
+                                      ),
+                                    );
+                                  }
+                                  final isLatestEntry =
+                                      index == timelineEntries.length - 1;
+                                  return KeyedSubtree(
+                                    key: timelineEntryKeys[index],
+                                    child: AssistantAnswerBlock(
+                                      events: entry.events,
+                                      completed:
+                                          !isLatestEntry ||
+                                          !controller
+                                              .timelineSessionRunning
+                                              .value,
+                                      showReasoning: showReasoning,
+                                      collapseReasoningByDefault:
+                                          collapseReasoningByDefault,
+                                      showToolCallDetails: showToolCallDetails,
+                                      showUsageMetrics: showUsageMetrics,
+                                      cardRadius: answerCardRadius,
+                                      maxWidth: answerMaxWidth,
+                                      gitChangeSummary: _gitChangeSummary,
+                                      onGitFileTap: _openGitDiff,
+                                      onUndoGitChanges: _confirmUndoChanges,
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                            SliverToBoxAdapter(
+                              child: SizedBox(
+                                key: _timelineBottomKey,
+                                height: _composerReservedHeight + bottomInset,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      if (controller.lastError.value.isNotEmpty)
-                        SliverToBoxAdapter(
-                          child: InlineError(
-                            message: controller.lastError.value,
-                            onDismiss: () => controller.lastError.value = '',
+                      if (showTopTitleBar)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          top: 0,
+                          child: HomeHeader(
+                            title: _taskHeaderTitle,
+                            subtitle: _projectHeaderSubtitle,
+                            backgroundProgress: _headerBackgroundProgress,
+                            topPadding: windowTopInset,
+                            onRefreshTasks: controller.canUseWorkspace
+                                ? controller.refreshProjectTasks
+                                : null,
+                            onShowTaskOutput: _taskOutputText.isEmpty
+                                ? null
+                                : _showTaskOutput,
+                            onCopyTaskOutput: _taskOutputText.isEmpty
+                                ? null
+                                : _copyTaskOutput,
+                            onRefreshGit: controller.canUseWorkspace
+                                ? () => controller.gitStatus(includeDiff: true)
+                                : null,
+                            taskOutputAvailable: _taskOutputText.isNotEmpty,
                           ),
                         ),
-                      if (_gitChangeSummary != null)
-                        SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(36, 26, 36, 0),
-                          sliver: SliverToBoxAdapter(
-                            child: GitChangeCard(
-                              summary: _gitChangeSummary!,
-                              onUndo: _confirmUndoChanges,
-                              onFileTap: _openGitDiff,
+                      if (showConversationIndex &&
+                          controller.events.isNotEmpty &&
+                          timelineEntries.isNotEmpty &&
+                          mediaQuery.size.width >= (_drawerOpen ? 700 : 760))
+                        Positioned(
+                          left: _drawerOpen ? 304 : 14,
+                          top: windowTopInset + (showTopTitleBar ? 118 : 16),
+                          height:
+                              (mediaQuery.size.height -
+                                      windowTopInset -
+                                      _composerReservedHeight -
+                                      (showTopTitleBar ? 132 : 30))
+                                  .clamp(180.0, 380.0)
+                                  .toDouble(),
+                          width: 52,
+                          child: _TimelineIndex(
+                            key: const ValueKey('timeline-index'),
+                            entries: timelineEntries,
+                            entryKeys: timelineEntryKeys,
+                            scrollController: _scrollController,
+                            showHoverPreview: showIndexHoverPreview,
+                          ),
+                        ),
+                      Positioned(
+                        left: 20,
+                        right: 20,
+                        bottom: 18 + bottomInset,
+                        child: IgnorePointer(
+                          ignoring: !_composerVisible,
+                          child: AnimatedSlide(
+                            offset: _composerVisible
+                                ? Offset.zero
+                                : const Offset(0, 1.28),
+                            duration: composerSlideDuration,
+                            curve: _composerDampedCurve,
+                            child: AnimatedOpacity(
+                              opacity: _composerVisible ? 1 : 0,
+                              duration: composerFadeDuration,
+                              curve: Curves.easeOutCubic,
+                              child: ComposerBar(
+                                controller: _promptController,
+                                focusNode: _composerFocusNode,
+                                enabled: controller.canUseWorkspace,
+                                context: controller.composerContext.value,
+                                permissionMode: controller.permissionMode.value,
+                                onSend: _sendPrompt,
+                                running:
+                                    controller.timelineSessionRunning.value,
+                                onStop: controller.interrupt,
+                                onModelChanged: controller.setComposerModel,
+                                onReasoningChanged:
+                                    controller.setReasoningEffort,
+                                onPermissionModeChanged:
+                                    controller.setPermissionMode,
+                                onVoicePressed: _toggleVoiceInput,
+                              ),
                             ),
                           ),
-                        ),
-                      SliverPadding(
-                        padding: const EdgeInsets.fromLTRB(36, 26, 36, 0),
-                        sliver: SliverList.separated(
-                          itemCount: _timelineCount,
-                          separatorBuilder: (context, index) =>
-                              SizedBox(height: compactTimeline ? 14 : 26),
-                          itemBuilder: (context, index) {
-                            if (controller.events.isEmpty) {
-                              if (controller.selectedSessionId.value != null) {
-                                return AssistantBubble(
-                                  event: const SessionEvent(
-                                    kind: 'running',
-                                    text: '正在加载任务对话...',
-                                  ),
-                                );
-                              }
-                              return WelcomeTimeline(
-                                connected: controller.connected.value,
-                                connectionLabel:
-                                    controller.connectionLabel.value,
-                                workspaceCount: controller.workspaces.length,
-                                onPairing: () => _openPage(Routes.pairing),
-                              );
-                            }
-                            final entry = _timelineEntries[index];
-                            if (entry.userEvent != null) {
-                              return AssistantBubble(event: entry.userEvent!);
-                            }
-                            final isLatestEntry =
-                                index == _timelineEntries.length - 1;
-                            return AssistantAnswerBlock(
-                              events: entry.events,
-                              completed:
-                                  !isLatestEntry ||
-                                  !controller.timelineSessionRunning.value,
-                              gitChangeSummary: _gitChangeSummary,
-                              onGitFileTap: _openGitDiff,
-                              onUndoGitChanges: _confirmUndoChanges,
-                            );
-                          },
-                        ),
-                      ),
-                      SliverToBoxAdapter(
-                        child: SizedBox(
-                          key: _timelineBottomKey,
-                          height: _composerReservedHeight + bottomInset,
                         ),
                       ),
                     ],
                   ),
                 ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  top: 0,
-                  child: HomeHeader(
-                    title: _workspaceTitle,
-                    subtitle: _workspaceSubtitle,
-                    backgroundProgress: _headerBackgroundProgress,
-                    topPadding: topInset,
-                    onRefreshTasks: controller.canUseWorkspace
-                        ? controller.refreshProjectTasks
-                        : null,
-                    onShowTaskOutput: _taskOutputText.isEmpty
-                        ? null
-                        : _showTaskOutput,
-                    onCopyTaskOutput: _taskOutputText.isEmpty
-                        ? null
-                        : _copyTaskOutput,
-                    onRefreshGit: controller.canUseWorkspace
-                        ? () => controller.gitStatus(includeDiff: true)
-                        : null,
-                    taskOutputAvailable: _taskOutputText.isNotEmpty,
-                  ),
-                ),
-                Positioned(
-                  left: 20,
-                  right: 20,
-                  bottom: 18 + bottomInset,
-                  child: IgnorePointer(
-                    ignoring: !_composerVisible,
-                    child: AnimatedSlide(
-                      offset: _composerVisible
-                          ? Offset.zero
-                          : const Offset(0, 1.28),
-                      duration: composerSlideDuration,
-                      curve: _composerDampedCurve,
-                      child: AnimatedOpacity(
-                        opacity: _composerVisible ? 1 : 0,
-                        duration: composerFadeDuration,
-                        curve: Curves.easeOutCubic,
-                        child: ComposerBar(
-                          controller: _promptController,
-                          enabled: controller.canUseWorkspace,
-                          context: controller.composerContext.value,
-                          permissionMode: controller.permissionMode.value,
-                          onSend: _sendPrompt,
-                          running: controller.timelineSessionRunning.value,
-                          onStop: controller.interrupt,
-                          onModelChanged: controller.setComposerModel,
-                          onReasoningChanged: controller.setReasoningEffort,
-                          onPermissionModeChanged: controller.setPermissionMode,
-                          onVoicePressed: _toggleVoiceInput,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -264,8 +471,15 @@ class _MainPageState extends State<MainPage> {
     });
   }
 
-  int get _timelineCount =>
-      controller.events.isEmpty ? 1 : _timelineEntries.length;
+  List<GlobalKey> _keysForTimelineEntries(int count) {
+    while (_timelineEntryKeys.length < count) {
+      _timelineEntryKeys.add(GlobalKey(debugLabel: 'timeline-entry'));
+    }
+    if (_timelineEntryKeys.length > count) {
+      _timelineEntryKeys.removeRange(count, _timelineEntryKeys.length);
+    }
+    return List<GlobalKey>.unmodifiable(_timelineEntryKeys);
+  }
 
   List<_TimelineEntry> get _timelineEntries {
     final entries = <_TimelineEntry>[];
@@ -289,22 +503,23 @@ class _MainPageState extends State<MainPage> {
     return entries;
   }
 
-  String get _workspaceTitle {
-    final workspace = controller.selectedWorkspace.value;
-    if (workspace == null) return 'Recodex';
-    final source = workspace.name.trim().isEmpty
-        ? workspace.path
-        : workspace.name;
-    final title = lastPathSegment(source);
-    return title.isEmpty ? 'Recodex' : title;
+  String get _taskHeaderTitle {
+    final selectedId = controller.selectedSessionId.value?.trim();
+    if (selectedId != null && selectedId.isNotEmpty) {
+      for (final session in controller.sessions) {
+        if (session.id.trim() == selectedId) return session.displayTitle;
+      }
+    }
+    return '新对话';
   }
 
-  String get _workspaceSubtitle {
+  String get _projectHeaderSubtitle {
     final workspace = controller.selectedWorkspace.value;
     if (workspace == null) return '';
+    final name = workspace.name.trim();
+    if (name.isNotEmpty) return lastPathSegment(name);
     final path = workspace.path.trim();
-    if (path.isEmpty || path == workspace.name.trim()) return '';
-    return path;
+    return path.isEmpty ? '' : lastPathSegment(path);
   }
 
   GitChangeSummary? get _gitChangeSummary {
@@ -426,17 +641,99 @@ class _MainPageState extends State<MainPage> {
       if (!_scrollController.hasClients) return;
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 220),
+        duration: MediaQuery.of(context).disableAnimations
+            ? Duration.zero
+            : const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
       );
     });
   }
 
   void _sendPrompt() {
+    if (controller.timelineSessionRunning.value) return;
     final prompt = _promptController.text.trim();
     if (prompt.isEmpty) return;
     controller.startSession(prompt);
     _promptController.clear();
+  }
+
+  void _focusComposer() {
+    if (!_composerVisible && mounted) {
+      setState(() => _composerVisible = true);
+    }
+    _composerFocusNode.requestFocus();
+  }
+
+  void _startNewConversation() {
+    controller.startNewConversation();
+    _promptController.clear();
+    _focusComposer();
+  }
+
+  void _toggleSidebar() {
+    final scaffold = _scaffoldKey.currentState;
+    if (scaffold == null) return;
+    if (scaffold.isDrawerOpen) {
+      Navigator.of(context).pop();
+    } else {
+      scaffold.openDrawer();
+    }
+  }
+
+  void _showCommandPalette() {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('命令面板'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              _startNewConversation();
+            },
+            child: const ListTile(
+              leading: Icon(RecodexIcons.add),
+              title: Text('新建任务'),
+              subtitle: Text('清空当前对话并聚焦输入框'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              _focusComposer();
+            },
+            child: const ListTile(
+              leading: Icon(RecodexIcons.edit),
+              title: Text('聚焦输入框'),
+              subtitle: Text('将光标移动到任务输入框'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              _toggleSidebar();
+            },
+            child: const ListTile(
+              leading: Icon(RecodexIcons.menu),
+              title: Text('显示/隐藏侧边栏'),
+              subtitle: Text('展开或收起项目和任务列表'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              _openPage(Routes.settings);
+            },
+            child: const ListTile(
+              leading: Icon(RecodexIcons.settings),
+              title: Text('打开设置'),
+              subtitle: Text('管理外观、连接和任务偏好'),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _toggleVoiceInput() async {
@@ -484,6 +781,30 @@ class _MainPageState extends State<MainPage> {
   }
 }
 
+class _NewConversationIntent extends Intent {
+  const _NewConversationIntent();
+}
+
+class _CommandPaletteIntent extends Intent {
+  const _CommandPaletteIntent();
+}
+
+class _ToggleSidebarIntent extends Intent {
+  const _ToggleSidebarIntent();
+}
+
+class _FocusComposerIntent extends Intent {
+  const _FocusComposerIntent();
+}
+
+class _SendPromptIntent extends Intent {
+  const _SendPromptIntent();
+}
+
+class _StopTaskIntent extends Intent {
+  const _StopTaskIntent();
+}
+
 class _TimelineEntry {
   const _TimelineEntry._({required this.events, this.userEvent});
 
@@ -497,4 +818,301 @@ class _TimelineEntry {
 
   final List<SessionEvent> events;
   final SessionEvent? userEvent;
+}
+
+/// A compact conversation index modelled after Codex's desktop transcript
+/// rail. Each mark maps to one top-level user turn or answer block. Clicking a
+/// mark reveals that block, while hovering it exposes a readable preview.
+class _TimelineIndex extends StatefulWidget {
+  const _TimelineIndex({
+    required this.entries,
+    required this.entryKeys,
+    required this.scrollController,
+    this.showHoverPreview = true,
+    super.key,
+  });
+
+  final List<_TimelineEntry> entries;
+  final List<GlobalKey> entryKeys;
+  final ScrollController scrollController;
+  final bool showHoverPreview;
+
+  @override
+  State<_TimelineIndex> createState() => _TimelineIndexState();
+}
+
+class _TimelineIndexState extends State<_TimelineIndex> {
+  int _activeIndex = 0;
+  int? _hoveredIndex;
+
+  List<_TimelineIndexMarker> get _markers {
+    final markers = <_TimelineIndexMarker>[];
+    var hasUserQuestion = false;
+    for (var entryIndex = 0; entryIndex < widget.entries.length; entryIndex++) {
+      final entry = widget.entries[entryIndex];
+      if (entry.userEvent != null) {
+        hasUserQuestion = true;
+        markers.add(
+          _TimelineIndexMarker(
+            entryIndex: entryIndex,
+            preview: entry.userEvent!.text,
+          ),
+        );
+      }
+    }
+    // A newly-created turn briefly contains only assistant events while the
+    // user message is being acknowledged. Keep the index useful during that
+    // hand-off, but avoid adding one mark for every tool/reasoning event once
+    // a real question is available.
+    if (!hasUserQuestion) {
+      for (
+        var entryIndex = 0;
+        entryIndex < widget.entries.length;
+        entryIndex++
+      ) {
+        final entry = widget.entries[entryIndex];
+        markers.add(
+          _TimelineIndexMarker(
+            entryIndex: entryIndex,
+            preview: entry.events
+                .map((event) => event.text)
+                .firstWhere(
+                  (text) => text.trim().isNotEmpty,
+                  orElse: () => '回答内容',
+                ),
+          ),
+        );
+      }
+    }
+    return markers;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    widget.scrollController.addListener(_updateActiveIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updateActiveIndex());
+  }
+
+  @override
+  void didUpdateWidget(covariant _TimelineIndex oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.scrollController != widget.scrollController) {
+      oldWidget.scrollController.removeListener(_updateActiveIndex);
+      widget.scrollController.addListener(_updateActiveIndex);
+    }
+    final markers = _markers;
+    if (markers.isEmpty) {
+      _activeIndex = 0;
+      _hoveredIndex = null;
+    } else if (_activeIndex >= markers.length) {
+      _activeIndex = markers.length - 1;
+    }
+    if (!widget.showHoverPreview) _hoveredIndex = null;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updateActiveIndex());
+  }
+
+  @override
+  void dispose() {
+    widget.scrollController.removeListener(_updateActiveIndex);
+    super.dispose();
+  }
+
+  void _updateActiveIndex() {
+    final markers = _markers;
+    if (!mounted || markers.isEmpty) return;
+    final scroll = widget.scrollController;
+    var next = 0;
+    if (scroll.hasClients && scroll.position.maxScrollExtent > 0) {
+      final progress =
+          (scroll.position.pixels / scroll.position.maxScrollExtent).clamp(
+            0.0,
+            1.0,
+          );
+      next = (progress * (markers.length - 1)).round();
+    }
+    if (next == _activeIndex) return;
+    setState(() => _activeIndex = next);
+  }
+
+  Future<void> _reveal(int index) async {
+    final markers = _markers;
+    if (index < 0 || index >= markers.length) return;
+    final entryIndex = markers[index].entryIndex;
+    final targetContext = entryIndex < widget.entryKeys.length
+        ? widget.entryKeys[entryIndex].currentContext
+        : null;
+    if (targetContext != null) {
+      await Scrollable.ensureVisible(
+        targetContext,
+        duration: MediaQuery.of(context).disableAnimations
+            ? Duration.zero
+            : const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+        // The selected question should land in the visual center of the
+        // transcript, matching Codex's index navigation behavior.
+        alignment: 0.5,
+      );
+      return;
+    }
+    final scroll = widget.scrollController;
+    if (!scroll.hasClients || markers.length < 2) return;
+    final target =
+        scroll.position.maxScrollExtent * (index / (markers.length - 1));
+    await scroll.animateTo(
+      target,
+      duration: MediaQuery.of(context).disableAnimations
+          ? Duration.zero
+          : const Duration(milliseconds: 260),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  String _previewFor(_TimelineIndexMarker marker) {
+    final raw = marker.preview;
+    final normalized = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.isEmpty) return '回答内容';
+    return normalized.length > 72
+        ? '${normalized.substring(0, 72).trimRight()}…'
+        : normalized;
+  }
+
+  double _barWidth(int index) {
+    // Codex keeps the rail quiet at rest and only expands the mark under the
+    // pointer. The active question is distinguished by color instead of by a
+    // permanently oversized bar.
+    if (index == _hoveredIndex) return 42;
+    return 14;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final reduceAnimations = MediaQuery.of(context).disableAnimations;
+    final markers = _markers;
+    if (markers.isEmpty) return const SizedBox.shrink();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final count = markers.length;
+        final itemExtent = (constraints.maxHeight / count)
+            .clamp(12.0, 24.0)
+            .toDouble();
+        final railHeight = itemExtent * count;
+        final railTop = (constraints.maxHeight - railHeight) / 2;
+        final hovered = _hoveredIndex;
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              left: 0,
+              top: railTop,
+              width: 48,
+              height: railHeight,
+              child: Column(
+                children: [
+                  for (var index = 0; index < count; index++)
+                    SizedBox(
+                      height: itemExtent,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          onEnter: (_) => setState(() => _hoveredIndex = index),
+                          onExit: (_) {
+                            if (_hoveredIndex == index) {
+                              setState(() => _hoveredIndex = null);
+                            }
+                          },
+                          child: Semantics(
+                            button: true,
+                            label: '对话索引 ${index + 1}',
+                            onTap: () => _reveal(index),
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () => _reveal(index),
+                              child: SizedBox(
+                                width: 48,
+                                height: itemExtent,
+                                child: Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: AnimatedContainer(
+                                    duration: reduceAnimations
+                                        ? Duration.zero
+                                        : const Duration(milliseconds: 140),
+                                    curve: Curves.easeOut,
+                                    width: _barWidth(index),
+                                    height: index == _activeIndex ? 3 : 2,
+                                    decoration: BoxDecoration(
+                                      color: index == _activeIndex
+                                          ? colors.text
+                                          : colors.textMuted.withValues(
+                                              alpha: index == _hoveredIndex
+                                                  ? 0.9
+                                                  : 0.55,
+                                            ),
+                                      borderRadius: BorderRadius.circular(2),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (hovered != null && widget.showHoverPreview)
+              Positioned(
+                left: 56,
+                top: (railTop + hovered * itemExtent - 34)
+                    .clamp(0.0, constraints.maxHeight - 112)
+                    .toDouble(),
+                width: 292,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colors.glassColor.withValues(alpha: 0.96),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: colors.glassBorder.withValues(alpha: 0.7),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: colors.glassShadow.withValues(alpha: 0.24),
+                          blurRadius: 20,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 11, 14, 12),
+                      child: Text(
+                        _previewFor(markers[hovered]),
+                        maxLines: 4,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: colors.text,
+                          fontSize: 13,
+                          height: 1.35,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _TimelineIndexMarker {
+  const _TimelineIndexMarker({required this.entryIndex, required this.preview});
+
+  final int entryIndex;
+  final String preview;
 }

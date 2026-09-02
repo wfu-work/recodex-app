@@ -6,6 +6,9 @@ abstract class Routes {
   static const settings = _Paths.settings;
   static const connectionSettings = _Paths.connectionSettings;
   static const taskSettings = _Paths.taskSettings;
+  static const taskHistory = _Paths.taskHistory;
+  static const conversationDisplay = _Paths.conversationDisplay;
+  static const shortcuts = _Paths.shortcuts;
   static const securitySettings = _Paths.securitySettings;
   static const theme = _Paths.theme;
   static const notifications = _Paths.notifications;
@@ -23,6 +26,9 @@ abstract class _Paths {
   static const settings = '/settings';
   static const connectionSettings = '/settings/connection';
   static const taskSettings = '/settings/tasks';
+  static const taskHistory = '/settings/tasks/history';
+  static const conversationDisplay = '/settings/tasks/display';
+  static const shortcuts = '/settings/shortcuts';
   static const securitySettings = '/settings/security';
   static const theme = '/settings/theme';
   static const notifications = '/settings/notifications';

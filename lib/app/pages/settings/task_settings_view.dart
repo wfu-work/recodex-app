@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
-import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../components/recodex_dropdown.dart';
+import '../../routes/app_pages.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
 import 'settings_preferences_controller.dart';
@@ -74,27 +74,10 @@ class TaskSettingsPage extends StatelessWidget {
                         title: '默认推理强度',
                         subtitle: '控制 Codex 思考深度和响应速度的平衡',
                         value: preferences.defaultReasoningEffort.value,
-                        options: const [
-                          RecodexDropdownOption(
-                            value: 'low',
-                            label: '低 · 更快响应',
-                          ),
-                          RecodexDropdownOption(
-                            value: 'medium',
-                            label: '中 · 推荐',
-                          ),
-                          RecodexDropdownOption(
-                            value: 'high',
-                            label: '高 · 更深入分析',
-                          ),
-                          RecodexDropdownOption(
-                            value: 'xhigh',
-                            label: '极高 · 复杂任务',
-                          ),
-                        ],
+                        options: _reasoningOptions(bridge, preferences),
                         onChanged: (value) {
                           preferences.setDefaultReasoningEffort(value);
-                          bridge.setReasoningEffort(value);
+                          bridge.applyTaskPreferences(preferences);
                         },
                       ),
                       const SettingsDivider(),
@@ -120,20 +103,12 @@ class TaskSettingsPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 24),
                   const SettingsSectionTitle(
-                    title: '任务显示与安全',
-                    subtitle: '调整时间线展示和高风险操作的确认行为',
+                    title: '任务安全',
+                    subtitle: '控制高风险操作的确认行为',
                   ),
                   const SizedBox(height: 10),
                   SettingsGroup(
                     children: [
-                      SettingsToggleRow(
-                        icon: RecodexIcons.reasoning,
-                        title: '显示推理过程',
-                        subtitle: '在任务时间线中显示可用的推理摘要',
-                        value: preferences.showReasoning.value,
-                        onChanged: preferences.setShowReasoning,
-                      ),
-                      const SettingsDivider(),
                       SettingsToggleRow(
                         icon: RecodexIcons.security,
                         title: '高风险操作前确认',
@@ -141,13 +116,25 @@ class TaskSettingsPage extends StatelessWidget {
                         value: preferences.confirmSensitiveActions.value,
                         onChanged: preferences.setConfirmSensitiveActions,
                       ),
-                      const SettingsDivider(),
-                      SettingsToggleRow(
-                        icon: RecodexIcons.tune,
-                        title: '紧凑时间线',
-                        subtitle: '减少任务卡片间距，显示更多内容',
-                        value: preferences.compactTimeline.value,
-                        onChanged: preferences.setCompactTimeline,
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  const SettingsSectionTitle(
+                    title: '对话显示',
+                    subtitle: '调整思考过程、时间线和回答区域布局',
+                  ),
+                  const SizedBox(height: 10),
+                  SettingsGroup(
+                    children: [
+                      SettingsRow(
+                        icon: RecodexIcons.message,
+                        title: '对话显示设置',
+                        subtitle: '思考、索引、自动滚动、工具详情和回答宽度',
+                        trailing: Icon(
+                          RecodexIcons.chevronRight,
+                          color: context.recodexColors.textMuted,
+                        ),
+                        onTap: () => Get.toNamed(Routes.conversationDisplay),
                       ),
                     ],
                   ),
@@ -183,6 +170,40 @@ class TaskSettingsPage extends StatelessWidget {
               : bridge.composerContext.value.modelLabel(value),
         ),
     ];
+  }
+
+  List<RecodexDropdownOption<String>> _reasoningOptions(
+    BridgeController bridge,
+    SettingsPreferencesController preferences,
+  ) {
+    final context = bridge.composerContext.value;
+    final configuredModel = preferences.defaultModel.value;
+    final model = configuredModel == '自动选择' || configuredModel.trim().isEmpty
+        ? context.model
+        : configuredModel;
+    final efforts =
+        context.modelReasoningEfforts[model] ??
+        (model == context.model ? context.reasoningEfforts : const <String>[]);
+    return [
+      for (final effort in efforts)
+        RecodexDropdownOption<String>(
+          value: effort,
+          label: _reasoningLabel(effort),
+        ),
+    ];
+  }
+
+  String _reasoningLabel(String value) {
+    return switch (value) {
+      'minimal' => '最低 · 更快响应',
+      'low' => '低 · 更快响应',
+      'medium' => '中 · 推荐',
+      'high' => '高 · 更深入分析',
+      'xhigh' => '极高 · 复杂任务',
+      'max' => '最高 · 最深入分析',
+      'ultra' => '极致 · 自动委派',
+      _ => value,
+    };
   }
 
   List<RecodexDropdownOption<String>> _workspaceOptions(
@@ -258,7 +279,10 @@ class _SelectorRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final selected = options.any((option) => option.value == value)
+    final colors = context.recodexColors;
+    final selected = options.isEmpty
+        ? ''
+        : options.any((option) => option.value == value)
         ? value
         : options.first.value;
     return SettingsRow(
@@ -267,14 +291,24 @@ class _SelectorRow extends StatelessWidget {
       subtitle: subtitle,
       trailing: SizedBox(
         width: 158,
-        child: RecodexDropdown<String>(
-          value: selected,
-          options: options,
-          maxWidth: 158,
-          compact: true,
-          tooltip: '选择$title',
-          onChanged: onChanged,
-        ),
+        child: options.isEmpty
+            ? Text(
+                '连接主机后可用',
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  color: colors.textMuted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              )
+            : RecodexDropdown<String>(
+                value: selected,
+                options: options,
+                maxWidth: 158,
+                compact: true,
+                tooltip: '选择$title',
+                onChanged: onChanged,
+              ),
       ),
     );
   }
@@ -289,9 +323,8 @@ class _TaskHero extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final workspace = bridge.selectedWorkspace.value?.name;
-    return LiquidGlass(
-      radius: 28,
-      opacity: 0.72,
+    return SettingsCard(
+      radius: 20,
       padding: const EdgeInsets.fromLTRB(20, 20, 18, 20),
       child: Row(
         children: [
@@ -306,7 +339,7 @@ class _TaskHero extends StatelessWidget {
                   style: TextStyle(
                     color: colors.text,
                     fontSize: 20,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 5),
@@ -317,7 +350,8 @@ class _TaskHero extends StatelessWidget {
                   style: TextStyle(
                     color: colors.textMuted,
                     fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ],

@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
-import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../services/task_notification_controller.dart';
 import '../../theme/recodex_theme.dart';
+import 'settings_widgets.dart';
 
 class NotificationSettingsPage extends StatelessWidget {
   const NotificationSettingsPage({super.key});
@@ -31,9 +31,7 @@ class NotificationSettingsPage extends StatelessWidget {
                     subtitle: '选择哪些状态变化需要提醒你',
                   ),
                   const SizedBox(height: 10),
-                  LiquidGlass(
-                    radius: 24,
-                    opacity: 0.66,
+                  SettingsCard(
                     padding: EdgeInsets.zero,
                     child: Column(
                       children: [
@@ -110,9 +108,7 @@ class NotificationSettingsPage extends StatelessWidget {
                     subtitle: '控制应用在不同系统状态下如何提醒',
                   ),
                   const SizedBox(height: 10),
-                  LiquidGlass(
-                    radius: 24,
-                    opacity: 0.66,
+                  SettingsCard(
                     padding: EdgeInsets.zero,
                     child: Column(
                       children: [
@@ -148,9 +144,7 @@ class NotificationSettingsPage extends StatelessWidget {
                     subtitle: '检查系统权限并发送一条测试通知',
                   ),
                   const SizedBox(height: 10),
-                  LiquidGlass(
-                    radius: 24,
-                    opacity: 0.66,
+                  SettingsCard(
                     padding: EdgeInsets.zero,
                     child: Column(
                       children: [
@@ -221,9 +215,8 @@ class _NotificationHero extends StatelessWidget {
     final colors = context.recodexColors;
     final active =
         controller.enabled.value && controller.permissionGranted.value;
-    return LiquidGlass(
-      radius: 28,
-      opacity: 0.72,
+    return SettingsCard(
+      radius: 20,
       padding: const EdgeInsets.fromLTRB(20, 20, 18, 20),
       child: Row(
         children: [
@@ -244,7 +237,7 @@ class _NotificationHero extends StatelessWidget {
                   style: TextStyle(
                     color: colors.text,
                     fontSize: 20,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 5),
@@ -253,7 +246,8 @@ class _NotificationHero extends StatelessWidget {
                   style: TextStyle(
                     color: colors.textMuted,
                     fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ],
@@ -290,8 +284,8 @@ class _NotificationSectionTitle extends StatelessWidget {
             title,
             style: TextStyle(
               color: colors.textMuted,
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 2),
@@ -299,9 +293,9 @@ class _NotificationSectionTitle extends StatelessWidget {
             subtitle,
             style: TextStyle(
               color: colors.textMuted.withValues(alpha: 0.72),
-              fontSize: 11,
+              fontSize: 13,
               height: 1.35,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w400,
             ),
           ),
         ],
@@ -332,7 +326,7 @@ class _NotificationToggleRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(18, 12, 14, 12),
       child: Row(
         children: [
-          Icon(icon, color: colors.icon, size: 22),
+          Icon(icon, color: colors.icon, size: 21),
           const SizedBox(width: 13),
           Expanded(
             child: Column(
@@ -342,8 +336,8 @@ class _NotificationToggleRow extends StatelessWidget {
                   title,
                   style: TextStyle(
                     color: colors.text,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 3),
@@ -353,8 +347,9 @@ class _NotificationToggleRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: colors.textMuted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    height: 1.35,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ],
@@ -394,7 +389,7 @@ class _NotificationActionRow extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(18, 13, 14, 13),
           child: Row(
             children: [
-              Icon(icon, color: colors.icon, size: 22),
+              Icon(icon, color: colors.icon, size: 21),
               const SizedBox(width: 13),
               Expanded(
                 child: Column(
@@ -404,8 +399,8 @@ class _NotificationActionRow extends StatelessWidget {
                       title,
                       style: TextStyle(
                         color: colors.text,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                     const SizedBox(height: 3),
@@ -415,8 +410,9 @@ class _NotificationActionRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: colors.textMuted,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        height: 1.35,
+                        fontWeight: FontWeight.w400,
                       ),
                     ),
                   ],

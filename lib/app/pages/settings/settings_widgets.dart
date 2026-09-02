@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../components/liquid_glass.dart';
 import '../../theme/recodex_theme.dart';
 
 class SettingsSectionTitle extends StatelessWidget {
@@ -21,8 +20,8 @@ class SettingsSectionTitle extends StatelessWidget {
             title,
             style: TextStyle(
               color: colors.textMuted,
-              fontSize: 13,
-              fontWeight: FontWeight.w800,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
             ),
           ),
           if (subtitle != null) ...[
@@ -31,8 +30,9 @@ class SettingsSectionTitle extends StatelessWidget {
               subtitle!,
               style: TextStyle(
                 color: colors.textMuted,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
+                fontSize: 13,
+                height: 1.35,
+                fontWeight: FontWeight.w400,
               ),
             ),
           ],
@@ -49,11 +49,57 @@ class SettingsGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LiquidGlass(
-      radius: 24,
-      opacity: 0.66,
+    return SettingsCard(
       padding: EdgeInsets.zero,
       child: Column(children: children),
+    );
+  }
+}
+
+/// The settings surface used by Codex: a quiet, opaque panel with a thin
+/// border and a restrained 15px corner radius. Keeping this in one place
+/// prevents each settings route from drifting into a different card style.
+class SettingsCard extends StatelessWidget {
+  const SettingsCard({
+    required this.child,
+    this.padding = const EdgeInsets.all(16),
+    this.radius = 15,
+    this.opacity = 1,
+    this.onTap,
+    super.key,
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final double radius;
+  final double opacity;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(radius),
+      side: BorderSide(
+        color: colors.glassBorder.withValues(alpha: isDark ? 0.92 : 0.82),
+        width: isDark ? 0.8 : 1,
+      ),
+    );
+    final content = Padding(padding: padding, child: child);
+    return Material(
+      color: colors.glassColor.withValues(alpha: opacity),
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      shape: shape,
+      clipBehavior: Clip.antiAlias,
+      child: onTap == null
+          ? content
+          : InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(radius),
+              child: content,
+            ),
     );
   }
 }
@@ -83,7 +129,7 @@ class SettingsRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
       child: Row(
         children: [
-          Icon(icon, color: colors.icon, size: 23),
+          Icon(icon, color: colors.icon, size: 21),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -95,8 +141,8 @@ class SettingsRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: colors.text,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 3),
@@ -107,7 +153,8 @@ class SettingsRow extends StatelessWidget {
                   style: TextStyle(
                     color: colors.textMuted,
                     fontSize: 13,
-                    fontWeight: FontWeight.w600,
+                    height: 1.35,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ],

@@ -31,7 +31,7 @@ class DiffChip extends StatelessWidget {
               style: TextStyle(
                 color: colors.success,
                 fontSize: 15,
-                fontWeight: FontWeight.w900,
+                fontWeight: FontWeight.w600,
               ),
             )
           : Column(
@@ -43,7 +43,7 @@ class DiffChip extends StatelessWidget {
                   style: TextStyle(
                     color: colors.text,
                     fontSize: 14,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                     height: 1.05,
                   ),
                 ),
@@ -64,7 +64,7 @@ class DiffChip extends StatelessWidget {
                   style: TextStyle(
                     color: colors.textMuted,
                     fontSize: 12,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w500,
                     height: 1.05,
                   ),
                 ),
@@ -105,7 +105,7 @@ class ConnectionDot extends StatelessWidget {
             style: TextStyle(
               fontSize: 12,
               color: colors.textMuted,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ),

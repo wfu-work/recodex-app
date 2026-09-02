@@ -29,7 +29,7 @@ class LiquidPageAppBar extends StatelessWidget implements PreferredSizeWidget {
       ),
       title: Text(
         title,
-        style: TextStyle(color: colors.text, fontWeight: FontWeight.w800),
+        style: TextStyle(color: colors.text, fontWeight: FontWeight.w600),
       ),
       actions: [
         if (showMore)

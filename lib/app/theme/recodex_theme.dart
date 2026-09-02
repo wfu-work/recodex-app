@@ -259,7 +259,10 @@ class RecodexTheme {
     icon: Color(0xfff5f5f5),
     surfaceOverlay: Color(0xff2b2b2b),
     userBubble: Color(0xff303030),
-    assistantBubble: Color(0xff232323),
+    // Codex answer cards sit only a step above the page background; keeping
+    // this surface near #191919 preserves the quiet, edge-to-edge transcript
+    // treatment seen in the desktop client.
+    assistantBubble: Color(0xff191919),
     errorBubble: Color(0xff382424),
     errorBorder: Color(0x66ff8a80),
     success: Color(0xff62d98b),
@@ -269,12 +272,17 @@ class RecodexTheme {
 
   static ThemeData get light => lightFor(RecodexThemeAccent.azure);
 
-  static ThemeData lightFor(RecodexThemeAccent accent) {
+  static ThemeData lightFor(
+    RecodexThemeAccent accent, {
+    bool highContrast = false,
+  }) {
     return _build(
       brightness: Brightness.light,
-      colors: _lightColorsFor(accent),
-      paper: const Color(0xfff5f5f5),
-      surface: const Color(0xfffbfbfb),
+      colors: highContrast
+          ? _highContrastLightColors(accent)
+          : _lightColorsFor(accent),
+      paper: highContrast ? const Color(0xffffffff) : const Color(0xfff5f5f5),
+      surface: highContrast ? const Color(0xffffffff) : const Color(0xfffbfbfb),
       primary: const Color(0xff171717),
       secondary: const Color(0xff555555),
       outline: const Color(0xffd4d4d4),
@@ -283,12 +291,17 @@ class RecodexTheme {
 
   static ThemeData get dark => darkFor(RecodexThemeAccent.azure);
 
-  static ThemeData darkFor(RecodexThemeAccent accent) {
+  static ThemeData darkFor(
+    RecodexThemeAccent accent, {
+    bool highContrast = false,
+  }) {
     return _build(
       brightness: Brightness.dark,
-      colors: _darkColorsFor(accent),
-      paper: const Color(0xff101010),
-      surface: const Color(0xff1d1d1d),
+      colors: highContrast
+          ? _highContrastDarkColors(accent)
+          : _darkColorsFor(accent),
+      paper: highContrast ? const Color(0xff000000) : const Color(0xff101010),
+      surface: highContrast ? const Color(0xff0b0b0b) : const Color(0xff1d1d1d),
       primary: const Color(0xfff5f5f5),
       secondary: const Color(0xffc8c8c8),
       outline: const Color(0xff505050),
@@ -303,6 +316,54 @@ class RecodexTheme {
 
   static RecodexThemeColors _darkColorsFor(RecodexThemeAccent accent) {
     return darkColors;
+  }
+
+  static RecodexThemeColors _highContrastLightColors(
+    RecodexThemeAccent accent,
+  ) {
+    return lightColors.copyWith(
+      backgroundGradient: const [
+        Color(0xffffffff),
+        Color(0xffffffff),
+        Color(0xfff4f4f4),
+      ],
+      glassColor: const Color(0xffffffff),
+      glassBorder: const Color(0xff8a8a8a),
+      glassHighlight: const Color(0xffffffff),
+      glassShadow: const Color(0x55000000),
+      headerColor: const Color(0xffffffff),
+      headerBorder: const Color(0xff8a8a8a),
+      headerShadow: const Color(0xff555555),
+      text: const Color(0xff000000),
+      textMuted: const Color(0xff333333),
+      icon: const Color(0xff000000),
+      surfaceOverlay: const Color(0xffe5e5e5),
+      userBubble: const Color(0xffdddddd),
+      assistantBubble: const Color(0xffffffff),
+    );
+  }
+
+  static RecodexThemeColors _highContrastDarkColors(RecodexThemeAccent accent) {
+    return darkColors.copyWith(
+      backgroundGradient: const [
+        Color(0xff000000),
+        Color(0xff050505),
+        Color(0xff0c0c0c),
+      ],
+      glassColor: const Color(0xff0f0f0f),
+      glassBorder: const Color(0xff767676),
+      glassHighlight: const Color(0x2effffff),
+      glassShadow: const Color(0x88000000),
+      headerColor: const Color(0xff050505),
+      headerBorder: const Color(0xff767676),
+      headerShadow: const Color(0xff000000),
+      text: const Color(0xffffffff),
+      textMuted: const Color(0xffd6d6d6),
+      icon: const Color(0xffffffff),
+      surfaceOverlay: const Color(0xff1d1d1d),
+      userBubble: const Color(0xff282828),
+      assistantBubble: const Color(0xff080808),
+    );
   }
 
   static ThemeData _build({
@@ -360,13 +421,48 @@ class RecodexTheme {
           fontWeight: FontWeight.w700,
           color: colors.text,
         ),
-        titleLarge: TextStyle(fontWeight: FontWeight.w700, color: colors.text),
-        titleMedium: TextStyle(fontWeight: FontWeight.w700, color: colors.text),
-        titleSmall: TextStyle(fontWeight: FontWeight.w600, color: colors.text),
-        bodyLarge: TextStyle(height: 1.5, color: colors.text),
-        bodyMedium: TextStyle(height: 1.5, color: colors.text),
-        bodySmall: TextStyle(color: colors.textMuted),
-        labelLarge: TextStyle(fontWeight: FontWeight.w700, color: colors.text),
+        titleLarge: TextStyle(
+          fontSize: 18,
+          height: 1.2,
+          fontWeight: FontWeight.w600,
+          color: colors.text,
+        ),
+        titleMedium: TextStyle(
+          fontSize: 16,
+          height: 1.25,
+          fontWeight: FontWeight.w600,
+          color: colors.text,
+        ),
+        titleSmall: TextStyle(
+          fontSize: 14,
+          height: 1.3,
+          fontWeight: FontWeight.w500,
+          color: colors.text,
+        ),
+        bodyLarge: TextStyle(
+          fontSize: 16,
+          height: 1.5,
+          fontWeight: FontWeight.w400,
+          color: colors.text,
+        ),
+        bodyMedium: TextStyle(
+          fontSize: 14,
+          height: 1.5,
+          fontWeight: FontWeight.w400,
+          color: colors.text,
+        ),
+        bodySmall: TextStyle(
+          fontSize: 12.5,
+          height: 1.35,
+          fontWeight: FontWeight.w400,
+          color: colors.textMuted,
+        ),
+        labelLarge: TextStyle(
+          fontSize: 14,
+          height: 1.25,
+          fontWeight: FontWeight.w600,
+          color: colors.text,
+        ),
       ),
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
@@ -377,7 +473,7 @@ class RecodexTheme {
           color: colors.text,
           fontFamily: '.SF Pro Display',
           fontSize: 18,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
         ),
         iconTheme: IconThemeData(color: colors.icon),
       ),
@@ -427,8 +523,8 @@ class RecodexTheme {
           (states) => TextStyle(
             fontSize: 12,
             fontWeight: states.contains(WidgetState.selected)
-                ? FontWeight.w800
-                : FontWeight.w600,
+                ? FontWeight.w600
+                : FontWeight.w500,
             color: colors.text,
           ),
         ),
@@ -451,7 +547,7 @@ class RecodexTheme {
           color: colors.text,
           fontSize: 14,
           height: 1.2,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w500,
         ),
         labelTextStyle: WidgetStateProperty.resolveWith(
           (states) => TextStyle(
@@ -460,7 +556,7 @@ class RecodexTheme {
                 : colors.text,
             fontSize: 14,
             height: 1.2,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w500,
           ),
         ),
       ),

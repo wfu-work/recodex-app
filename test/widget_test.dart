@@ -7,7 +7,7 @@ void main() {
     await tester.pumpWidget(const RecodexApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('Recodex', skipOffstage: false), findsOneWidget);
+    expect(find.text('新对话', skipOffstage: false), findsOneWidget);
     expect(find.text('等待 Relay 连接', skipOffstage: false), findsOneWidget);
     expect(
       find.text(

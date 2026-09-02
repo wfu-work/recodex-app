@@ -17,6 +17,7 @@ class RecodexApp extends StatelessWidget {
     return Obx(() {
       final fontScale = themeController.fontScale.value;
       final accent = themeController.accent.value;
+      final highContrast = themeController.highContrast.value;
       return GetMaterialApp(
         title: 'Remote Codex Companion',
         debugShowCheckedModeBanner: false,
@@ -24,8 +25,8 @@ class RecodexApp extends StatelessWidget {
         getPages: AppPages.routes,
         initialRoute: AppPages.initial,
         defaultTransition: Transition.cupertino,
-        theme: RecodexTheme.lightFor(accent),
-        darkTheme: RecodexTheme.darkFor(accent),
+        theme: RecodexTheme.lightFor(accent, highContrast: highContrast),
+        darkTheme: RecodexTheme.darkFor(accent, highContrast: highContrast),
         themeMode: themeController.themeMode,
         builder: (context, child) {
           return MediaQuery(

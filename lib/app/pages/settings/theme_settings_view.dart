@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
-import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
+import '../../components/recodex_dropdown.dart';
 import '../../theme/recodex_theme.dart';
+import 'settings_widgets.dart';
+import 'settings_preferences_controller.dart';
 import 'theme_controller.dart';
 
 class ThemeSettingsPage extends StatelessWidget {
@@ -13,6 +15,9 @@ class ThemeSettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = Get.find<ThemeController>();
+    final preferences = Get.isRegistered<SettingsPreferencesController>()
+        ? Get.find<SettingsPreferencesController>()
+        : Get.put(SettingsPreferencesController(), permanent: true);
     return Obx(
       () => LiquidBackground(
         child: Scaffold(
@@ -31,9 +36,7 @@ class ThemeSettingsPage extends StatelessWidget {
                     subtitle: '控制系统使用浅色、深色或自动外观',
                   ),
                   const SizedBox(height: 10),
-                  LiquidGlass(
-                    radius: 24,
-                    opacity: 0.66,
+                  SettingsCard(
                     padding: EdgeInsets.zero,
                     child: Column(
                       children: [
@@ -63,9 +66,7 @@ class ThemeSettingsPage extends StatelessWidget {
                     subtitle: '统一使用黑白中性色，保持 Codex 风格',
                   ),
                   const SizedBox(height: 10),
-                  LiquidGlass(
-                    radius: 24,
-                    opacity: 0.66,
+                  SettingsCard(
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
                     child: Row(
                       children: [
@@ -92,6 +93,81 @@ class ThemeSettingsPage extends StatelessWidget {
                       ],
                     ),
                   ),
+                  const SizedBox(height: 24),
+                  const _ThemeSectionTitle(
+                    title: '界面细节',
+                    subtitle: '调整侧边栏、标题栏、动画和可读性增强选项',
+                  ),
+                  const SizedBox(height: 10),
+                  SettingsGroup(
+                    children: [
+                      _AppearanceSelectorRow(
+                        icon: RecodexIcons.menu,
+                        title: '侧边栏密度',
+                        subtitle: '舒适模式留白更多，紧凑模式显示更多项目和任务',
+                        value: preferences.compactSidebar.value
+                            ? 'compact'
+                            : 'comfortable',
+                        options: const [
+                          RecodexDropdownOption(
+                            value: 'comfortable',
+                            label: '舒适',
+                          ),
+                          RecodexDropdownOption(value: 'compact', label: '紧凑'),
+                        ],
+                        onChanged: (value) =>
+                            preferences.setCompactSidebar(value == 'compact'),
+                      ),
+                      const SettingsDivider(),
+                      _AppearanceSelectorRow(
+                        icon: RecodexIcons.tune,
+                        title: '对话卡片圆角',
+                        subtitle: '统一调整消息、工具和文件结果卡片的圆角大小',
+                        value: '${preferences.answerCardRadius.value.round()}',
+                        options: const [
+                          RecodexDropdownOption(value: '10', label: '小 · 10'),
+                          RecodexDropdownOption(value: '18', label: '中 · 18'),
+                          RecodexDropdownOption(value: '24', label: '大 · 24'),
+                          RecodexDropdownOption(value: '32', label: '特大 · 32'),
+                        ],
+                        onChanged: (value) => preferences.setAnswerCardRadius(
+                          double.tryParse(value) ?? 24,
+                        ),
+                      ),
+                      const SettingsDivider(),
+                      SettingsToggleRow(
+                        icon: RecodexIcons.monitor,
+                        title: '显示顶部标题栏',
+                        subtitle: '显示当前任务名称和项目名称',
+                        value: preferences.showTopTitleBar.value,
+                        onChanged: preferences.setShowTopTitleBar,
+                      ),
+                      const SettingsDivider(),
+                      SettingsToggleRow(
+                        icon: RecodexIcons.accountTree,
+                        title: '显示索引悬浮提示',
+                        subtitle: '鼠标悬停在对话索引短线上时显示问题预览',
+                        value: preferences.showIndexHoverPreview.value,
+                        onChanged: preferences.setShowIndexHoverPreview,
+                      ),
+                      const SettingsDivider(),
+                      SettingsToggleRow(
+                        icon: RecodexIcons.pause,
+                        title: '减少动画',
+                        subtitle: '停用页面过渡、输入框和索引的非必要动画',
+                        value: preferences.reduceAnimations.value,
+                        onChanged: preferences.setReduceAnimations,
+                      ),
+                      const SettingsDivider(),
+                      SettingsToggleRow(
+                        icon: RecodexIcons.contrast,
+                        title: '高对比度模式',
+                        subtitle: '提高文字、边框和背景之间的对比度',
+                        value: controller.highContrast.value,
+                        onChanged: controller.setHighContrast,
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -110,9 +186,8 @@ class _ThemePreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return LiquidGlass(
-      radius: 26,
-      opacity: 0.72,
+    return SettingsCard(
+      radius: 20,
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 17),
       child: Row(
         children: [
@@ -138,7 +213,7 @@ class _ThemePreview extends StatelessWidget {
                   style: TextStyle(
                     color: colors.text,
                     fontSize: 18,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 7),
@@ -176,8 +251,8 @@ class _ThemeSectionTitle extends StatelessWidget {
             title,
             style: TextStyle(
               color: colors.text,
-              fontSize: 15,
-              fontWeight: FontWeight.w800,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 3),
@@ -185,8 +260,8 @@ class _ThemeSectionTitle extends StatelessWidget {
             subtitle,
             style: TextStyle(
               color: colors.textMuted,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+              fontSize: 13,
+              fontWeight: FontWeight.w400,
             ),
           ),
         ],
@@ -230,6 +305,7 @@ class _ThemeModePreview extends StatelessWidget {
       RecodexThemePreference.system => RecodexIcons.devices,
       RecodexThemePreference.light => RecodexIcons.sun,
       RecodexThemePreference.dark => RecodexIcons.darkMode,
+      RecodexThemePreference.scheduled => RecodexIcons.calendar,
     };
     return SizedBox.square(
       dimension: 40,
@@ -275,7 +351,7 @@ class _ThemeOptionRow extends StatelessWidget {
                       style: TextStyle(
                         color: colors.text,
                         fontSize: 15,
-                        fontWeight: FontWeight.w800,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                     const SizedBox(height: 3),
@@ -287,7 +363,7 @@ class _ThemeOptionRow extends StatelessWidget {
                         color: colors.textMuted,
                         fontSize: 12,
                         height: 1.35,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w400,
                       ),
                     ),
                   ],
@@ -295,7 +371,9 @@ class _ThemeOptionRow extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
+                duration: MediaQuery.of(context).disableAnimations
+                    ? Duration.zero
+                    : const Duration(milliseconds: 180),
                 width: 22,
                 height: 22,
                 decoration: BoxDecoration(
@@ -316,6 +394,47 @@ class _ThemeOptionRow extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AppearanceSelectorRow extends StatelessWidget {
+  const _AppearanceSelectorRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.options,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final String value;
+  final List<RecodexDropdownOption<String>> options;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = options.any((option) => option.value == value)
+        ? value
+        : options.first.value;
+    return SettingsRow(
+      icon: icon,
+      title: title,
+      subtitle: subtitle,
+      trailing: SizedBox(
+        width: 120,
+        child: RecodexDropdown<String>(
+          value: selected,
+          options: options,
+          maxWidth: 120,
+          compact: true,
+          tooltip: '选择$title',
+          onChanged: onChanged,
         ),
       ),
     );
@@ -352,7 +471,7 @@ class _NeutralSwatch extends StatelessWidget {
           style: TextStyle(
             color: colors.text,
             fontSize: 12,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ],

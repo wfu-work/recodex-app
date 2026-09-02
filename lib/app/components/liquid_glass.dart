@@ -7,6 +7,7 @@ class LiquidGlass extends StatelessWidget {
     required this.child,
     this.padding = const EdgeInsets.all(24),
     this.radius = 34,
+    this.borderRadius,
     this.opacity = 0.64,
     this.onTap,
     super.key,
@@ -15,6 +16,7 @@ class LiquidGlass extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
   final double radius;
+  final BorderRadius? borderRadius;
   final double opacity;
   final VoidCallback? onTap;
 
@@ -22,7 +24,7 @@ class LiquidGlass extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final shape = BorderRadius.circular(radius);
+    final shape = borderRadius ?? BorderRadius.circular(radius);
     final content = DecoratedBox(
       decoration: BoxDecoration(
         color: colors.glassColor.withValues(alpha: opacity),
