@@ -5,6 +5,7 @@ import '../../components/liquid_background.dart';
 import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../theme/recodex_theme.dart';
+import '../settings/settings_widgets.dart';
 
 class OpenSourceLicensesPage extends StatefulWidget {
   const OpenSourceLicensesPage({super.key});
@@ -64,7 +65,9 @@ class _OpenSourceLicensesPageState extends State<OpenSourceLicensesPage> {
         appBar: const LiquidPageAppBar(title: '开源许可'),
         body: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 620),
+            constraints: const BoxConstraints(
+              maxWidth: SettingsPageContent.maxWidth,
+            ),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
               children: [
@@ -449,7 +452,9 @@ class _LicenseDetailPage extends StatelessWidget {
         appBar: const LiquidPageAppBar(title: '许可详情'),
         body: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 620),
+            constraints: const BoxConstraints(
+              maxWidth: SettingsPageContent.maxWidth,
+            ),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
               children: [

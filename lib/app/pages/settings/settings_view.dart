@@ -88,7 +88,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     subtitle: preferences.autoConnect.value
                         ? '启动时连接默认配对'
                         : '启动时保持手动连接',
-                    trailing: Switch(
+                    trailing: CodexSwitch(
                       value: preferences.autoConnect.value,
                       onChanged: preferences.setAutoConnect,
                     ),
@@ -139,7 +139,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     subtitle: preferences.shortcutsEnabled.value
                         ? '已启用 · 查看全部快捷操作'
                         : '已停用桌面快捷键',
-                    trailing: Switch(
+                    trailing: CodexSwitch(
                       value: preferences.shortcutsEnabled.value,
                       onChanged: preferences.setShortcutsEnabled,
                     ),
@@ -156,7 +156,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     icon: RecodexIcons.notifications,
                     title: '消息通知',
                     subtitle: notificationController.statusLabel,
-                    trailing: Switch(
+                    trailing: CodexSwitch(
                       value: notificationController.enabled.value,
                       onChanged: notificationController.setEnabled,
                     ),
@@ -335,7 +335,10 @@ class _SettingsTile extends StatelessWidget {
                 Text(
                   title,
                   style: TextStyle(
-                    fontSize: 16,
+                    // Match the compact title scale used by the nested
+                    // settings rows while keeping the hierarchy above the
+                    // 13px supporting copy.
+                    fontSize: 15.5,
                     fontWeight: FontWeight.w600,
                     color: colors.text,
                   ),

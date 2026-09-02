@@ -10,6 +10,7 @@ class WelcomeTimeline extends StatelessWidget {
     required this.connectionLabel,
     required this.workspaceCount,
     required this.onPairing,
+    this.maxWidth = 960,
     super.key,
   });
 
@@ -17,6 +18,13 @@ class WelcomeTimeline extends StatelessWidget {
   final String connectionLabel;
   final int workspaceCount;
   final VoidCallback onPairing;
+
+  /// Keeps the empty conversation state aligned with the answer column.
+  ///
+  /// The parent still supplies the available width on small windows, so this
+  /// is a maximum rather than a fixed width.  This mirrors
+  /// [AssistantAnswerBlock]'s responsive column behavior.
+  final double maxWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -40,22 +48,32 @@ class WelcomeTimeline extends StatelessWidget {
         ? RecodexIcons.sync
         : RecodexIcons.circle;
 
-    return Column(
-      children: [
-        AssistantBubble(
-          event: SessionEvent(
-            kind: 'message',
-            text: '我已准备好在当前工作区执行任务。你可以直接描述要改的功能、要排查的问题，或让我先检查项目和 Git 状态。',
+    return Align(
+      alignment: Alignment.center,
+      child: ConstrainedBox(
+        key: const ValueKey('welcome-timeline-content'),
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: SizedBox(
+          width: double.infinity,
+          child: Column(
+            children: [
+              AssistantBubble(
+                event: SessionEvent(
+                  kind: 'message',
+                  text: '我已准备好在当前工作区执行任务。你可以直接描述要改的功能、要排查的问题，或让我先检查项目和 Git 状态。',
+                ),
+              ),
+              const SizedBox(height: 26),
+              ToolCallRow(
+                title: title,
+                status: status,
+                icon: icon,
+                onTap: connected ? null : onPairing,
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 26),
-        ToolCallRow(
-          title: title,
-          status: status,
-          icon: icon,
-          onTap: connected ? null : onPairing,
-        ),
-      ],
+      ),
     );
   }
 }

@@ -88,6 +88,9 @@ void main() {
       'pending',
       'executing',
       'working',
+      'inProgress',
+      'waitingOnApproval',
+      'waitingOnUserInput',
     ]) {
       final record = SessionRecord(
         id: 'thread-$status',
@@ -99,6 +102,34 @@ void main() {
       );
       expect(record.isRunning, isTrue, reason: status);
     }
+  });
+
+  test('SessionRecord accepts App Server status objects', () {
+    final record = SessionRecord.fromJson({
+      'id': 'thread-status-object',
+      'status': {'type': 'active', 'activeFlags': []},
+    });
+    expect(record.status, 'active');
+    expect(record.isRunning, isTrue);
+  });
+
+  test('TimelineTaskStatus distinguishes active and terminal states', () {
+    expect(TimelineTaskStatus.processing.isActive, isTrue);
+    expect(TimelineTaskStatus.waitingApproval.isActive, isTrue);
+    expect(TimelineTaskStatus.waitingUserInput.isActive, isTrue);
+    expect(TimelineTaskStatus.completed.isTerminal, isTrue);
+    expect(TimelineTaskStatus.failed.label, '执行失败');
+  });
+
+  test('SessionEvent preserves Codex turn duration metadata', () {
+    final event = SessionEvent.fromJson({
+      'kind': 'done',
+      'text': '',
+      'durationMs': 285000,
+    });
+
+    expect(event.durationMs, 285000);
+    expect(event.copyWith(time: DateTime(2026, 9, 1)).durationMs, 285000);
   });
 
   test('SessionRecord preserves pinned and archived grouping flags', () {

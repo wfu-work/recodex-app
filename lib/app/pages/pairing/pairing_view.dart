@@ -9,6 +9,7 @@ import '../../components/recodex_dropdown.dart';
 import '../../models/bridge_models.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
+import '../settings/settings_widgets.dart';
 
 class PairingPageArgs {
   const PairingPageArgs({this.createNew = false, this.pairingId});
@@ -127,7 +128,9 @@ class _PairingPageState extends State<PairingPage> {
       children: [
         Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
+            constraints: const BoxConstraints(
+              maxWidth: SettingsPageContent.maxWidth,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -190,7 +193,9 @@ class _PairingPageState extends State<PairingPage> {
           children: [
             Center(
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 760),
+                constraints: const BoxConstraints(
+                  maxWidth: SettingsPageContent.maxWidth,
+                ),
                 child: Column(
                   children: [
                     _PairingHero(connected: connected),
@@ -530,7 +535,7 @@ class _PairingPageState extends State<PairingPage> {
       if (error == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('连接测试成功，Relay 已接受当前配置。'),
+            content: Text('连接测试成功，Relay 连接正常。'),
             duration: Duration(seconds: 2),
           ),
         );
@@ -738,7 +743,10 @@ class _PairingListTile extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(24),
-          onTap: onSelect,
+          // The whole card is the detail affordance. Selecting the default
+          // pairing remains an explicit action in the trailing control so a
+          // casual tap does not silently switch the active connection.
+          onTap: onEdit,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(18, 16, 12, 16),
             child: Row(
@@ -790,6 +798,14 @@ class _PairingListTile extends StatelessWidget {
                         ],
                       ),
                     ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: active ? '当前默认配对' : '设为默认配对',
+                  onPressed: active ? null : onSelect,
+                  icon: Icon(
+                    active ? RecodexIcons.selectedCircle : RecodexIcons.circle,
+                    color: active ? colors.icon : colors.textMuted,
                   ),
                 ),
                 IconButton(

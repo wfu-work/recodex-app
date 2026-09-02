@@ -15,6 +15,7 @@ class HomeHeader extends StatelessWidget {
     this.onCopyTaskOutput,
     required this.onRefreshGit,
     this.taskOutputAvailable = false,
+    this.refreshing = false,
     super.key,
   });
 
@@ -27,6 +28,7 @@ class HomeHeader extends StatelessWidget {
   final VoidCallback? onCopyTaskOutput;
   final VoidCallback? onRefreshGit;
   final bool taskOutputAvailable;
+  final bool refreshing;
 
   @override
   Widget build(BuildContext context) {
@@ -116,6 +118,7 @@ class HomeHeader extends StatelessWidget {
               onCopyTaskOutput: onCopyTaskOutput,
               onRefreshGit: onRefreshGit,
               taskOutputAvailable: taskOutputAvailable,
+              refreshing: refreshing,
             ),
           ],
         ),
@@ -138,6 +141,7 @@ class _HeaderActionMenu extends StatelessWidget {
     required this.onCopyTaskOutput,
     required this.onRefreshGit,
     required this.taskOutputAvailable,
+    required this.refreshing,
   });
 
   final VoidCallback? onRefreshTasks;
@@ -145,6 +149,7 @@ class _HeaderActionMenu extends StatelessWidget {
   final VoidCallback? onCopyTaskOutput;
   final VoidCallback? onRefreshGit;
   final bool taskOutputAvailable;
+  final bool refreshing;
 
   void _onSelected(_HomeHeaderAction action) {
     switch (action) {
@@ -163,7 +168,7 @@ class _HeaderActionMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     return RecodexPopupMenuButton<_HomeHeaderAction>(
-      tooltip: '工作台操作',
+      tooltip: refreshing ? '正在刷新任务' : '工作台操作',
       padding: EdgeInsets.zero,
       offset: const Offset(0, 8),
       position: PopupMenuPosition.under,
@@ -202,9 +207,27 @@ class _HeaderActionMenu extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
         child: Semantics(
-          label: '工作台操作',
+          label: refreshing ? '正在刷新任务' : '工作台操作',
           button: true,
-          child: Icon(RecodexIcons.more, size: 20, color: colors.text),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            child: refreshing
+                ? SizedBox(
+                    key: const ValueKey('refreshing'),
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: colors.text,
+                    ),
+                  )
+                : Icon(
+                    RecodexIcons.more,
+                    key: const ValueKey('actions'),
+                    size: 20,
+                    color: colors.text,
+                  ),
+          ),
         ),
       ),
     );

@@ -198,6 +198,13 @@ enum RecodexThemeAccent {
 }
 
 class RecodexTheme {
+  /// Codex's functional accent for selected controls.
+  ///
+  /// Keep this separate from the neutral primary text color so controls such
+  /// as switches can communicate state without reintroducing a full accent
+  /// palette across the application.
+  static const codexBlue = Color(0xff339cff);
+
   static const _fontFamily = '.SF Pro Text';
   static const _fallbackFonts = [
     '.SF Pro Text',
@@ -568,14 +575,22 @@ class RecodexTheme {
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith(
           (states) => states.contains(WidgetState.selected)
-              ? primary
+              // A white thumb keeps the selected control legible against
+              // Codex's blue track in both light and dark themes.
+              ? const Color(0xffffffff)
               : colors.textMuted,
         ),
         trackColor: WidgetStateProperty.resolveWith(
           (states) => states.contains(WidgetState.selected)
-              ? primary.withValues(alpha: 0.32)
+              // Use the same functional blue in both themes so selected
+              // switches have one predictable Codex state color.
+              ? RecodexTheme.codexBlue
               : outline.withValues(alpha: 0.5),
         ),
+        // Keep the native hit box compact; CodexSwitch applies the small
+        // visual compression without sacrificing that touch target.
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: EdgeInsets.zero,
       ),
     );
   }

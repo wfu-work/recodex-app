@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
@@ -18,6 +19,8 @@ import 'widget/home_header.dart';
 import 'widget/inline_error.dart';
 import 'widget/main_helpers.dart';
 import 'widget/task_output_dialog.dart';
+import 'widget/scroll_to_latest_button.dart';
+import 'widget/timeline_load_state.dart';
 import 'widget/welcome_timeline.dart';
 
 class MainPage extends StatefulWidget {
@@ -30,6 +33,8 @@ class MainPage extends StatefulWidget {
 class _MainPageState extends State<MainPage> {
   static const double _headerReservedHeight = 142;
   static const double _composerReservedHeight = 286;
+  static const double _scrollToLatestThreshold = 132;
+  static const double _scrollToLatestBottom = 178;
   static const Curve _composerDampedCurve = Cubic(0.18, 0.89, 0.32, 1.08);
 
   final BridgeController controller = Get.find();
@@ -42,6 +47,8 @@ class _MainPageState extends State<MainPage> {
   double _headerBackgroundProgress = 0;
   bool _composerVisible = true;
   bool _drawerOpen = false;
+  bool _showScrollToLatest = false;
+  bool _userDetachedFromLatest = false;
   bool? _lastAutoScrollEnabled;
   String _lastAutoScrollSignature = '';
 
@@ -49,6 +56,7 @@ class _MainPageState extends State<MainPage> {
   void initState() {
     super.initState();
     _scrollController.addListener(_updateHeaderBackground);
+    _scrollController.addListener(_updateScrollToLatestVisibility);
     controller.startLiveTimelineRefresh();
   }
 
@@ -56,6 +64,7 @@ class _MainPageState extends State<MainPage> {
   void dispose() {
     _scrollController
       ..removeListener(_updateHeaderBackground)
+      ..removeListener(_updateScrollToLatestVisibility)
       ..dispose();
     controller.stopLiveTimelineRefresh();
     _promptController.dispose();
@@ -68,6 +77,10 @@ class _MainPageState extends State<MainPage> {
     return Obx(() {
       final themeController = Get.find<ThemeController>();
       themeController.fontScale.value;
+      // Subscribe to the controller's one-second lifecycle ticker so an
+      // in-progress turn's elapsed duration keeps updating even when the
+      // user's auto-scroll preference is disabled.
+      controller.timelineClock.value;
       final settingsPreferences =
           Get.isRegistered<SettingsPreferencesController>()
           ? Get.find<SettingsPreferencesController>()
@@ -312,11 +325,16 @@ class _MainPageState extends State<MainPage> {
                                   if (controller.events.isEmpty) {
                                     if (controller.selectedSessionId.value !=
                                         null) {
-                                      return AssistantBubble(
-                                        event: const SessionEvent(
-                                          kind: 'running',
-                                          text: '正在加载任务对话...',
-                                        ),
+                                      return TimelineLoadState(
+                                        loading:
+                                            controller.timelineLoading.value,
+                                        elapsedSeconds: controller
+                                            .timelineLoadElapsedSeconds
+                                            .value,
+                                        error:
+                                            controller.timelineLoadError.value,
+                                        onRetry:
+                                            controller.retrySelectedSession,
                                         cardRadius: answerCardRadius,
                                       );
                                     }
@@ -326,6 +344,7 @@ class _MainPageState extends State<MainPage> {
                                           controller.connectionLabel.value,
                                       workspaceCount:
                                           controller.workspaces.length,
+                                      maxWidth: answerMaxWidth,
                                       onPairing: () =>
                                           _openPage(Routes.pairing),
                                     );
@@ -348,9 +367,18 @@ class _MainPageState extends State<MainPage> {
                                       events: entry.events,
                                       completed:
                                           !isLatestEntry ||
-                                          !controller
-                                              .timelineSessionRunning
-                                              .value,
+                                          controller
+                                              .timelineStatus
+                                              .value
+                                              .isTerminal,
+                                      status: isLatestEntry
+                                          ? controller.timelineStatus.value
+                                          : TimelineTaskStatus.completed,
+                                      startedAt: isLatestEntry
+                                          ? controller
+                                                .timelineTurnStartedAt
+                                                .value
+                                          : null,
                                       showReasoning: showReasoning,
                                       collapseReasoningByDefault:
                                           collapseReasoningByDefault,
@@ -385,9 +413,10 @@ class _MainPageState extends State<MainPage> {
                             subtitle: _projectHeaderSubtitle,
                             backgroundProgress: _headerBackgroundProgress,
                             topPadding: windowTopInset,
-                            onRefreshTasks: controller.canUseWorkspace
+                            onRefreshTasks: controller.connected.value
                                 ? controller.refreshProjectTasks
                                 : null,
+                            refreshing: controller.timelineRefreshing.value,
                             onShowTaskOutput: _taskOutputText.isEmpty
                                 ? null
                                 : _showTaskOutput,
@@ -423,6 +452,47 @@ class _MainPageState extends State<MainPage> {
                             showHoverPreview: showIndexHoverPreview,
                           ),
                         ),
+                      AnimatedPositioned(
+                        duration: effectiveMediaQuery.disableAnimations
+                            ? Duration.zero
+                            : const Duration(milliseconds: 220),
+                        curve: Curves.easeOutCubic,
+                        left: 0,
+                        right: 0,
+                        bottom: _scrollToLatestBottom + bottomInset,
+                        child: IgnorePointer(
+                          ignoring: !_showScrollToLatest,
+                          child: AnimatedOpacity(
+                            duration: effectiveMediaQuery.disableAnimations
+                                ? Duration.zero
+                                : const Duration(milliseconds: 160),
+                            opacity: _showScrollToLatest ? 1 : 0,
+                            child: AnimatedScale(
+                              duration: effectiveMediaQuery.disableAnimations
+                                  ? Duration.zero
+                                  : const Duration(milliseconds: 220),
+                              curve: Curves.easeOutCubic,
+                              scale: _showScrollToLatest ? 1 : 0.82,
+                              child: ExcludeSemantics(
+                                excluding: !_showScrollToLatest,
+                                child: TickerMode(
+                                  enabled: _showScrollToLatest,
+                                  child: Center(
+                                    child: ScrollToLatestButton(
+                                      running: controller
+                                          .timelineStatus
+                                          .value
+                                          .isActive,
+                                      reduceMotion: reduceAnimations,
+                                      onPressed: _scrollToLatest,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                       Positioned(
                         left: 20,
                         right: 20,
@@ -446,8 +516,13 @@ class _MainPageState extends State<MainPage> {
                                 context: controller.composerContext.value,
                                 permissionMode: controller.permissionMode.value,
                                 onSend: _sendPrompt,
+                                // Derive the composer state from the same
+                                // canonical lifecycle used by the answer
+                                // header.  The legacy boolean can otherwise
+                                // briefly disagree and leave a stop button
+                                // visible next to an "已中断/已完成" header.
                                 running:
-                                    controller.timelineSessionRunning.value,
+                                    controller.timelineStatus.value.isActive,
                                 onStop: controller.interrupt,
                                 onModelChanged: controller.setComposerModel,
                                 onReasoningChanged:
@@ -541,6 +616,7 @@ class _MainPageState extends State<MainPage> {
         'assistant' => '助手',
         'reasoning' => '思考',
         'tool_call' => '工具',
+        'file_change' => '文件',
         'running' => '状态',
         'interrupted' => '状态',
         _ => '事件',
@@ -595,8 +671,32 @@ class _MainPageState extends State<MainPage> {
     setState(() => _headerBackgroundProgress = next);
   }
 
+  void _updateScrollToLatestVisibility() {
+    if (!_scrollController.hasClients) return;
+    final distance =
+        _scrollController.position.maxScrollExtent -
+        _scrollController.position.pixels;
+    final shouldShow =
+        _userDetachedFromLatest && distance > _scrollToLatestThreshold;
+    if (!mounted || shouldShow == _showScrollToLatest) return;
+    setState(() => _showScrollToLatest = shouldShow);
+  }
+
   bool _handleScrollNotification(ScrollNotification notification) {
     if (notification.depth != 0) return false;
+    final distance =
+        notification.metrics.maxScrollExtent - notification.metrics.pixels;
+    // Only a user-originated scroll detaches auto-follow. Changes to the
+    // content extent while a task streams must not make the button appear or
+    // interrupt the user's reading position by themselves.
+    if (notification is UserScrollNotification &&
+        notification.direction != ScrollDirection.idle) {
+      _userDetachedFromLatest = distance > _scrollToLatestThreshold;
+    } else if (notification is ScrollUpdateNotification &&
+        notification.dragDetails != null) {
+      _userDetachedFromLatest = distance > _scrollToLatestThreshold;
+    }
+    _updateScrollToLatestVisibility();
     if (notification is ScrollStartNotification ||
         notification is ScrollUpdateNotification ||
         notification is OverscrollNotification) {
@@ -616,6 +716,7 @@ class _MainPageState extends State<MainPage> {
 
   void _scheduleScrollToLatest(String signature) {
     if (signature == _lastAutoScrollSignature) return;
+    if (_userDetachedFromLatest) return;
     _lastAutoScrollSignature = signature;
     _scrollToLatestAfterLayout();
     Future<void>.delayed(
@@ -636,21 +737,41 @@ class _MainPageState extends State<MainPage> {
     );
   }
 
-  void _scrollToLatestAfterLayout() {
+  void _scrollToLatestAfterLayout({bool force = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) return;
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: MediaQuery.of(context).disableAnimations
-            ? Duration.zero
-            : const Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
-      );
+      if (!mounted || !_scrollController.hasClients) return;
+      if (_userDetachedFromLatest && !force) return;
+      _scrollController
+          .animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: _reduceMotionEnabled
+                ? Duration.zero
+                : const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+          )
+          .whenComplete(() {
+            if (!mounted) return;
+            _updateScrollToLatestVisibility();
+          });
     });
   }
 
+  void _scrollToLatest() {
+    _userDetachedFromLatest = false;
+    _lastAutoScrollSignature = '';
+    _scrollToLatestAfterLayout(force: true);
+  }
+
+  bool get _reduceMotionEnabled {
+    if (MediaQuery.of(context).disableAnimations) return true;
+    final preferences = Get.isRegistered<SettingsPreferencesController>()
+        ? Get.find<SettingsPreferencesController>()
+        : null;
+    return preferences?.reduceAnimations.value ?? false;
+  }
+
   void _sendPrompt() {
-    if (controller.timelineSessionRunning.value) return;
+    if (controller.timelineStatus.value.isActive) return;
     final prompt = _promptController.text.trim();
     if (prompt.isEmpty) return;
     controller.startSession(prompt);
@@ -994,8 +1115,11 @@ class _TimelineIndexState extends State<_TimelineIndex> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final count = markers.length;
+        // Keep the index rail compact when a transcript has many turns. The
+        // old 24px cap rendered as roughly 48px between marks on a Retina
+        // display, making the rail feel detached from the conversation.
         final itemExtent = (constraints.maxHeight / count)
-            .clamp(12.0, 24.0)
+            .clamp(10.0, 18.0)
             .toDouble();
         final railHeight = itemExtent * count;
         final railTop = (constraints.maxHeight - railHeight) / 2;

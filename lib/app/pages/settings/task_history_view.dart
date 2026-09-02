@@ -35,105 +35,102 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: const LiquidPageAppBar(title: '任务历史'),
-          body: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 680),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
-                children: [
-                  SettingsSectionTitle(
-                    title: '全部任务 · ${bridge.sessions.length}',
-                    subtitle: '搜索、筛选并重新打开已经创建的 Codex 任务。',
+          body: SettingsPageContent(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
+              children: [
+                SettingsSectionTitle(
+                  title: '全部任务 · ${bridge.sessions.length}',
+                  subtitle: '搜索、筛选并重新打开已经创建的 Codex 任务。',
+                ),
+                const SizedBox(height: 12),
+                SettingsCard(
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: TextField(
+                    key: const ValueKey('task-history-search'),
+                    controller: _searchController,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      icon: Icon(
+                        RecodexIcons.search,
+                        color: context.recodexColors.icon,
+                      ),
+                      hintText: '搜索任务名称或内容',
+                      border: InputBorder.none,
+                      suffixIcon: _searchController.text.isEmpty
+                          ? null
+                          : IconButton(
+                              tooltip: '清除搜索',
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() {});
+                              },
+                              icon: const Icon(RecodexIcons.close),
+                            ),
+                    ),
                   ),
-                  const SizedBox(height: 12),
+                ),
+                const SizedBox(height: 14),
+                _FilterBar(
+                  filter: _filter,
+                  sort: _sort,
+                  onFilterChanged: (value) => setState(() => _filter = value),
+                  onSortChanged: (value) => setState(() => _sort = value),
+                ),
+                const SizedBox(height: 14),
+                ..._filteredSessions(bridge.sessions).map(
+                  (session) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _HistoryTaskTile(
+                      session: session,
+                      onTap: () {
+                        bridge.selectSession(session);
+                        Get.offNamed(Routes.main);
+                      },
+                    ),
+                  ),
+                ),
+                if (_filteredSessions(bridge.sessions).isEmpty)
                   SettingsCard(
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    child: TextField(
-                      key: const ValueKey('task-history-search'),
-                      controller: _searchController,
-                      onChanged: (_) => setState(() {}),
-                      decoration: InputDecoration(
-                        icon: Icon(
+                    child: Column(
+                      children: [
+                        Icon(
                           RecodexIcons.search,
-                          color: context.recodexColors.icon,
+                          size: 28,
+                          color: context.recodexColors.textMuted,
                         ),
-                        hintText: '搜索任务名称或内容',
-                        border: InputBorder.none,
-                        suffixIcon: _searchController.text.isEmpty
-                            ? null
-                            : IconButton(
-                                tooltip: '清除搜索',
-                                onPressed: () {
-                                  _searchController.clear();
-                                  setState(() {});
-                                },
-                                icon: const Icon(RecodexIcons.close),
-                              ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  _FilterBar(
-                    filter: _filter,
-                    sort: _sort,
-                    onFilterChanged: (value) => setState(() => _filter = value),
-                    onSortChanged: (value) => setState(() => _sort = value),
-                  ),
-                  const SizedBox(height: 14),
-                  ..._filteredSessions(bridge.sessions).map(
-                    (session) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: _HistoryTaskTile(
-                        session: session,
-                        onTap: () {
-                          bridge.selectSession(session);
-                          Get.offNamed(Routes.main);
-                        },
-                      ),
-                    ),
-                  ),
-                  if (_filteredSessions(bridge.sessions).isEmpty)
-                    SettingsCard(
-                      child: Column(
-                        children: [
-                          Icon(
-                            RecodexIcons.search,
-                            size: 28,
+                        const SizedBox(height: 10),
+                        Text(
+                          bridge.sessions.isEmpty ? '暂无任务记录' : '没有匹配的任务',
+                          style: TextStyle(
+                            color: context.recodexColors.text,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          bridge.sessions.isEmpty
+                              ? '连接 Relay 后，任务会自动出现在这里。'
+                              : '尝试更换关键词或筛选条件。',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
                             color: context.recodexColors.textMuted,
+                            fontSize: 13,
                           ),
-                          const SizedBox(height: 10),
-                          Text(
-                            bridge.sessions.isEmpty ? '暂无任务记录' : '没有匹配的任务',
-                            style: TextStyle(
-                              color: context.recodexColors.text,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                            ),
+                        ),
+                        if (bridge.connected.value) ...[
+                          const SizedBox(height: 12),
+                          TextButton.icon(
+                            onPressed: bridge.refreshProjects,
+                            icon: const Icon(RecodexIcons.sync, size: 17),
+                            label: const Text('刷新任务'),
                           ),
-                          const SizedBox(height: 4),
-                          Text(
-                            bridge.sessions.isEmpty
-                                ? '连接 Relay 后，任务会自动出现在这里。'
-                                : '尝试更换关键词或筛选条件。',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: context.recodexColors.textMuted,
-                              fontSize: 13,
-                            ),
-                          ),
-                          if (bridge.connected.value) ...[
-                            const SizedBox(height: 12),
-                            TextButton.icon(
-                              onPressed: bridge.refreshProjects,
-                              icon: const Icon(RecodexIcons.sync, size: 17),
-                              label: const Text('刷新任务'),
-                            ),
-                          ],
                         ],
-                      ),
+                      ],
                     ),
-                ],
-              ),
+                  ),
+              ],
             ),
           ),
         ),

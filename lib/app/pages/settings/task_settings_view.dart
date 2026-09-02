@@ -24,131 +24,125 @@ class TaskSettingsPage extends StatelessWidget {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: const LiquidPageAppBar(title: '任务与工作区'),
-          body: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 620),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
-                children: [
-                  _TaskHero(bridge: bridge),
-                  const SizedBox(height: 24),
-                  const SettingsSectionTitle(
-                    title: '默认任务参数',
-                    subtitle: '新建任务时自动使用这些选项，仍可在输入框中临时调整',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsGroup(
-                    children: [
-                      _SelectorRow(
-                        icon: RecodexIcons.folderOpen,
-                        title: '默认工作区',
-                        subtitle: '新建任务时优先使用的项目目录',
-                        value: preferences.defaultWorkspacePath.value,
-                        options: _workspaceOptions(bridge, preferences),
-                        onChanged: (value) {
-                          preferences.setDefaultWorkspacePath(value);
-                          if (value.isEmpty) return;
-                          for (final workspace in bridge.workspaces) {
-                            if (workspace.path == value) {
-                              bridge.selectWorkspace(workspace);
-                              break;
-                            }
+          body: SettingsPageContent(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
+              children: [
+                _TaskHero(bridge: bridge),
+                const SizedBox(height: 24),
+                const SettingsSectionTitle(
+                  title: '默认任务参数',
+                  subtitle: '新建任务时自动使用这些选项，仍可在输入框中临时调整',
+                ),
+                const SizedBox(height: 10),
+                SettingsGroup(
+                  children: [
+                    _SelectorRow(
+                      icon: RecodexIcons.folderOpen,
+                      title: '默认工作区',
+                      subtitle: '新建任务时优先使用的项目目录',
+                      value: preferences.defaultWorkspacePath.value,
+                      options: _workspaceOptions(bridge, preferences),
+                      onChanged: (value) {
+                        preferences.setDefaultWorkspacePath(value);
+                        if (value.isEmpty) return;
+                        for (final workspace in bridge.workspaces) {
+                          if (workspace.path == value) {
+                            bridge.selectWorkspace(workspace);
+                            break;
                           }
-                        },
-                      ),
-                      const SettingsDivider(),
-                      _SelectorRow(
-                        icon: RecodexIcons.fast,
-                        title: '默认模型',
-                        subtitle: '选择新会话优先使用的模型',
-                        value: preferences.defaultModel.value,
-                        options: _modelOptions(bridge, preferences),
-                        onChanged: (value) {
-                          preferences.setDefaultModel(value);
-                          bridge.applyTaskPreferences(preferences);
-                        },
-                      ),
-                      const SettingsDivider(),
-                      _SelectorRow(
-                        icon: RecodexIcons.reasoning,
-                        title: '默认推理强度',
-                        subtitle: '控制 Codex 思考深度和响应速度的平衡',
-                        value: preferences.defaultReasoningEffort.value,
-                        options: _reasoningOptions(bridge, preferences),
-                        onChanged: (value) {
-                          preferences.setDefaultReasoningEffort(value);
-                          bridge.applyTaskPreferences(preferences);
-                        },
-                      ),
-                      const SettingsDivider(),
-                      _SelectorRow(
-                        icon: RecodexIcons.shield,
-                        title: '默认权限模式',
-                        subtitle: '控制任务执行时的确认策略',
-                        value: preferences.defaultPermissionMode.value,
-                        options: const [
-                          RecodexDropdownOption(value: '默认权限', label: '默认权限'),
-                          RecodexDropdownOption(value: '自动审查', label: '自动审查'),
-                          RecodexDropdownOption(
-                            value: '完全访问权限',
-                            label: '完全访问权限',
-                          ),
-                        ],
-                        onChanged: (value) {
-                          preferences.setDefaultPermissionMode(value);
-                          bridge.setPermissionMode(value);
-                        },
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  const SettingsSectionTitle(
-                    title: '任务安全',
-                    subtitle: '控制高风险操作的确认行为',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsGroup(
-                    children: [
-                      SettingsToggleRow(
-                        icon: RecodexIcons.security,
-                        title: '高风险操作前确认',
-                        subtitle: '执行敏感操作前始终要求再次确认',
-                        value: preferences.confirmSensitiveActions.value,
-                        onChanged: preferences.setConfirmSensitiveActions,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  const SettingsSectionTitle(
-                    title: '对话显示',
-                    subtitle: '调整思考过程、时间线和回答区域布局',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsGroup(
-                    children: [
-                      SettingsRow(
-                        icon: RecodexIcons.message,
-                        title: '对话显示设置',
-                        subtitle: '思考、索引、自动滚动、工具详情和回答宽度',
-                        trailing: Icon(
-                          RecodexIcons.chevronRight,
-                          color: context.recodexColors.textMuted,
-                        ),
-                        onTap: () => Get.toNamed(Routes.conversationDisplay),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton.icon(
-                      onPressed: () => _reset(context, preferences, bridge),
-                      icon: const Icon(RecodexIcons.undo, size: 18),
-                      label: const Text('恢复任务默认设置'),
+                        }
+                      },
                     ),
+                    const SettingsDivider(),
+                    _SelectorRow(
+                      icon: RecodexIcons.fast,
+                      title: '默认模型',
+                      subtitle: '选择新会话优先使用的模型',
+                      value: preferences.defaultModel.value,
+                      options: _modelOptions(bridge, preferences),
+                      onChanged: (value) {
+                        preferences.setDefaultModel(value);
+                        bridge.applyTaskPreferences(preferences);
+                      },
+                    ),
+                    const SettingsDivider(),
+                    _SelectorRow(
+                      icon: RecodexIcons.reasoning,
+                      title: '默认推理强度',
+                      subtitle: '控制 Codex 思考深度和响应速度的平衡',
+                      value: preferences.defaultReasoningEffort.value,
+                      options: _reasoningOptions(bridge, preferences),
+                      onChanged: (value) {
+                        preferences.setDefaultReasoningEffort(value);
+                        bridge.applyTaskPreferences(preferences);
+                      },
+                    ),
+                    const SettingsDivider(),
+                    _SelectorRow(
+                      icon: RecodexIcons.shield,
+                      title: '默认权限模式',
+                      subtitle: '控制任务执行时的确认策略',
+                      value: preferences.defaultPermissionMode.value,
+                      options: const [
+                        RecodexDropdownOption(value: '默认权限', label: '默认权限'),
+                        RecodexDropdownOption(value: '自动审查', label: '自动审查'),
+                        RecodexDropdownOption(value: '完全访问权限', label: '完全访问权限'),
+                      ],
+                      onChanged: (value) {
+                        preferences.setDefaultPermissionMode(value);
+                        bridge.setPermissionMode(value);
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                const SettingsSectionTitle(
+                  title: '任务安全',
+                  subtitle: '控制高风险操作的确认行为',
+                ),
+                const SizedBox(height: 10),
+                SettingsGroup(
+                  children: [
+                    SettingsToggleRow(
+                      icon: RecodexIcons.security,
+                      title: '高风险操作前确认',
+                      subtitle: '执行敏感操作前始终要求再次确认',
+                      value: preferences.confirmSensitiveActions.value,
+                      onChanged: preferences.setConfirmSensitiveActions,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                const SettingsSectionTitle(
+                  title: '对话显示',
+                  subtitle: '调整思考过程、时间线和回答区域布局',
+                ),
+                const SizedBox(height: 10),
+                SettingsGroup(
+                  children: [
+                    SettingsRow(
+                      icon: RecodexIcons.message,
+                      title: '对话显示设置',
+                      subtitle: '思考、索引、自动滚动、工具详情和回答宽度',
+                      trailing: Icon(
+                        RecodexIcons.chevronRight,
+                        color: context.recodexColors.textMuted,
+                      ),
+                      onTap: () => Get.toNamed(Routes.conversationDisplay),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: () => _reset(context, preferences, bridge),
+                    icon: const Icon(RecodexIcons.undo, size: 18),
+                    label: const Text('恢复任务默认设置'),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -289,10 +283,13 @@ class _SelectorRow extends StatelessWidget {
       icon: icon,
       title: title,
       subtitle: subtitle,
-      trailing: SizedBox(
-        width: 158,
-        child: options.isEmpty
-            ? Text(
+      // Let the trigger hug its selected label instead of reserving the same
+      // 158px slot for every option. The dropdown still caps long labels at
+      // 158px internally and ellipsizes them on narrow windows.
+      trailing: options.isEmpty
+          ? ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 158),
+              child: Text(
                 '连接主机后可用',
                 textAlign: TextAlign.right,
                 style: TextStyle(
@@ -300,16 +297,16 @@ class _SelectorRow extends StatelessWidget {
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                 ),
-              )
-            : RecodexDropdown<String>(
-                value: selected,
-                options: options,
-                maxWidth: 158,
-                compact: true,
-                tooltip: '选择$title',
-                onChanged: onChanged,
               ),
-      ),
+            )
+          : RecodexDropdown<String>(
+              value: selected,
+              options: options,
+              maxWidth: 158,
+              compact: true,
+              tooltip: '选择$title',
+              onChanged: onChanged,
+            ),
     );
   }
 }

@@ -10,6 +10,7 @@ abstract final class RecodexIcons {
   static const IconData add = LucideIcons.plus300;
   static const IconData addLink = LucideIcons.link2300;
   static const IconData arrowUp = LucideIcons.arrowUp300;
+  static const IconData arrowDown = LucideIcons.arrowDown300;
   static const IconData back = LucideIcons.arrowLeft300;
   static const IconData reasoning = LucideIcons.scanLine300;
   static const IconData fast = LucideIcons.zap300;
@@ -80,4 +81,5 @@ abstract final class RecodexIcons {
   static const IconData warning = LucideIcons.triangleAlert300;
   static const IconData workspaces = LucideIcons.layoutDashboard300;
   static const IconData palette = LucideIcons.palette300;
+  static const IconData play = LucideIcons.play300;
 }

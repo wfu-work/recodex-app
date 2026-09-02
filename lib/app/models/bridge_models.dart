@@ -204,6 +204,45 @@ class PairingProfile {
   }
 }
 
+/// Lifecycle state projected onto the selected conversation timeline.
+///
+/// App Server exposes a thread-level `active/idle` state and a more precise
+/// turn-level state. Keeping the projection explicit prevents a missing
+/// `turn.started` event from making an in-flight turn look completed.
+enum TimelineTaskStatus {
+  unknown,
+  loading,
+  processing,
+  waitingApproval,
+  waitingUserInput,
+  completed,
+  failed,
+  interrupted,
+}
+
+extension TimelineTaskStatusX on TimelineTaskStatus {
+  bool get isActive =>
+      this == TimelineTaskStatus.processing ||
+      this == TimelineTaskStatus.waitingApproval ||
+      this == TimelineTaskStatus.waitingUserInput;
+
+  bool get isTerminal =>
+      this == TimelineTaskStatus.completed ||
+      this == TimelineTaskStatus.failed ||
+      this == TimelineTaskStatus.interrupted;
+
+  String get label => switch (this) {
+    TimelineTaskStatus.processing => '正在思考',
+    TimelineTaskStatus.waitingApproval => '等待审批',
+    TimelineTaskStatus.waitingUserInput => '等待你的输入',
+    TimelineTaskStatus.completed => '已完成',
+    TimelineTaskStatus.failed => '执行失败',
+    TimelineTaskStatus.interrupted => '已中断',
+    TimelineTaskStatus.loading => '状态同步中…',
+    TimelineTaskStatus.unknown => '状态同步中…',
+  };
+}
+
 class SessionRecord {
   const SessionRecord({
     required this.id,
@@ -266,7 +305,11 @@ class SessionRecord {
   }
 
   bool get isRunning {
-    final value = status.trim().toLowerCase();
+    final value = status
+        .trim()
+        .toLowerCase()
+        .replaceAll('-', '_')
+        .replaceAll(' ', '_');
     return value == 'running' ||
         value == 'active' ||
         value == 'in_progress' ||
@@ -276,11 +319,19 @@ class SessionRecord {
         value == 'starting' ||
         value == 'pending' ||
         value == 'executing' ||
-        value == 'working';
+        value == 'working' ||
+        value == 'waitingonapproval' ||
+        value == 'waiting_on_approval' ||
+        value == 'waitingonuserinput' ||
+        value == 'waiting_on_user_input';
   }
 
   factory SessionRecord.fromJson(Map<String, dynamic> json) {
-    final status = json['status'] as String? ?? '';
+    final rawStatus = json['status'];
+    final status = rawStatus is Map
+        ? (rawStatus['type'] ?? rawStatus['state'] ?? rawStatus['status'] ?? '')
+              .toString()
+        : rawStatus?.toString() ?? '';
     final archived = _jsonBool(
       json['isArchived'] ?? json['is_archived'] ?? json['archived'],
     );
@@ -393,21 +444,66 @@ class SessionEvent {
     required this.kind,
     required this.text,
     this.time,
+    this.durationMs,
     this.usage,
     this.attachments = const [],
+    this.itemId,
+    this.turnId,
+    this.isDelta = false,
   });
 
   final String kind;
   final String text;
   final DateTime? time;
+
+  /// Codex's measured duration for the turn that produced this event.
+  ///
+  /// This is kept separate from [time] because historical thread responses
+  /// expose an authoritative turn duration even when individual items do not
+  /// carry timestamps.
+  final int? durationMs;
   final TokenUsage? usage;
   final List<EventAttachment> attachments;
+
+  /// Stable Codex identities allow streamed deltas to update the same
+  /// transcript item instead of creating one bubble per network frame.
+  final String? itemId;
+  final String? turnId;
+
+  /// True for a transport delta. Snapshot events with the same item id
+  /// replace the accumulated text; deltas append to it.
+  final bool isDelta;
+
+  SessionEvent copyWith({
+    String? kind,
+    String? text,
+    DateTime? time,
+    int? durationMs,
+    TokenUsage? usage,
+    List<EventAttachment>? attachments,
+    String? itemId,
+    String? turnId,
+    bool? isDelta,
+  }) {
+    return SessionEvent(
+      kind: kind ?? this.kind,
+      text: text ?? this.text,
+      time: time ?? this.time,
+      durationMs: durationMs ?? this.durationMs,
+      usage: usage ?? this.usage,
+      attachments: attachments ?? this.attachments,
+      itemId: itemId ?? this.itemId,
+      turnId: turnId ?? this.turnId,
+      isDelta: isDelta ?? this.isDelta,
+    );
+  }
 
   factory SessionEvent.fromJson(Map<String, dynamic> json) {
     return SessionEvent(
       kind: json['kind'] as String? ?? 'event',
       text: json['text'] as String? ?? json['raw'] as String? ?? '',
       time: DateTime.tryParse(json['time'] as String? ?? ''),
+      durationMs: _jsonNullableInt(json['durationMs'] ?? json['duration_ms']),
       usage: json['usage'] is Map
           ? TokenUsage.fromJson((json['usage'] as Map).cast<String, dynamic>())
           : null,
@@ -415,6 +511,9 @@ class SessionEvent {
           .whereType<Map>()
           .map((item) => EventAttachment.fromJson(item.cast<String, dynamic>()))
           .toList(),
+      itemId: json['itemId'] as String? ?? json['item_id'] as String?,
+      turnId: json['turnId'] as String? ?? json['turn_id'] as String?,
+      isDelta: json['isDelta'] == true || json['is_delta'] == true,
     );
   }
 }
@@ -807,6 +906,12 @@ int _jsonInt(Object? value) {
   if (value is int) return value;
   if (value is num) return value.round();
   return int.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+int? _jsonNullableInt(Object? value) {
+  if (value == null) return null;
+  if (value is num) return value.round();
+  return int.tryParse(value.toString().trim());
 }
 
 bool _jsonBool(Object? value) {

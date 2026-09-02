@@ -25,139 +25,136 @@ class ConnectionSettingsPage extends StatelessWidget {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: const LiquidPageAppBar(title: '连接与配对'),
-          body: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 620),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
-                children: [
-                  _ConnectionHero(
-                    connected: bridge.connected.value,
-                    pairingName: bridge.activePairing?.displayName,
-                  ),
-                  const SizedBox(height: 24),
-                  const SettingsSectionTitle(
-                    title: '配对管理',
-                    subtitle: '选择默认主机，并管理 Relay 接入凭证',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsGroup(
-                    children: [
-                      SettingsRow(
-                        icon: RecodexIcons.devices,
-                        title: '配对列表',
-                        subtitle: bridge.pairings.isEmpty
-                            ? '还没有保存的配对'
-                            : '${bridge.pairings.length} 个配对配置',
-                        showChevron: true,
-                        onTap: () => Get.toNamed(Routes.pairing),
-                      ),
-                      const SettingsDivider(),
-                      SettingsRow(
-                        icon: RecodexIcons.switcher,
-                        title: '默认配对',
-                        subtitle: bridge.activePairing?.displayName ?? '未选择',
-                        trailing: bridge.pairings.isEmpty
-                            ? null
-                            : SizedBox(
-                                width: 156,
-                                child: RecodexDropdown<String>(
-                                  value: bridge.activePairingId.value ?? '',
-                                  maxWidth: 156,
-                                  compact: true,
-                                  tooltip: '选择默认配对',
-                                  options: [
-                                    for (final profile in bridge.pairings)
-                                      RecodexDropdownOption<String>(
-                                        value: profile.id,
-                                        label: profile.displayName,
-                                      ),
-                                  ],
-                                  onChanged: bridge.switchPairing,
-                                ),
+          body: SettingsPageContent(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
+              children: [
+                _ConnectionHero(
+                  connected: bridge.connected.value,
+                  pairingName: bridge.activePairing?.displayName,
+                ),
+                const SizedBox(height: 24),
+                const SettingsSectionTitle(
+                  title: '配对管理',
+                  subtitle: '选择默认主机，并管理 Relay 接入凭证',
+                ),
+                const SizedBox(height: 10),
+                SettingsGroup(
+                  children: [
+                    SettingsRow(
+                      icon: RecodexIcons.devices,
+                      title: '配对列表',
+                      subtitle: bridge.pairings.isEmpty
+                          ? '还没有保存的配对'
+                          : '${bridge.pairings.length} 个配对配置',
+                      showChevron: true,
+                      onTap: () => Get.toNamed(Routes.pairing),
+                    ),
+                    const SettingsDivider(),
+                    SettingsRow(
+                      icon: RecodexIcons.switcher,
+                      title: '默认配对',
+                      subtitle: bridge.activePairing?.displayName ?? '未选择',
+                      trailing: bridge.pairings.isEmpty
+                          ? null
+                          : SizedBox(
+                              width: 156,
+                              child: RecodexDropdown<String>(
+                                value: bridge.activePairingId.value ?? '',
+                                maxWidth: 156,
+                                compact: true,
+                                tooltip: '选择默认配对',
+                                options: [
+                                  for (final profile in bridge.pairings)
+                                    RecodexDropdownOption<String>(
+                                      value: profile.id,
+                                      label: profile.displayName,
+                                    ),
+                                ],
+                                onChanged: bridge.switchPairing,
                               ),
-                      ),
-                      const SettingsDivider(),
-                      SettingsRow(
-                        icon: RecodexIcons.addLink,
-                        title: '新建配对',
-                        subtitle: '连接另一台 Codex 主机',
-                        showChevron: true,
-                        onTap: () => Get.toNamed(
-                          Routes.pairing,
-                          arguments: const PairingPageArgs(createNew: true),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  const SettingsSectionTitle(
-                    title: '连接策略',
-                    subtitle: '控制应用启动和网络恢复后的连接行为',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsGroup(
-                    children: [
-                      SettingsToggleRow(
-                        icon: RecodexIcons.cloudDone,
-                        title: '启动时自动连接',
-                        subtitle: '打开应用后自动连接默认配对',
-                        value: preferences.autoConnect.value,
-                        onChanged: preferences.setAutoConnect,
-                      ),
-                      const SettingsDivider(),
-                      SettingsToggleRow(
-                        icon: RecodexIcons.sync,
-                        title: '网络恢复后自动重连',
-                        subtitle: 'Relay 中断后自动尝试恢复连接',
-                        value: preferences.autoReconnect.value,
-                        onChanged: preferences.setAutoReconnect,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  const SettingsSectionTitle(
-                    title: '快速诊断',
-                    subtitle: '仅测试当前配对，不会修改保存的配置',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsCard(
-                    padding: const EdgeInsets.fromLTRB(18, 17, 18, 17),
-                    child: Row(
-                      children: [
-                        Icon(
-                          bridge.connected.value
-                              ? RecodexIcons.verified
-                              : RecodexIcons.network,
-                          color: bridge.connected.value
-                              ? context.recodexColors.success
-                              : context.recodexColors.icon,
-                          size: 24,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            bridge.connected.value
-                                ? '当前 Relay 已连接'
-                                : '检查当前 Relay 和接入端凭证',
-                            style: TextStyle(
-                              color: context.recodexColors.text,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
                             ),
+                    ),
+                    const SettingsDivider(),
+                    SettingsRow(
+                      icon: RecodexIcons.addLink,
+                      title: '新建配对',
+                      subtitle: '连接另一台 Codex 主机',
+                      showChevron: true,
+                      onTap: () => Get.toNamed(
+                        Routes.pairing,
+                        arguments: const PairingPageArgs(createNew: true),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                const SettingsSectionTitle(
+                  title: '连接策略',
+                  subtitle: '控制应用启动和网络恢复后的连接行为',
+                ),
+                const SizedBox(height: 10),
+                SettingsGroup(
+                  children: [
+                    SettingsToggleRow(
+                      icon: RecodexIcons.cloudDone,
+                      title: '启动时自动连接',
+                      subtitle: '打开应用后自动连接默认配对',
+                      value: preferences.autoConnect.value,
+                      onChanged: preferences.setAutoConnect,
+                    ),
+                    const SettingsDivider(),
+                    SettingsToggleRow(
+                      icon: RecodexIcons.sync,
+                      title: '网络恢复后自动重连',
+                      subtitle: 'Relay 中断后自动尝试恢复连接',
+                      value: preferences.autoReconnect.value,
+                      onChanged: preferences.setAutoReconnect,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                const SettingsSectionTitle(
+                  title: '快速诊断',
+                  subtitle: '仅测试当前配对，不会修改保存的配置',
+                ),
+                const SizedBox(height: 10),
+                SettingsCard(
+                  padding: const EdgeInsets.fromLTRB(18, 17, 18, 17),
+                  child: Row(
+                    children: [
+                      Icon(
+                        bridge.connected.value
+                            ? RecodexIcons.verified
+                            : RecodexIcons.network,
+                        color: bridge.connected.value
+                            ? context.recodexColors.success
+                            : context.recodexColors.icon,
+                        size: 24,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          bridge.connected.value
+                              ? '当前 Relay 已连接'
+                              : '检查当前 Relay 和接入端凭证',
+                          style: TextStyle(
+                            color: context.recodexColors.text,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
-                        TextButton.icon(
-                          onPressed: () =>
-                              _testCurrentConnection(context, bridge),
-                          icon: const Icon(RecodexIcons.network, size: 18),
-                          label: const Text('测试'),
-                        ),
-                      ],
-                    ),
+                      ),
+                      TextButton.icon(
+                        onPressed: () =>
+                            _testCurrentConnection(context, bridge),
+                        icon: const Icon(RecodexIcons.network, size: 18),
+                        label: const Text('测试'),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -174,18 +171,20 @@ class ConnectionSettingsPage extends StatelessWidget {
       _showMessage(context, '请先创建并选择一个配对。');
       return;
     }
-    final error = await bridge.testConnection(
-      inputBaseUrl: profile.baseUrl,
-      token: profile.pairingToken,
-      inputDeviceName: profile.deviceName,
-      inputSpaceId: profile.spaceId,
-      inputTargetDeviceId: profile.targetDeviceId,
-      inputEndpointId: profile.deviceId,
-      inputEndpointType: profile.endpointType,
-      inputDeviceKey: profile.deviceKey,
-    );
+    final error = bridge.connected.value
+        ? await bridge.checkCurrentConnection()
+        : await bridge.testConnection(
+            inputBaseUrl: profile.baseUrl,
+            token: profile.pairingToken,
+            inputDeviceName: profile.deviceName,
+            inputSpaceId: profile.spaceId,
+            inputTargetDeviceId: profile.targetDeviceId,
+            inputEndpointId: profile.deviceId,
+            inputEndpointType: profile.endpointType,
+            inputDeviceKey: profile.deviceKey,
+          );
     if (!context.mounted) return;
-    _showMessage(context, error ?? '连接测试成功，Relay 已接受当前配置。');
+    _showMessage(context, error ?? '连接测试成功，Relay 连接正常。');
   }
 
   void _showMessage(BuildContext context, String message) {

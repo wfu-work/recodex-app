@@ -44,6 +44,35 @@ void main() {
     expect(find.text('高'), findsOneWidget);
   });
 
+  testWidgets('supports a borderless trigger for the composer controls', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.light,
+        home: Scaffold(
+          body: Center(
+            child: RecodexDropdown<String>(
+              value: 'medium',
+              options: const [
+                RecodexDropdownOption(value: 'medium', label: '中'),
+              ],
+              showBorder: false,
+              onChanged: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final trigger = find.ancestor(
+      of: find.text('中'),
+      matching: find.byType(DecoratedBox),
+    );
+    final decoration = tester.widget<DecoratedBox>(trigger.first).decoration;
+    expect((decoration as BoxDecoration).border, isNull);
+  });
+
   testWidgets('RecodexPopupMenuButton uses the global rounded menu theme', (
     tester,
   ) async {

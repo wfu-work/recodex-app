@@ -101,6 +101,7 @@ class RecodexDropdown<T> extends StatelessWidget {
     this.maxWidth = 168,
     this.enabled = true,
     this.showCheckmark = true,
+    this.showBorder = true,
     super.key,
   });
 
@@ -114,6 +115,7 @@ class RecodexDropdown<T> extends StatelessWidget {
   final double maxWidth;
   final bool enabled;
   final bool showCheckmark;
+  final bool showBorder;
 
   RecodexDropdownOption<T>? get _selectedOption {
     for (final option in options) {
@@ -178,11 +180,15 @@ class RecodexDropdown<T> extends StatelessWidget {
               ? colors.glassColor.withValues(alpha: 0.46)
               : colors.surfaceOverlay.withValues(alpha: 0.72),
           borderRadius: radius,
-          border: Border.all(
-            color: isWarning
-                ? colors.warning.withValues(alpha: 0.42)
-                : colors.glassBorder.withValues(alpha: isDark ? 0.84 : 0.92),
-          ),
+          border: showBorder
+              ? Border.all(
+                  color: isWarning
+                      ? colors.warning.withValues(alpha: 0.42)
+                      : colors.glassBorder.withValues(
+                          alpha: isDark ? 0.84 : 0.92,
+                        ),
+                )
+              : null,
         ),
         child: Padding(
           padding: EdgeInsets.symmetric(

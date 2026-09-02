@@ -514,6 +514,14 @@ class EventTimelineItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (_isFileChangeEvent(event.kind)) {
+      final paths = _fileChangePathList(event.text);
+      return ToolCallRow(
+        title: '已修改文件',
+        status: paths.isEmpty ? '文件变更' : '${paths.length} 个文件',
+        icon: RecodexIcons.edit,
+      );
+    }
     if (_isToolEvent(event.kind)) {
       final command = _extractCommand(event.text);
       return ToolCallRow(
@@ -550,6 +558,8 @@ class AssistantAnswerBlock extends StatefulWidget {
   const AssistantAnswerBlock({
     required this.events,
     required this.completed,
+    this.status,
+    this.startedAt,
     this.showReasoning = true,
     this.collapseReasoningByDefault = true,
     this.showToolCallDetails = true,
@@ -564,6 +574,12 @@ class AssistantAnswerBlock extends StatefulWidget {
 
   final List<SessionEvent> events;
   final bool completed;
+
+  /// Optional explicit lifecycle state from the bridge. Older callers can
+  /// continue to provide only [completed], which maps to the same Codex
+  /// completed/processing presentation.
+  final TimelineTaskStatus? status;
+  final DateTime? startedAt;
   final bool showReasoning;
   final bool collapseReasoningByDefault;
   final bool showToolCallDetails;
@@ -606,14 +622,26 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
 
   @override
   Widget build(BuildContext context) {
+    final taskStatus =
+        widget.status ??
+        (widget.completed
+            ? TimelineTaskStatus.completed
+            : TimelineTaskStatus.processing);
     final textBuffer = StringBuffer();
     final reasoningBuffer = StringBuffer();
     final answerChildren = <Widget>[];
     final reasoningSteps = <_AnswerStep>[];
     final gitSummaries = <GitChangeSummary>[];
+    final fileChangePaths = <String>{};
+    var fileChangeStepIndex = -1;
     TokenUsage? usage;
     var hasTerminalEvent = false;
     SessionEvent? latestLiveEvent;
+    // The bridge's explicit lifecycle is authoritative for the selected
+    // turn. Historical `done`/`interrupted` markers can remain in the merged
+    // transcript when a task is refreshed during reconnect; they must not
+    // make a still-running turn render as completed or interrupted.
+    final statusIsActive = taskStatus.isActive;
 
     void mergeUsage(TokenUsage next) {
       final previous = usage;
@@ -658,7 +686,7 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
       final eventUsage = event.usage;
       if (eventUsage != null) mergeUsage(eventUsage);
       if (_isDoneEvent(event.kind)) {
-        hasTerminalEvent = true;
+        if (!statusIsActive) hasTerminalEvent = true;
         continue;
       }
       if (event.kind == 'token_usage') {
@@ -670,6 +698,7 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
         continue;
       }
       if (event.kind == 'interrupted') {
+        if (statusIsActive) continue;
         hasTerminalEvent = true;
         flushAnswerText();
         reasoningSteps.add(
@@ -684,6 +713,28 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
       if (event.kind.toLowerCase().contains('reason')) {
         if (!widget.showReasoning) continue;
         reasoningBuffer.write(_cleanEventText(event));
+        continue;
+      }
+      if (_isFileChangeEvent(event.kind)) {
+        if (!widget.showToolCallDetails) {
+          latestLiveEvent = null;
+          continue;
+        }
+        flushReasoningText();
+        fileChangePaths.addAll(_fileChangePathList(event.text));
+        final count = fileChangePaths.length;
+        final step = _AnswerStep(
+          icon: RecodexIcons.edit,
+          title: statusIsActive ? '正在修改文件' : '已修改文件',
+          detail: count > 0 ? '$count 个文件' : null,
+        );
+        if (fileChangeStepIndex < 0) {
+          fileChangeStepIndex = reasoningSteps.length;
+          reasoningSteps.add(step);
+        } else {
+          reasoningSteps[fileChangeStepIndex] = step;
+        }
+        latestLiveEvent = event.copyWith(text: fileChangePaths.join('\n'));
         continue;
       }
       if (_isToolEvent(event.kind)) {
@@ -747,7 +798,8 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
         ),
       );
     }
-    if (!widget.completed && !hasTerminalEvent) {
+    final statusIsTerminal = taskStatus.isTerminal;
+    if (!widget.completed && !statusIsTerminal && !hasTerminalEvent) {
       if (answerChildren.isNotEmpty) {
         answerChildren.add(const SizedBox(height: 18));
       }
@@ -758,12 +810,17 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
       );
     }
 
-    final isDone = widget.completed || hasTerminalEvent;
+    final isDone = widget.completed || statusIsTerminal || hasTerminalEvent;
     if (answerChildren.isEmpty && (isDone || reasoningSteps.isEmpty)) {
+      final fallbackText = switch (taskStatus) {
+        TimelineTaskStatus.failed => '任务执行失败。',
+        TimelineTaskStatus.interrupted => '任务已中断。',
+        _ => '完成。',
+      };
       answerChildren.add(
         isDone
             ? _AnswerText(
-                text: '完成。',
+                text: fallbackText,
                 cardRadius: widget.cardRadius,
                 gitChangeSummary: widget.gitChangeSummary,
                 onFileTap: widget.onGitFileTap,
@@ -776,11 +833,18 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
         const _AnswerStep(icon: RecodexIcons.reasoning, title: '正在思考'),
       );
     }
-    final elapsed = _elapsedLabel(widget.events);
+    final elapsed = _elapsedLabel(
+      widget.events,
+      startedAt: widget.startedAt,
+      active: taskStatus.isActive,
+    );
     final hasReasoning = reasoningSteps.isNotEmpty;
     final reduceAnimations = MediaQuery.of(context).disableAnimations;
     return Align(
-      alignment: Alignment.centerRight,
+      // Keep the answer column centered in the available transcript area.
+      // The width remains fluid below the configured maximum, so narrow
+      // windows do not overflow while wide windows retain a readable column.
+      alignment: Alignment.center,
       child: ConstrainedBox(
         // Codex keeps assistant output in a readable desktop column instead
         // of stretching a response card across the entire conversation pane.
@@ -794,6 +858,8 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
               children: [
                 _AnswerStatusHeader(
                   done: isDone,
+                  status: taskStatus,
+                  showCompletedLabel: widget.status != null,
                   elapsed: widget.showUsageMetrics ? elapsed : null,
                   usage: widget.showUsageMetrics ? usage : null,
                   expanded: _reasoningExpanded,
@@ -1090,6 +1156,13 @@ class _LiveActivityRow extends StatelessWidget {
   const _LiveActivityRow({required this.text, this.detail});
 
   factory _LiveActivityRow.fromEvent(SessionEvent event) {
+    if (_isFileChangeEvent(event.kind)) {
+      final paths = _fileChangePathList(event.text);
+      return _LiveActivityRow(
+        text: paths.length == 1 ? '正在修改 ${_baseName(paths.first)}' : '正在修改文件',
+        detail: paths.length > 1 ? '${paths.length} 个文件' : '正在思考',
+      );
+    }
     if (_isToolEvent(event.kind)) {
       final command = _extractCommand(event.text);
       return _LiveActivityRow(
@@ -1151,6 +1224,8 @@ class _LiveActivityRow extends StatelessWidget {
 class _AnswerStatusHeader extends StatelessWidget {
   const _AnswerStatusHeader({
     required this.done,
+    required this.status,
+    required this.showCompletedLabel,
     required this.elapsed,
     required this.usage,
     required this.expanded,
@@ -1159,6 +1234,8 @@ class _AnswerStatusHeader extends StatelessWidget {
   });
 
   final bool done;
+  final TimelineTaskStatus status;
+  final bool showCompletedLabel;
   final String? elapsed;
   final TokenUsage? usage;
   final bool expanded;
@@ -1169,27 +1246,75 @@ class _AnswerStatusHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
+    final statusLabel = status == TimelineTaskStatus.unknown && done
+        ? TimelineTaskStatus.completed.label
+        : status.label;
+    final statusColor = switch (status) {
+      TimelineTaskStatus.waitingApproval => colors.warning,
+      TimelineTaskStatus.failed => colors.error,
+      _ => colors.textMuted,
+    };
+    final compactCompleted =
+        status == TimelineTaskStatus.completed && showCompletedLabel;
+    final legacyCompactMetrics =
+        status == TimelineTaskStatus.completed &&
+        !showCompletedLabel &&
+        elapsed != null;
     final metrics = <String>[
-      if (elapsed != null) '用时 $elapsed',
+      if (!compactCompleted && elapsed != null) '用时 $elapsed',
       if (usage != null) 'Token ${_formatTokenCount(usage!.totalTokens)}',
     ];
-    final label = metrics.isEmpty
-        ? done
-              ? '已完成'
-              : '正在处理'
-        : metrics.join(' · ');
+    // The official client uses a compact success label (`已处理 7 分钟 17
+    // 秒`). Keep the old metrics-only form for callers that do not provide an
+    // explicit lifecycle snapshot, while naming every active/exception state.
+    final showStatusLabel = !legacyCompactMetrics && !compactCompleted;
     final header = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: colors.textMuted,
-            fontSize: _scaledFontSize(15, fontScale),
-            height: 1.2,
-            fontWeight: FontWeight.w400,
+        if (compactCompleted)
+          Text(
+            elapsed == null ? '已处理' : '已处理 $elapsed',
+            style: TextStyle(
+              color: statusColor,
+              fontSize: _scaledFontSize(15, fontScale),
+              height: 1.2,
+              fontWeight: FontWeight.w400,
+            ),
+          )
+        else if (showStatusLabel)
+          Text(
+            statusLabel.isEmpty ? (done ? '已完成' : '正在思考') : statusLabel,
+            style: TextStyle(
+              color: statusColor,
+              fontSize: _scaledFontSize(15, fontScale),
+              height: 1.2,
+              fontWeight: FontWeight.w400,
+            ),
           ),
-        ),
+        for (final metric in metrics) ...[
+          if (showStatusLabel || compactCompleted) ...[
+            const SizedBox(width: 8),
+            Text(
+              '·',
+              style: TextStyle(
+                color: colors.textMuted,
+                fontSize: _scaledFontSize(15, fontScale),
+                height: 1.2,
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
+          Text(
+            metric,
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: _scaledFontSize(15, fontScale),
+              height: 1.2,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        ],
         if (hasReasoning) ...[
           const SizedBox(width: 8),
           Icon(
@@ -1211,12 +1336,20 @@ class _AnswerStatusHeader extends StatelessWidget {
     if (!hasReasoning || onToggle == null) return content;
     return Semantics(
       button: true,
-      label: expanded ? '收起思考内容' : '展开思考内容',
+      label: expanded ? '收起执行过程' : '展开执行过程',
       child: Tooltip(
-        message: expanded ? '收起思考内容' : '展开思考内容',
+        message: expanded ? '收起执行过程' : '展开执行过程',
         child: InkWell(
           key: const ValueKey('answer-reasoning-toggle'),
           borderRadius: BorderRadius.circular(6),
+          // The reasoning header is intentionally text-only. Keep the
+          // pointer cursor and click affordance without painting a grey
+          // hover capsule behind the row.
+          hoverColor: Colors.transparent,
+          focusColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          splashColor: Colors.transparent,
+          overlayColor: const WidgetStatePropertyAll(Colors.transparent),
           onTap: onToggle,
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 2),
@@ -1993,38 +2126,28 @@ class ComposerBar extends StatelessWidget {
           radius: 28,
           child: Column(
             children: [
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: colors.glassBorder.withValues(
-                      alpha: isDark ? 0.24 : 0.72,
-                    ),
-                  ),
+              TextField(
+                controller: controller,
+                focusNode: focusNode,
+                enabled: enabled && !running,
+                minLines: 1,
+                maxLines: 4,
+                style: TextStyle(
+                  color: colors.text,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w400,
                 ),
-                child: TextField(
-                  controller: controller,
-                  focusNode: focusNode,
-                  enabled: enabled && !running,
-                  minLines: 1,
-                  maxLines: 4,
-                  style: TextStyle(
-                    color: colors.text,
-                    fontSize: 16,
+                decoration: InputDecoration(
+                  hintText: 'Ask anything... @files, \$skills, /commands',
+                  hintStyle: TextStyle(
+                    color: colors.textMuted.withValues(alpha: 0.72),
                     fontWeight: FontWeight.w400,
                   ),
-                  decoration: InputDecoration(
-                    hintText: 'Ask anything... @files, \$skills, /commands',
-                    hintStyle: TextStyle(
-                      color: colors.textMuted.withValues(alpha: 0.72),
-                      fontWeight: FontWeight.w400,
-                    ),
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    filled: false,
-                    contentPadding: const EdgeInsets.fromLTRB(14, 6, 14, 8),
-                  ),
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  filled: false,
+                  contentPadding: const EdgeInsets.fromLTRB(14, 6, 14, 8),
                 ),
               ),
               const SizedBox(height: 8),
@@ -2087,7 +2210,11 @@ class ComposerBar extends StatelessWidget {
                   Tooltip(
                     message: running ? '停止任务' : '发送消息',
                     child: SizedBox.square(
-                      dimension: 42,
+                      // Keep the primary action in the same visual rhythm as
+                      // the compact selector pills beside it. The hit target
+                      // remains easy to reach while the circular button no
+                      // longer dominates the composer row.
+                      dimension: 36,
                       child: FilledButton(
                         onPressed: running
                             ? onStop
@@ -2113,7 +2240,7 @@ class ComposerBar extends StatelessWidget {
                         ),
                         child: Icon(
                           running ? RecodexIcons.stop : RecodexIcons.arrowUp,
-                          size: running ? 20 : 26,
+                          size: running ? 18 : 22,
                         ),
                       ),
                     ),
@@ -2256,6 +2383,7 @@ class _ComposerMenuButton extends StatelessWidget {
       leadingIcon: icon,
       maxWidth: 168,
       compact: true,
+      showBorder: false,
       tooltip: '选择$label',
       onChanged: onChanged,
     );
@@ -2287,6 +2415,7 @@ class _PermissionModePill extends StatelessWidget {
           .toList(),
       leadingIcon: icon,
       warningWhen: (item) => item == '完全访问权限',
+      showBorder: false,
       tooltip: '选择权限模式',
       onChanged: onChanged,
     );
@@ -2487,6 +2616,34 @@ bool _isToolEvent(String kind) {
       normalized.contains('tool');
 }
 
+bool _isFileChangeEvent(String kind) {
+  final normalized = kind.trim().toLowerCase().replaceAll('-', '_');
+  return normalized == 'filechange' ||
+      normalized == 'file_change' ||
+      normalized == 'filechanged' ||
+      normalized == 'file_changed';
+}
+
+List<String> _fileChangePathList(String raw) {
+  final paths = <String>{};
+  for (final value in raw.split(RegExp(r'[\n,;]'))) {
+    var path = value.trim();
+    path = path.replaceFirst(RegExp(r'''^["']'''), '');
+    path = path.replaceFirst(RegExp(r'''["']$'''), '');
+    final normalized = path.toLowerCase();
+    if (path.isEmpty ||
+        normalized == 'filechange' ||
+        normalized == 'file_change' ||
+        normalized == 'updated' ||
+        normalized == 'modified' ||
+        normalized == 'changed') {
+      continue;
+    }
+    paths.add(path);
+  }
+  return paths.toList(growable: false);
+}
+
 bool _isDoneEvent(String kind) {
   final normalized = kind.toLowerCase();
   return normalized == 'done' ||
@@ -2499,7 +2656,27 @@ bool _shouldSeparateText(String kind) {
   return !normalized.contains('delta');
 }
 
-String? _elapsedLabel(List<SessionEvent> events) {
+String? _elapsedLabel(
+  List<SessionEvent> events, {
+  DateTime? startedAt,
+  bool active = false,
+}) {
+  int? measuredDurationMs;
+  for (final event in events) {
+    final durationMs = event.durationMs;
+    if (durationMs != null && durationMs >= 0) {
+      measuredDurationMs = durationMs;
+    }
+  }
+  if (active && startedAt != null) {
+    final elapsed = DateTime.now().difference(startedAt);
+    if (!elapsed.isNegative) return _formatElapsed(elapsed);
+  }
+
+  if (measuredDurationMs != null) {
+    return _formatElapsed(Duration(milliseconds: measuredDurationMs));
+  }
+
   final times = events
       .map((event) => event.time)
       .whereType<DateTime>()
@@ -2507,6 +2684,10 @@ String? _elapsedLabel(List<SessionEvent> events) {
   if (times.length < 2) return null;
   final elapsed = times.last.difference(times.first);
   if (elapsed.isNegative) return null;
+  return _formatElapsed(elapsed);
+}
+
+String _formatElapsed(Duration elapsed) {
   final seconds = elapsed.inSeconds;
   if (seconds < 1) return '少于 1 秒';
   final minutes = seconds ~/ 60;

@@ -25,100 +25,97 @@ class SecuritySettingsPage extends StatelessWidget {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: const LiquidPageAppBar(title: '数据与安全'),
-          body: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 620),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
-                children: [
-                  _SecurityHero(bridge: bridge),
-                  const SizedBox(height: 24),
-                  const SettingsSectionTitle(
-                    title: '凭证管理',
-                    subtitle: '私钥只保存在本机安全存储，不会上传到 Relay',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsGroup(
-                    children: [
-                      SettingsRow(
-                        icon: bridge.hasDeviceKey
-                            ? RecodexIcons.verified
-                            : RecodexIcons.shieldOff,
-                        title: '接入端私钥',
-                        subtitle: bridge.hasDeviceKey
-                            ? '已保存在安全存储'
-                            : '当前没有可用的接入端私钥',
-                        trailing: TextButton(
-                          onPressed: bridge.hasDeviceKey
-                              ? () => _confirmClearCredentials(context, bridge)
-                              : null,
-                          child: const Text('清除'),
-                        ),
-                      ),
-                      const SettingsDivider(),
-                      SettingsRow(
-                        icon: RecodexIcons.key,
-                        title: '当前公钥',
-                        subtitle: bridge.endpointPublicKey.value.isEmpty
-                            ? '未生成'
-                            : _shorten(bridge.endpointPublicKey.value),
-                        trailing: TextButton(
-                          onPressed: bridge.endpointPublicKey.value.isEmpty
-                              ? null
-                              : () => _copy(
-                                  context,
-                                  bridge.endpointPublicKey.value,
-                                  '公钥已复制',
-                                ),
-                          child: const Text('复制'),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  const SettingsSectionTitle(
-                    title: '配置数据',
-                    subtitle: '导出时会自动移除私钥、令牌等敏感字段',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsGroup(
-                    children: [
-                      SettingsRow(
-                        icon: RecodexIcons.fileText,
-                        title: '导出脱敏配置',
-                        subtitle: bridge.pairings.isEmpty
-                            ? '当前没有可导出的配对'
-                            : '${bridge.pairings.length} 个配对配置',
-                        showChevron: true,
-                        onTap: () => _showExport(context, bridge),
-                      ),
-                      const SettingsDivider(),
-                      SettingsRow(
-                        icon: RecodexIcons.shield,
-                        title: '敏感操作前确认',
-                        subtitle: '清除凭证等操作需要再次确认',
-                        trailing: Switch(
-                          value: preferences.confirmSensitiveActions.value,
-                          onChanged: preferences.setConfirmSensitiveActions,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  SettingsCard(
-                    padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-                    child: Text(
-                      '如果你怀疑连接令牌已经泄露，请先在 relay-web 撤销旧令牌，再清除本机凭证并重新配对。',
-                      style: TextStyle(
-                        color: context.recodexColors.textMuted,
-                        fontSize: 12,
-                        height: 1.5,
-                        fontWeight: FontWeight.w600,
+          body: SettingsPageContent(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
+              children: [
+                _SecurityHero(bridge: bridge),
+                const SizedBox(height: 24),
+                const SettingsSectionTitle(
+                  title: '凭证管理',
+                  subtitle: '私钥只保存在本机安全存储，不会上传到 Relay',
+                ),
+                const SizedBox(height: 10),
+                SettingsGroup(
+                  children: [
+                    SettingsRow(
+                      icon: bridge.hasDeviceKey
+                          ? RecodexIcons.verified
+                          : RecodexIcons.shieldOff,
+                      title: '接入端私钥',
+                      subtitle: bridge.hasDeviceKey
+                          ? '已保存在安全存储'
+                          : '当前没有可用的接入端私钥',
+                      trailing: TextButton(
+                        onPressed: bridge.hasDeviceKey
+                            ? () => _confirmClearCredentials(context, bridge)
+                            : null,
+                        child: const Text('清除'),
                       ),
                     ),
+                    const SettingsDivider(),
+                    SettingsRow(
+                      icon: RecodexIcons.key,
+                      title: '当前公钥',
+                      subtitle: bridge.endpointPublicKey.value.isEmpty
+                          ? '未生成'
+                          : _shorten(bridge.endpointPublicKey.value),
+                      trailing: TextButton(
+                        onPressed: bridge.endpointPublicKey.value.isEmpty
+                            ? null
+                            : () => _copy(
+                                context,
+                                bridge.endpointPublicKey.value,
+                                '公钥已复制',
+                              ),
+                        child: const Text('复制'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                const SettingsSectionTitle(
+                  title: '配置数据',
+                  subtitle: '导出时会自动移除私钥、令牌等敏感字段',
+                ),
+                const SizedBox(height: 10),
+                SettingsGroup(
+                  children: [
+                    SettingsRow(
+                      icon: RecodexIcons.fileText,
+                      title: '导出脱敏配置',
+                      subtitle: bridge.pairings.isEmpty
+                          ? '当前没有可导出的配对'
+                          : '${bridge.pairings.length} 个配对配置',
+                      showChevron: true,
+                      onTap: () => _showExport(context, bridge),
+                    ),
+                    const SettingsDivider(),
+                    SettingsRow(
+                      icon: RecodexIcons.shield,
+                      title: '敏感操作前确认',
+                      subtitle: '清除凭证等操作需要再次确认',
+                      trailing: CodexSwitch(
+                        value: preferences.confirmSensitiveActions.value,
+                        onChanged: preferences.setConfirmSensitiveActions,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                SettingsCard(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                  child: Text(
+                    '如果你怀疑连接令牌已经泄露，请先在 relay-web 撤销旧令牌，再清除本机凭证并重新配对。',
+                    style: TextStyle(
+                      color: context.recodexColors.textMuted,
+                      fontSize: 12,
+                      height: 1.5,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),

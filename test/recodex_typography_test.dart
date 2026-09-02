@@ -194,6 +194,216 @@ Distinguish instructions in attached documents from the user's request.
     await tester.pump(const Duration(milliseconds: 220));
     expect(find.text('检查回答区和侧边栏'), findsOneWidget);
   });
+
+  testWidgets(
+    'prefers the explicit Codex turn duration when item times are missing',
+    (tester) async {
+      Get.testMode = true;
+      Get.put<ThemeController>(_TestThemeController(), permanent: true);
+      addTearDown(Get.reset);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: RecodexTheme.dark,
+          home: Scaffold(
+            body: Padding(
+              padding: const EdgeInsets.all(16),
+              child: AssistantAnswerBlock(
+                events: const [
+                  SessionEvent(
+                    kind: 'assistant',
+                    text: '历史任务输出',
+                    durationMs: 285000,
+                  ),
+                ],
+                completed: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('用时 4分钟 45秒'), findsOneWidget);
+      expect(find.text('已完成'), findsNothing);
+    },
+  );
+
+  testWidgets('renders an explicit in-progress status from the task snapshot', (
+    tester,
+  ) async {
+    Get.testMode = true;
+    Get.put<ThemeController>(_TestThemeController(), permanent: true);
+    addTearDown(Get.reset);
+
+    final started = DateTime.now().subtract(const Duration(seconds: 3));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.dark,
+        home: Scaffold(
+          body: AssistantAnswerBlock(
+            events: [
+              SessionEvent(kind: 'assistant', text: '正在生成的回答', time: started),
+            ],
+            completed: false,
+            status: TimelineTaskStatus.processing,
+            startedAt: started,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('正在思考'), findsAtLeastNWidgets(1));
+    expect(find.text('已完成'), findsNothing);
+    expect(find.text('正在生成的回答'), findsOneWidget);
+  });
+
+  testWidgets('uses the official processed label for an explicit completion', (
+    tester,
+  ) async {
+    Get.testMode = true;
+    Get.put<ThemeController>(_TestThemeController(), permanent: true);
+    addTearDown(Get.reset);
+
+    final started = DateTime(2026, 9, 1, 10);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.dark,
+        home: Scaffold(
+          body: AssistantAnswerBlock(
+            events: [
+              SessionEvent(kind: 'assistant', text: '已完成处理。', time: started),
+              SessionEvent(
+                kind: 'done',
+                text: '完成',
+                time: started.add(const Duration(minutes: 7, seconds: 17)),
+                durationMs: 437000,
+              ),
+            ],
+            completed: true,
+            status: TimelineTaskStatus.completed,
+            startedAt: started,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('已处理 7分钟 17秒'), findsOneWidget);
+    expect(find.text('用时 7分钟 17秒'), findsNothing);
+  });
+
+  testWidgets('groups repeated file changes into one readable activity', (
+    tester,
+  ) async {
+    Get.testMode = true;
+    Get.put<ThemeController>(_TestThemeController(), permanent: true);
+    addTearDown(Get.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.dark,
+        home: Scaffold(
+          body: AssistantAnswerBlock(
+            events: const [
+              SessionEvent(kind: 'assistant', text: '已修改文件。'),
+              SessionEvent(kind: 'file_change', text: 'lib/a.dart'),
+              SessionEvent(kind: 'file_change', text: 'lib/a.dart'),
+              SessionEvent(kind: 'file_change', text: 'lib/b.dart'),
+            ],
+            completed: true,
+            status: TimelineTaskStatus.completed,
+            collapseReasoningByDefault: false,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('已修改文件'), findsOneWidget);
+    expect(find.text('2 个文件'), findsOneWidget);
+    expect(find.text('filechange'), findsNothing);
+  });
+
+  testWidgets('keeps an active status ahead of stale terminal events', (
+    tester,
+  ) async {
+    Get.testMode = true;
+    Get.put<ThemeController>(_TestThemeController(), permanent: true);
+    addTearDown(Get.reset);
+
+    final started = DateTime.now().subtract(const Duration(seconds: 6));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.dark,
+        home: Scaffold(
+          body: AssistantAnswerBlock(
+            events: [
+              SessionEvent(kind: 'interrupted', text: '已被用户中断。', time: started),
+              SessionEvent(
+                kind: 'done',
+                text: '旧 turn 已完成',
+                time: started.add(const Duration(seconds: 1)),
+                durationMs: 285000,
+              ),
+              SessionEvent(
+                kind: 'assistant',
+                text: '当前 turn 仍在生成',
+                time: started.add(const Duration(seconds: 2)),
+              ),
+            ],
+            completed: false,
+            status: TimelineTaskStatus.processing,
+            startedAt: started,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('正在思考'), findsAtLeastNWidgets(1));
+    expect(find.text('已中断'), findsNothing);
+    expect(find.text('用时 4分钟 45秒'), findsNothing);
+    expect(find.text('当前 turn 仍在生成'), findsOneWidget);
+  });
+
+  testWidgets('centers the bounded answer column in the available width', (
+    tester,
+  ) async {
+    Get.testMode = true;
+    Get.put<ThemeController>(_TestThemeController(), permanent: true);
+    addTearDown(Get.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.dark,
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.centerLeft,
+            child: SizedBox(
+              width: 700,
+              child: AssistantAnswerBlock(
+                events: const [SessionEvent(kind: 'assistant', text: '居中回答内容')],
+                completed: true,
+                maxWidth: 400,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final answerColumn = find.byWidgetPredicate(
+      (widget) =>
+          widget is ConstrainedBox &&
+          widget.constraints.maxWidth == 400 &&
+          widget.constraints.minWidth == 0,
+    );
+    expect(answerColumn, findsOneWidget);
+    expect(tester.getRect(answerColumn).center.dx, closeTo(350, 0.1));
+  });
 }
 
 class _TestThemeController extends ThemeController {

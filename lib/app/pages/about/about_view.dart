@@ -18,7 +18,9 @@ class AboutPage extends StatelessWidget {
         appBar: const LiquidPageAppBar(title: '关于'),
         body: Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 620),
+            constraints: const BoxConstraints(
+              maxWidth: SettingsPageContent.maxWidth,
+            ),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(24, 22, 24, 30),
               children: [

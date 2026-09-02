@@ -87,26 +87,7 @@ class TaskOutputDialog extends StatelessWidget {
               const SizedBox(height: 4),
               Expanded(
                 child: hasOutput
-                    ? Scrollbar(
-                        thumbVisibility: true,
-                        child: SingleChildScrollView(
-                          padding: const EdgeInsets.fromLTRB(2, 12, 8, 8),
-                          child: SelectableText(
-                            output,
-                            style: TextStyle(
-                              color: colors.text,
-                              fontSize: 13,
-                              height: 1.55,
-                              fontFamily: 'Menlo',
-                              fontFamilyFallback: const [
-                                'SFMono-Regular',
-                                'PingFang SC',
-                                'monospace',
-                              ],
-                            ),
-                          ),
-                        ),
-                      )
+                    ? _TaskOutputScrollView(output: output)
                     : Center(
                         child: Text(
                           '暂无任务输出',
@@ -118,6 +99,62 @@ class TaskOutputDialog extends StatelessWidget {
                         ),
                       ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Owns the scroll controller used by the output view and its scrollbar.
+/// Keeping the same controller on both widgets avoids Scrollbar falling back
+/// to the route's PrimaryScrollController before the dialog scroll view is
+/// attached during its first frame.
+class _TaskOutputScrollView extends StatefulWidget {
+  const _TaskOutputScrollView({required this.output});
+
+  final String output;
+
+  @override
+  State<_TaskOutputScrollView> createState() => _TaskOutputScrollViewState();
+}
+
+class _TaskOutputScrollViewState extends State<_TaskOutputScrollView> {
+  late final ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return Scrollbar(
+      controller: _scrollController,
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        controller: _scrollController,
+        padding: const EdgeInsets.fromLTRB(2, 12, 8, 8),
+        child: SelectableText(
+          widget.output,
+          style: TextStyle(
+            color: colors.text,
+            fontSize: 13,
+            height: 1.55,
+            fontFamily: 'Menlo',
+            fontFamilyFallback: const [
+              'SFMono-Regular',
+              'PingFang SC',
+              'monospace',
             ],
           ),
         ),

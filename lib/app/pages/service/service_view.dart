@@ -137,20 +137,22 @@ class ServicePage extends StatelessWidget {
   ) async {
     final profile = controller.activePairing;
     if (profile == null) return;
-    final error = await controller.testConnection(
-      inputBaseUrl: profile.baseUrl,
-      token: profile.pairingToken,
-      inputDeviceName: profile.deviceName,
-      inputSpaceId: profile.spaceId,
-      inputTargetDeviceId: profile.targetDeviceId,
-      inputEndpointId: profile.deviceId,
-      inputEndpointType: profile.endpointType,
-      inputDeviceKey: profile.deviceKey,
-    );
+    final error = controller.connected.value
+        ? await controller.checkCurrentConnection()
+        : await controller.testConnection(
+            inputBaseUrl: profile.baseUrl,
+            token: profile.pairingToken,
+            inputDeviceName: profile.deviceName,
+            inputSpaceId: profile.spaceId,
+            inputTargetDeviceId: profile.targetDeviceId,
+            inputEndpointId: profile.deviceId,
+            inputEndpointType: profile.endpointType,
+            inputDeviceKey: profile.deviceKey,
+          );
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(error ?? '连接测试成功，Relay 已接受当前配置。'),
+        content: Text(error ?? '连接测试成功，Relay 连接正常。'),
         duration: const Duration(seconds: 3),
       ),
     );

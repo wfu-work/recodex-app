@@ -23,153 +23,150 @@ class ThemeSettingsPage extends StatelessWidget {
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: const LiquidPageAppBar(title: '主题设置'),
-          body: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 620),
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
-                children: [
-                  _ThemePreview(preference: controller.preference.value),
-                  const SizedBox(height: 24),
-                  const _ThemeSectionTitle(
-                    title: '界面模式',
-                    subtitle: '控制系统使用浅色、深色或自动外观',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsCard(
-                    padding: EdgeInsets.zero,
-                    child: Column(
-                      children: [
-                        for (
-                          var index = 0;
-                          index < RecodexThemePreference.values.length;
-                          index += 1
-                        ) ...[
-                          _ThemeModeRow(
-                            preference: RecodexThemePreference.values[index],
-                            selected:
-                                controller.preference.value ==
-                                RecodexThemePreference.values[index],
-                            onTap: () => controller.setPreference(
-                              RecodexThemePreference.values[index],
-                            ),
-                          ),
-                          if (index != RecodexThemePreference.values.length - 1)
-                            const _ThemeDivider(),
-                        ],
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  const _ThemeSectionTitle(
-                    title: '主题色',
-                    subtitle: '统一使用黑白中性色，保持 Codex 风格',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsCard(
-                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-                    child: Row(
-                      children: [
-                        const _NeutralSwatch(
-                          color: Color(0xff171717),
-                          label: '黑色',
-                        ),
-                        const SizedBox(width: 24),
-                        const _NeutralSwatch(
-                          color: Color(0xfff5f5f5),
-                          label: '白色',
-                        ),
-                        const SizedBox(width: 18),
-                        Expanded(
-                          child: Text(
-                            '图标、按钮和文字统一使用黑白中性色',
-                            style: TextStyle(
-                              color: context.recodexColors.textMuted,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  const _ThemeSectionTitle(
-                    title: '界面细节',
-                    subtitle: '调整侧边栏、标题栏、动画和可读性增强选项',
-                  ),
-                  const SizedBox(height: 10),
-                  SettingsGroup(
+          body: SettingsPageContent(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(24, 22, 24, 34),
+              children: [
+                _ThemePreview(preference: controller.preference.value),
+                const SizedBox(height: 24),
+                const _ThemeSectionTitle(
+                  title: '界面模式',
+                  subtitle: '控制系统使用浅色、深色或自动外观',
+                ),
+                const SizedBox(height: 10),
+                SettingsCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
                     children: [
-                      _AppearanceSelectorRow(
-                        icon: RecodexIcons.menu,
-                        title: '侧边栏密度',
-                        subtitle: '舒适模式留白更多，紧凑模式显示更多项目和任务',
-                        value: preferences.compactSidebar.value
-                            ? 'compact'
-                            : 'comfortable',
-                        options: const [
-                          RecodexDropdownOption(
-                            value: 'comfortable',
-                            label: '舒适',
+                      for (
+                        var index = 0;
+                        index < RecodexThemePreference.values.length;
+                        index += 1
+                      ) ...[
+                        _ThemeModeRow(
+                          preference: RecodexThemePreference.values[index],
+                          selected:
+                              controller.preference.value ==
+                              RecodexThemePreference.values[index],
+                          onTap: () => controller.setPreference(
+                            RecodexThemePreference.values[index],
                           ),
-                          RecodexDropdownOption(value: 'compact', label: '紧凑'),
-                        ],
-                        onChanged: (value) =>
-                            preferences.setCompactSidebar(value == 'compact'),
-                      ),
-                      const SettingsDivider(),
-                      _AppearanceSelectorRow(
-                        icon: RecodexIcons.tune,
-                        title: '对话卡片圆角',
-                        subtitle: '统一调整消息、工具和文件结果卡片的圆角大小',
-                        value: '${preferences.answerCardRadius.value.round()}',
-                        options: const [
-                          RecodexDropdownOption(value: '10', label: '小 · 10'),
-                          RecodexDropdownOption(value: '18', label: '中 · 18'),
-                          RecodexDropdownOption(value: '24', label: '大 · 24'),
-                          RecodexDropdownOption(value: '32', label: '特大 · 32'),
-                        ],
-                        onChanged: (value) => preferences.setAnswerCardRadius(
-                          double.tryParse(value) ?? 24,
                         ),
+                        if (index != RecodexThemePreference.values.length - 1)
+                          const _ThemeDivider(),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const _ThemeSectionTitle(
+                  title: '主题色',
+                  subtitle: '统一使用黑白中性色，保持 Codex 风格',
+                ),
+                const SizedBox(height: 10),
+                SettingsCard(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                  child: Row(
+                    children: [
+                      const _NeutralSwatch(
+                        color: Color(0xff171717),
+                        label: '黑色',
                       ),
-                      const SettingsDivider(),
-                      SettingsToggleRow(
-                        icon: RecodexIcons.monitor,
-                        title: '显示顶部标题栏',
-                        subtitle: '显示当前任务名称和项目名称',
-                        value: preferences.showTopTitleBar.value,
-                        onChanged: preferences.setShowTopTitleBar,
+                      const SizedBox(width: 24),
+                      const _NeutralSwatch(
+                        color: Color(0xfff5f5f5),
+                        label: '白色',
                       ),
-                      const SettingsDivider(),
-                      SettingsToggleRow(
-                        icon: RecodexIcons.accountTree,
-                        title: '显示索引悬浮提示',
-                        subtitle: '鼠标悬停在对话索引短线上时显示问题预览',
-                        value: preferences.showIndexHoverPreview.value,
-                        onChanged: preferences.setShowIndexHoverPreview,
-                      ),
-                      const SettingsDivider(),
-                      SettingsToggleRow(
-                        icon: RecodexIcons.pause,
-                        title: '减少动画',
-                        subtitle: '停用页面过渡、输入框和索引的非必要动画',
-                        value: preferences.reduceAnimations.value,
-                        onChanged: preferences.setReduceAnimations,
-                      ),
-                      const SettingsDivider(),
-                      SettingsToggleRow(
-                        icon: RecodexIcons.contrast,
-                        title: '高对比度模式',
-                        subtitle: '提高文字、边框和背景之间的对比度',
-                        value: controller.highContrast.value,
-                        onChanged: controller.setHighContrast,
+                      const SizedBox(width: 18),
+                      Expanded(
+                        child: Text(
+                          '图标、按钮和文字统一使用黑白中性色',
+                          style: TextStyle(
+                            color: context.recodexColors.textMuted,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 24),
+                const _ThemeSectionTitle(
+                  title: '界面细节',
+                  subtitle: '调整侧边栏、标题栏、动画和可读性增强选项',
+                ),
+                const SizedBox(height: 10),
+                SettingsGroup(
+                  children: [
+                    _AppearanceSelectorRow(
+                      icon: RecodexIcons.menu,
+                      title: '侧边栏密度',
+                      subtitle: '舒适模式留白更多，紧凑模式显示更多项目和任务',
+                      value: preferences.compactSidebar.value
+                          ? 'compact'
+                          : 'comfortable',
+                      options: const [
+                        RecodexDropdownOption(
+                          value: 'comfortable',
+                          label: '舒适',
+                        ),
+                        RecodexDropdownOption(value: 'compact', label: '紧凑'),
+                      ],
+                      onChanged: (value) =>
+                          preferences.setCompactSidebar(value == 'compact'),
+                    ),
+                    const SettingsDivider(),
+                    _AppearanceSelectorRow(
+                      icon: RecodexIcons.tune,
+                      title: '对话卡片圆角',
+                      subtitle: '统一调整消息、工具和文件结果卡片的圆角大小',
+                      value: '${preferences.answerCardRadius.value.round()}',
+                      options: const [
+                        RecodexDropdownOption(value: '10', label: '小 · 10'),
+                        RecodexDropdownOption(value: '18', label: '中 · 18'),
+                        RecodexDropdownOption(value: '24', label: '大 · 24'),
+                        RecodexDropdownOption(value: '32', label: '特大 · 32'),
+                      ],
+                      onChanged: (value) => preferences.setAnswerCardRadius(
+                        double.tryParse(value) ?? 24,
+                      ),
+                    ),
+                    const SettingsDivider(),
+                    SettingsToggleRow(
+                      icon: RecodexIcons.monitor,
+                      title: '显示顶部标题栏',
+                      subtitle: '显示当前任务名称和项目名称',
+                      value: preferences.showTopTitleBar.value,
+                      onChanged: preferences.setShowTopTitleBar,
+                    ),
+                    const SettingsDivider(),
+                    SettingsToggleRow(
+                      icon: RecodexIcons.accountTree,
+                      title: '显示索引悬浮提示',
+                      subtitle: '鼠标悬停在对话索引短线上时显示问题预览',
+                      value: preferences.showIndexHoverPreview.value,
+                      onChanged: preferences.setShowIndexHoverPreview,
+                    ),
+                    const SettingsDivider(),
+                    SettingsToggleRow(
+                      icon: RecodexIcons.pause,
+                      title: '减少动画',
+                      subtitle: '停用页面过渡、输入框和索引的非必要动画',
+                      value: preferences.reduceAnimations.value,
+                      onChanged: preferences.setReduceAnimations,
+                    ),
+                    const SettingsDivider(),
+                    SettingsToggleRow(
+                      icon: RecodexIcons.contrast,
+                      title: '高对比度模式',
+                      subtitle: '提高文字、边框和背景之间的对比度',
+                      value: controller.highContrast.value,
+                      onChanged: controller.setHighContrast,
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ),
