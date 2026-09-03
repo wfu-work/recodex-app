@@ -42,6 +42,45 @@ void main() {
     expect(message.style?.height, 1.55);
   });
 
+  testWidgets('caps a long user request instead of filling a desktop pane', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    Get.testMode = true;
+    Get.put<ThemeController>(_TestThemeController(), permanent: true);
+    addTearDown(Get.reset);
+
+    const prompt =
+        '请将正在处理的任务状态与实时回答同步显示，并保留图片附件与文字内容的清晰层次。'
+        '这个问题足够长，用于验证消息气泡不会占满整个桌面内容区域。';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.dark,
+        home: const Scaffold(
+          body: SizedBox(
+            width: 1200,
+            child: AssistantBubble(
+              event: SessionEvent(kind: 'user', text: prompt),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final bubble = find.ancestor(
+      of: find.text(prompt),
+      matching: find.byType(DecoratedBox),
+    );
+    expect(bubble, findsOneWidget);
+    expect(tester.getSize(bubble).width, 760);
+    expect(tester.getTopLeft(bubble).dx, 440);
+  });
+
   testWidgets(
     'shows readable request text without clipboard envelope metadata',
     (tester) async {

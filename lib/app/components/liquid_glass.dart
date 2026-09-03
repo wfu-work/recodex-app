@@ -51,6 +51,8 @@ class LiquidIconButton extends StatelessWidget {
     this.onPressed,
     this.tooltip,
     this.size = 36,
+    this.iconSize,
+    this.color,
     super.key,
   });
 
@@ -58,6 +60,8 @@ class LiquidIconButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final String? tooltip;
   final double size;
+  final double? iconSize;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -68,9 +72,11 @@ class LiquidIconButton extends StatelessWidget {
         onPressed: onPressed,
         padding: EdgeInsets.zero,
         constraints: BoxConstraints.tightFor(width: size, height: size),
-        iconSize: size * 0.52,
+        iconSize: iconSize ?? size * 0.52,
         visualDensity: VisualDensity.standard,
-        icon: Icon(icon, color: colors.icon),
+        color: color ?? colors.icon,
+        disabledColor: (color ?? colors.icon).withValues(alpha: 0.36),
+        icon: Icon(icon),
       ),
     );
   }

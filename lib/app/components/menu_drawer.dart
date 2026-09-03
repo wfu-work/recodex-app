@@ -268,7 +268,9 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                               icon: RecodexIcons.sync,
                               tooltip: '刷新项目',
                               onPressed: widget.onRefreshProjects,
-                              size: 32,
+                              size: 36,
+                              iconSize: 20,
+                              color: colors.textMuted,
                             ),
                           ],
                         ),
@@ -1031,9 +1033,10 @@ class _DockIconButton extends StatelessWidget {
       child: IconButton(
         onPressed: onTap,
         padding: EdgeInsets.zero,
-        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
-        iconSize: 22,
-        icon: Icon(icon, color: colors.icon),
+        constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+        iconSize: 20,
+        color: colors.textMuted,
+        icon: Icon(icon, color: colors.textMuted),
       ),
     );
   }

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
@@ -110,6 +112,10 @@ class _MainPageState extends State<MainPage> {
       final answerCardRadius =
           settingsPreferences?.answerCardRadius.value ?? 24;
       final answerMaxWidth = settingsPreferences?.answerMaxWidth.value ?? 960;
+      // A prompt should visually read as a distinct request, not as a
+      // full-width answer panel. It remains tied to the reader-width setting
+      // while capping the desktop bubble at a comfortably scannable measure.
+      final userMessageMaxWidth = math.min(answerMaxWidth * 0.8, 760.0);
       final answerHorizontalPadding =
           settingsPreferences?.answerHorizontalPadding.value ?? 16;
       if (_lastAutoScrollEnabled != autoScrollToLatest) {
@@ -356,6 +362,8 @@ class _MainPageState extends State<MainPage> {
                                       child: AssistantBubble(
                                         event: entry.userEvent!,
                                         cardRadius: answerCardRadius,
+                                        userMessageMaxWidth:
+                                            userMessageMaxWidth,
                                       ),
                                     );
                                   }
@@ -772,6 +780,10 @@ class _MainPageState extends State<MainPage> {
 
   void _sendPrompt() {
     if (controller.timelineStatus.value.isActive) return;
+    if (controller.timelineLoading.value) {
+      controller.lastError.value = '任务对话仍在加载，请稍候再发送。';
+      return;
+    }
     final prompt = _promptController.text.trim();
     if (prompt.isEmpty) return;
     controller.startSession(prompt);

@@ -134,6 +134,10 @@ class BridgeController extends GetxController {
   // outlive a task selection (or a forced refresh) on the Relay, so its
   // response must never be allowed to hydrate a newer timeline.
   int _timelineReadGeneration = 0;
+  // Older Relay connectors do not know the metadata-only status command. We
+  // remember that capability failure once and keep the existing list/read
+  // fallback instead of surfacing an error every two-second poll.
+  bool _threadStatusUnsupported = false;
   bool _sessionRestoreAttempted = false;
   final _sessionLifecycles = <String, _SessionLifecycle>{};
   final _notifiedTerminalSessions = <String>{};
@@ -374,6 +378,7 @@ class BridgeController extends GetxController {
     _requestedEventsSessionId = null;
     _requestedEventsPrompt = null;
     _pendingCommands.clear();
+    _threadStatusUnsupported = false;
     _seenIncomingMessageIds.clear();
     _sessionLifecycles.clear();
     _notifiedTerminalSessions.clear();
@@ -621,7 +626,7 @@ class BridgeController extends GetxController {
         endpointType: nextEndpointType,
         deviceKey: encodedKey,
       )) {
-        return checkCurrentConnection();
+        return await checkCurrentConnection();
       }
 
       final keyPair = await RelayProtocol.keyPairFromSeed(
@@ -1039,6 +1044,39 @@ class BridgeController extends GetxController {
     if (workspace == null) return;
     final trimmedPrompt = prompt.trim();
     if (trimmedPrompt.isEmpty) return;
+
+    // The composer is shared by both the "new conversation" state and an
+    // already selected task.  A selected task must keep its identity: the
+    // App Server creates a new thread only for an explicit new-conversation
+    // action.  Clearing selectedSessionId here used to make every follow-up
+    // message look like a fresh task and was the reason phone messages were
+    // missing from the task open on the desktop.
+    final selectedId = selectedSessionId.value?.trim() ?? '';
+    if (selectedId.isNotEmpty && !_pendingSessionStart) {
+      events.add(SessionEvent(kind: 'user', text: trimmedPrompt));
+      _bumpTimelineRevision();
+      currentSessionId.value = selectedId;
+      _currentTurnId = null;
+      _lastTerminalTurnId = null;
+      _currentTurnStartedAt = null;
+      _setTimelineStatus(TimelineTaskStatus.processing);
+      _interruptRequested = false;
+      _pendingPrompt = null;
+      _sessionRestoreAttempted = true;
+      _markSessionRunningForNotification(selectedId);
+      _appendSessionEvent(
+        const SessionEvent(kind: 'running', text: '正在继续 Codex 任务...'),
+      );
+      if (!_sendTurnStart(trimmedPrompt, threadId: selectedId)) {
+        _finishCurrentSession(
+          status: TaskNotificationStatus.failed,
+          sessionId: selectedId,
+          message: 'Relay 连接已断开，消息未发送。请连接后重试。',
+        );
+      }
+      return;
+    }
+
     events.add(SessionEvent(kind: 'user', text: trimmedPrompt));
     _bumpTimelineRevision();
     currentSessionId.value = null;
@@ -1052,9 +1090,29 @@ class BridgeController extends GetxController {
     timelineTurnStartedAt.value = null;
     selectedSessionId.value = null;
     _sessionRestoreAttempted = true;
-    _sendCommand('thread.create', {
+    final sent = _sendCommand('thread.create', {
       if (workspace.path.trim().isNotEmpty) 'cwd': workspace.path,
     });
+    if (!sent) {
+      _pendingSessionStart = false;
+      _pendingPrompt = null;
+      _finishCurrentSession(
+        status: TaskNotificationStatus.failed,
+        message: 'Relay 连接已断开，消息未发送。请连接后重试。',
+      );
+    }
+  }
+
+  bool _sendTurnStart(String prompt, {required String threadId}) {
+    final context = composerContext.value;
+    return _sendCommand('turn.start', {
+      'text': prompt,
+      if ((selectedWorkspace.value?.path ?? '').trim().isNotEmpty)
+        'cwd': selectedWorkspace.value!.path,
+      if (context.model.trim().isNotEmpty) 'model': context.model,
+      if (context.reasoningEfforts.contains(context.reasoningEffort))
+        'effort': context.reasoningEffort,
+    }, threadId: threadId);
   }
 
   void setComposerModel(String model) {
@@ -1366,6 +1424,9 @@ class BridgeController extends GetxController {
     connected.value = true;
     connectionLabel.value = 'online';
     _hadOnlineConnection = true;
+    // Re-probe optional connector capabilities after a reconnect; the host
+    // may have been upgraded while this app stayed open.
+    _threadStatusUnsupported = false;
     lastError.value = '';
     if (shouldNotifyReconnect &&
         Get.isRegistered<TaskNotificationController>()) {
@@ -1434,13 +1495,24 @@ class BridgeController extends GetxController {
           ? Map<String, dynamic>.from(error)
           : const <String, dynamic>{};
       final text = errorMap['message'] as String? ?? '远程命令执行失败';
-      if (pending?.refreshToken != null) {
+      final unsupportedThreadStatus =
+          pending?.kind == 'thread.status' &&
+          (errorMap['code'] == 'COMMAND_NOT_ALLOWED' ||
+              errorMap['code'] == 'COMMAND_NOT_SUPPORTED' ||
+              errorMap['code'] == 'UNKNOWN_COMMAND');
+      if (pending?.refreshToken != null && !unsupportedThreadStatus) {
         _finishTimelineRefresh(
           error: '任务刷新失败：$text',
           token: pending!.refreshToken,
         );
       }
-      if (pending?.kind == 'thread.read') {
+      if (unsupportedThreadStatus) {
+        // The status heartbeat was added after the first Relay protocol
+        // release. Older connectors continue to work through thread.list and
+        // thread.read; do not turn this optional capability miss into a
+        // persistent UI error.
+        _threadStatusUnsupported = true;
+      } else if (pending?.kind == 'thread.read') {
         _failTimelineLoad('任务对话加载失败：$text');
       } else {
         lastError.value = '${errorMap['code'] ?? 'remote.error'}：$text';
@@ -1482,6 +1554,8 @@ class BridgeController extends GetxController {
           result,
           readGeneration: pending?.timelineReadGeneration,
         );
+      case 'thread.status':
+        _handleThreadStatusResult(result, threadId: pending?.threadId);
       case 'turn.start':
         final startThreadId = pending?.threadId?.trim();
         if (startThreadId != null &&
@@ -1793,16 +1867,43 @@ class BridgeController extends GetxController {
       return 'running';
     }
     final status = thread['status'];
-    if (status is String) return _normalizeThreadStatus(status);
-    if (status is Map) {
-      return _normalizeThreadStatus(
-        _readString(status['type']) ??
-            _readString(status['state']) ??
-            _readString(status['status']) ??
-            'done',
-      );
+    final rawStatus = status is Map
+        ? (_readString(status['type']) ??
+              _readString(status['state']) ??
+              _readString(status['status']))
+        : _readString(status);
+    final normalizedStatus = rawStatus == null
+        ? null
+        : _normalizeThreadStatus(rawStatus);
+    final flags = _threadActiveFlags(thread);
+    if (_hasActiveThreadFlag(flags)) return 'running';
+    final currentTurn =
+        _asMap(thread['turn']) ??
+        _asMap(thread['currentTurn']) ??
+        _asMap(thread['current_turn']);
+    if (currentTurn != null) {
+      final turnStatus = _timelineStatusFromTurn(currentTurn);
+      if (turnStatus.isActive) return 'running';
+      // `notLoaded` describes the thread history payload, not the lifecycle
+      // of a turn that is present in the same snapshot.  When a turn carries
+      // an explicit terminal status/timestamp, prefer that evidence so a
+      // completed task does not remain stuck in the loading state.
+      if (turnStatus.isTerminal) {
+        return _sessionStatusForTimeline(turnStatus);
+      }
     }
-    return 'done';
+    final turns = _asList(thread['turns']);
+    if (turns.isNotEmpty) {
+      final latestTurn = _latestTurnFromSnapshot(turns);
+      if (latestTurn != null) {
+        final turnStatus = _timelineStatusFromTurn(latestTurn);
+        if (turnStatus.isActive) return 'running';
+        if (turnStatus.isTerminal) {
+          return _sessionStatusForTimeline(turnStatus);
+        }
+      }
+    }
+    return normalizedStatus?.isNotEmpty == true ? normalizedStatus! : 'done';
   }
 
   String _normalizeThreadStatus(String value) {
@@ -1818,7 +1919,11 @@ class BridgeController extends GetxController {
       'pending' ||
       'executing' ||
       'working' => 'running',
-      'idle' || 'notloaded' => 'done',
+      // `notLoaded` only describes the history payload, not the lifecycle.
+      // Treating it as done is what made a still-running task look terminal
+      // after a catalog refresh.
+      'idle' => 'done',
+      'notloaded' => 'unknown',
       'systemerror' || 'system_error' => 'error',
       'failed' => 'error',
       'aborted' || 'cancelled' || 'canceled' => 'interrupted',
@@ -1939,6 +2044,26 @@ class BridgeController extends GetxController {
         .toList();
   }
 
+  bool _hasActiveThreadFlag(Iterable<String> flags) {
+    for (final raw in flags) {
+      final flag = raw.toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+      if (flag == 'waitingonapproval' ||
+          flag == 'waiting_on_approval' ||
+          flag == 'waitingonuserinput' ||
+          flag == 'waiting_on_user_input' ||
+          flag == 'active' ||
+          flag == 'running' ||
+          flag == 'processing' ||
+          flag == 'inprogress' ||
+          flag == 'in_progress' ||
+          flag == 'executing' ||
+          flag == 'working') {
+        return true;
+      }
+    }
+    return false;
+  }
+
   TimelineTaskStatus _timelineStatusFromThread(Map<String, dynamic> thread) {
     // A few relay/app-server versions mirror the active state as a boolean
     // while the structured `status` field is still catching up.  Treat that
@@ -1956,6 +2081,17 @@ class BridgeController extends GetxController {
               value.toLowerCase().replaceAll('-', '_').replaceAll(' ', '_'),
         )
         .toSet();
+    if (_hasActiveThreadFlag(flags)) {
+      if (flags.contains('waitingonapproval') ||
+          flags.contains('waiting_on_approval')) {
+        return TimelineTaskStatus.waitingApproval;
+      }
+      if (flags.contains('waitingonuserinput') ||
+          flags.contains('waiting_on_user_input')) {
+        return TimelineTaskStatus.waitingUserInput;
+      }
+      return TimelineTaskStatus.processing;
+    }
     if (flags.contains('waitingonapproval') ||
         flags.contains('waiting_on_approval')) {
       return TimelineTaskStatus.waitingApproval;
@@ -1965,25 +2101,47 @@ class BridgeController extends GetxController {
       return TimelineTaskStatus.waitingUserInput;
     }
     final status = thread['status'];
-    if (status is Map) {
-      final parsed = _timelineStatusFromValue(
-        _readString(status['type']) ??
-            _readString(status['state']) ??
-            _readString(status['status']),
-      );
-      if (parsed != TimelineTaskStatus.unknown) return parsed;
-    } else {
-      final parsed = _timelineStatusFromValue(status);
-      if (parsed != TimelineTaskStatus.unknown) return parsed;
-    }
+    final rawStatus = status is Map
+        ? (_readString(status['type']) ??
+              _readString(status['state']) ??
+              _readString(status['status']))
+        : _readString(status);
+    final parsedStatus = _timelineStatusFromValue(rawStatus);
+    final statusIsNotLoaded =
+        rawStatus?.trim().toLowerCase().replaceAll('_', '') == 'notloaded';
     // Older snapshots may expose only a current turn object.  It is still a
     // valid lifecycle source and, importantly, understands `inProgress`.
     final currentTurn =
         _asMap(thread['turn']) ??
         _asMap(thread['currentTurn']) ??
         _asMap(thread['current_turn']);
-    if (currentTurn != null) return _timelineStatusFromTurn(currentTurn);
-    return TimelineTaskStatus.unknown;
+    if (currentTurn != null) {
+      final turnStatus = _timelineStatusFromTurn(currentTurn);
+      // A current in-progress turn outranks a stale thread-level idle or
+      // interrupted value while the server is still catching up.
+      // A terminal turn is also authoritative when the thread-level status is
+      // `notLoaded`: that value only says that history metadata was not loaded
+      // by the server, not that the turn is still running.
+      if (turnStatus.isActive ||
+          turnStatus.isTerminal ||
+          (!statusIsNotLoaded && parsedStatus == TimelineTaskStatus.unknown)) {
+        return turnStatus;
+      }
+    }
+    final turns = _asList(thread['turns']);
+    if (turns.isNotEmpty) {
+      final latestTurn = _latestTurnFromSnapshot(turns);
+      if (latestTurn != null) {
+        final turnStatus = _timelineStatusFromTurn(latestTurn);
+        if (turnStatus.isActive ||
+            turnStatus.isTerminal ||
+            (!statusIsNotLoaded &&
+                parsedStatus == TimelineTaskStatus.unknown)) {
+          return turnStatus;
+        }
+      }
+    }
+    return parsedStatus;
   }
 
   bool _shouldIgnoreTerminalLifecycle({
@@ -2204,16 +2362,154 @@ class BridgeController extends GetxController {
     final prompt = _pendingPrompt;
     _pendingPrompt = null;
     if (prompt != null && prompt.isNotEmpty) {
-      final context = composerContext.value;
-      _sendCommand('turn.start', {
-        'text': prompt,
-        if ((selectedWorkspace.value?.path ?? '').trim().isNotEmpty)
-          'cwd': selectedWorkspace.value!.path,
-        if (context.model.trim().isNotEmpty) 'model': context.model,
-        if (context.reasoningEfforts.contains(context.reasoningEffort))
-          'effort': context.reasoningEffort,
-      }, threadId: record.id);
+      _sendTurnStart(prompt, threadId: record.id);
     }
+  }
+
+  /// Applies the metadata-only status heartbeat for the selected task. This
+  /// is deliberately separate from thread.read: a status response is small
+  /// enough to poll even for completed threads, while a full read is only
+  /// requested once the heartbeat proves that a turn is active (or when the
+  /// selected task still needs hydration).
+  void _handleThreadStatusResult(Object? value, {String? threadId}) {
+    final map = _asMap(value);
+    final thread = _asMap(map?['thread']) ?? map;
+    if (thread == null) return;
+    final id =
+        _readString(thread['id']) ??
+        _readString(thread['threadId']) ??
+        _readString(thread['thread_id']) ??
+        threadId?.trim();
+    if (id == null || id.isEmpty) return;
+
+    final status = _timelineStatusFromThread(thread);
+    if (status == TimelineTaskStatus.unknown) return;
+
+    // A status-only response can omit metadata on older servers. Preserve the
+    // existing sidebar row and update only its lifecycle value in that case.
+    final sessionIndex = sessions.indexWhere(
+      (session) => session.id.trim() == id,
+    );
+    final sessionStatus = _sessionStatusForTimeline(status);
+    if (sessionIndex >= 0) {
+      final previous = sessions[sessionIndex];
+      if (previous.status != sessionStatus) {
+        sessions[sessionIndex] = previous.copyWith(status: sessionStatus);
+      }
+    } else {
+      final parsed = _sessionFromThread(value);
+      if (parsed != null) _upsertSession(parsed);
+    }
+
+    final selectedId = selectedSessionId.value?.trim();
+    if (selectedId != id) return;
+
+    if (status.isActive) {
+      currentSessionId.value = id;
+      _markSessionRunningForNotification(id);
+      final startedAt =
+          _currentTurnStartedAt ??
+          timelineTurnStartedAt.value ??
+          DateTime.now();
+      _currentTurnStartedAt = startedAt;
+      _setTimelineStatus(
+        status,
+        startedAt: startedAt,
+        activeFlags: _threadActiveFlags(thread),
+      );
+      if (_requestedEventsSessionId != id) {
+        _requestedEventsSessionId = id;
+        for (final session in sessions) {
+          if (session.id.trim() == id) {
+            _requestedEventsPrompt = session.prompt;
+            break;
+          }
+        }
+      }
+      if (!timelineLoading.value && events.isEmpty) _beginTimelineLoad(id);
+      // Do not force this read: an in-flight hydration/read response is still
+      // useful and the command coalescer will keep only one request per task.
+      _sendCommand('thread.read', {}, threadId: id);
+      if (events.isEmpty || events.last.kind != 'running') {
+        _appendSessionEvent(SessionEvent(kind: 'running', text: status.label));
+      }
+      return;
+    }
+
+    // The host's status endpoint is authoritative for terminal state. Apply
+    // it even when a late `turn.interrupted` event previously painted the
+    // selected task incorrectly; the subsequent read merges the final answer
+    // and its duration back into the visible timeline.
+    final previousStatus = timelineStatus.value;
+    final statusChanged = previousStatus != status;
+    final lifecycle = _sessionLifecycles[id];
+    final wasLocallyRunning =
+        previousStatus.isActive || lifecycle?.visibleRunning == true;
+    _markSessionTerminal(id);
+    _setTimelineStatus(status, activeFlags: _threadActiveFlags(thread));
+    final currentTurn =
+        _asMap(thread['turn']) ??
+        _asMap(thread['currentTurn']) ??
+        _asMap(thread['current_turn']);
+    final terminalTurnId = currentTurn == null
+        ? null
+        : _turnIdFromTurn(currentTurn);
+    if (terminalTurnId != null && terminalTurnId.isNotEmpty) {
+      _currentTurnId = terminalTurnId;
+      _lastTerminalTurnId = terminalTurnId;
+    }
+    if (currentSessionId.value?.trim() == id) {
+      currentSessionId.value = null;
+    }
+    if (wasLocallyRunning) {
+      SessionRecord? session;
+      for (final candidate in sessions) {
+        if (candidate.id.trim() == id) {
+          session = candidate;
+          break;
+        }
+      }
+      unawaited(
+        _notifySessionFinishedOnce(
+          status: _notificationStatusForTimeline(status),
+          sessionId: id,
+          notificationKey: session == null
+              ? id
+              : _notificationKeyForSession(session),
+          workspaceName: session == null
+              ? null
+              : _workspaceNameForSession(session.workspace),
+          prompt: session?.prompt,
+        ),
+      );
+    }
+    if (statusChanged || _requestedEventsSessionId != id || events.isEmpty) {
+      _requestedEventsSessionId = id;
+      _beginTimelineLoad(id);
+      _sendCommand('thread.read', {}, threadId: id);
+    }
+  }
+
+  String _sessionStatusForTimeline(TimelineTaskStatus status) {
+    return switch (status) {
+      TimelineTaskStatus.processing ||
+      TimelineTaskStatus.waitingApproval ||
+      TimelineTaskStatus.waitingUserInput => 'running',
+      TimelineTaskStatus.failed => 'error',
+      TimelineTaskStatus.interrupted => 'interrupted',
+      TimelineTaskStatus.completed => 'completed',
+      _ => 'unknown',
+    };
+  }
+
+  TaskNotificationStatus _notificationStatusForTimeline(
+    TimelineTaskStatus status,
+  ) {
+    return switch (status) {
+      TimelineTaskStatus.failed => TaskNotificationStatus.failed,
+      TimelineTaskStatus.interrupted => TaskNotificationStatus.interrupted,
+      _ => TaskNotificationStatus.completed,
+    };
   }
 
   void _handleThreadReadResult(Object? value, {int? readGeneration}) {
@@ -2485,13 +2781,27 @@ class BridgeController extends GetxController {
       final candidateTime = recency(candidate);
       final candidateIsActive = status.isActive;
       final latestIsActive = latestStatus.isActive;
+      final candidateId = _turnIdFromTurn(candidate);
+      final latestId = latest == null ? null : _turnIdFromTurn(latest);
+      final noTimestamps = candidateTime == null && latestTime == null;
+      // Recent App Server builds include lifecycle timestamps, but older
+      // paginated snapshots may omit them. Turn ids are ULID-like and sort in
+      // creation order; when even those are unavailable, retain the server's
+      // array order (the connector requests ascending turns).
+      final newerWithoutTimestamp = noTimestamps
+          ? candidateId != null && latestId != null
+                ? candidateId.compareTo(latestId) > 0
+                : true
+          : false;
       final shouldReplace =
           latest == null ||
           (candidateIsActive && !latestIsActive) ||
           (candidateIsActive == latestIsActive &&
-              (latestTime == null ||
-                  (candidateTime != null &&
-                      candidateTime.isAfter(latestTime))));
+              (noTimestamps
+                  ? newerWithoutTimestamp
+                  : latestTime == null ||
+                        (candidateTime != null &&
+                            candidateTime.isAfter(latestTime))));
       if (shouldReplace) {
         latest = candidate;
         latestStatus = status;
@@ -3285,7 +3595,9 @@ class BridgeController extends GetxController {
   }
 
   bool _coalescesPendingCommand(String type) {
-    return type == 'thread.list' || type == 'thread.read';
+    return type == 'thread.list' ||
+        type == 'thread.read' ||
+        type == 'thread.status';
   }
 
   bool _isTransientSyncError(String message) {
@@ -3533,10 +3845,14 @@ class BridgeController extends GetxController {
   }
 
   TokenUsage? _extractTokenUsage(Map<String, dynamic> map) {
+    final nestedTokenUsage =
+        _asMap(map['tokenUsage']) ?? _asMap(map['token_usage']);
     final candidates = <Object?>[
       map['usage'],
       map['tokenUsage'],
       map['token_usage'],
+      nestedTokenUsage?['total'],
+      nestedTokenUsage?['last'],
       map['tokens'],
       map,
     ];
@@ -3763,6 +4079,20 @@ class BridgeController extends GetxController {
       }
       return;
     }
+
+    // Always poll the compact status for the selected task. The catalog may
+    // briefly expose `notLoaded`/an older terminal row while the host is
+    // already processing a new turn, and a full thread.read is too expensive
+    // to use as that heartbeat for large histories.
+    final statusSent = !_threadStatusUnsupported
+        ? _sendCommand(
+            'thread.status',
+            {},
+            threadId: selectedId,
+            force: force,
+            refreshToken: refreshToken,
+          )
+        : false;
     final selectedIsRunning = sessions.any(
       (session) => session.id.trim() == selectedId && session.isRunning,
     );
@@ -3794,7 +4124,7 @@ class BridgeController extends GetxController {
       force: force,
       refreshToken: refreshToken,
     );
-    if (force && !listSent && !readSent) {
+    if (force && !listSent && !readSent && !statusSent) {
       _finishTimelineRefresh(
         error: '任务刷新失败：当前 Relay 连接不可用，请重试。',
         token: refreshToken,

@@ -11,10 +11,16 @@ import '../theme/recodex_theme.dart';
 import 'recodex_dropdown.dart';
 
 class AssistantBubble extends StatelessWidget {
-  const AssistantBubble({required this.event, this.cardRadius = 24, super.key});
+  const AssistantBubble({
+    required this.event,
+    this.cardRadius = 24,
+    this.userMessageMaxWidth = 760,
+    super.key,
+  });
 
   final SessionEvent event;
   final double cardRadius;
+  final double userMessageMaxWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -37,6 +43,7 @@ class AssistantBubble extends StatelessWidget {
         attachments: imageAttachments,
         fontScale: fontScale,
         cardRadius: cardRadius,
+        maxWidth: userMessageMaxWidth,
       );
     }
 
@@ -91,69 +98,85 @@ class _UserMessageContent extends StatelessWidget {
     required this.attachments,
     required this.fontScale,
     required this.cardRadius,
+    required this.maxWidth,
   });
 
   final String text;
   final List<EventAttachment> attachments;
   final double fontScale;
   final double cardRadius;
+  final double maxWidth;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    final maxWidth = MediaQuery.sizeOf(context).width * 0.9;
-    return Align(
-      alignment: Alignment.centerRight,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (attachments.isNotEmpty)
-              _UserImageStrip(attachments: attachments),
-            if (attachments.isNotEmpty && text.isNotEmpty)
-              const SizedBox(height: 8),
-            if (text.isNotEmpty)
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: colors.userBubble,
-                  borderRadius: BorderRadius.circular(
-                    _conversationCardRadius(cardRadius),
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 9,
-                  ),
-                  child: SelectableText(
-                    text,
-                    style: TextStyle(
-                      fontSize: _scaledFontSize(16, fontScale),
-                      height: 1.55,
-                      color: colors.text,
-                      fontWeight: FontWeight.w400,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // The conversation pane can be much wider than its readable content
+        // column on desktop. Do not use the window width here: long prompts
+        // should remain recognizably separate from the assistant answer,
+        // instead of turning into a full-width horizontal band.
+        final availableWidth = constraints.maxWidth.isFinite
+            ? constraints.maxWidth
+            : MediaQuery.sizeOf(context).width;
+        final effectiveMaxWidth = math.min(maxWidth, availableWidth);
+        return Align(
+          alignment: Alignment.centerRight,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: effectiveMaxWidth),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (attachments.isNotEmpty)
+                  _UserImageStrip(attachments: attachments),
+                if (attachments.isNotEmpty && text.isNotEmpty)
+                  const SizedBox(height: 8),
+                if (text.isNotEmpty)
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colors.userBubble,
+                      borderRadius: BorderRadius.circular(
+                        _conversationCardRadius(cardRadius),
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 9,
+                      ),
+                      child: SelectableText(
+                        text,
+                        style: TextStyle(
+                          fontSize: _scaledFontSize(16, fontScale),
+                          height: 1.55,
+                          color: colors.text,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
-            if (text.isEmpty && attachments.isEmpty)
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: colors.userBubble,
-                  borderRadius: BorderRadius.circular(
-                    _conversationCardRadius(cardRadius),
+                if (text.isEmpty && attachments.isEmpty)
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colors.userBubble,
+                      borderRadius: BorderRadius.circular(
+                        _conversationCardRadius(cardRadius),
+                      ),
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 9,
+                      ),
+                      child: SelectableText('暂无输出'),
+                    ),
                   ),
-                ),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                  child: SelectableText('暂无输出'),
-                ),
-              ),
-          ],
-        ),
-      ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
