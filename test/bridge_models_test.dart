@@ -113,6 +113,60 @@ void main() {
     expect(record.isRunning, isTrue);
   });
 
+  test('SessionRecord parses the official recency and project fields', () {
+    final record = SessionRecord.fromJson({
+      'id': 'thread-official',
+      'projectId': 'project-1',
+      'recencyAt': '2026-09-04T01:00:00Z',
+      'updatedAt': '2026-09-04T00:00:00Z',
+    });
+
+    expect(record.projectId, 'project-1');
+    expect(record.recencyAtDate, DateTime.parse('2026-09-04T01:00:00Z'));
+  });
+
+  test('SessionRecord ordering prefers recency and has deterministic ties', () {
+    final olderActivity = SessionRecord.fromJson({
+      'id': 'thread-z',
+      'recencyAt': '2026-09-04T01:00:00Z',
+      'updatedAt': '2026-09-04T04:00:00Z',
+      'createdAt': '2026-09-01T00:00:00Z',
+    });
+    final newerActivity = SessionRecord.fromJson({
+      'id': 'thread-a',
+      'recencyAt': '2026-09-04T02:00:00Z',
+      'updatedAt': '2026-09-04T03:00:00Z',
+      'createdAt': '2026-09-01T00:00:00Z',
+    });
+    expect(compareSessionRecords(newerActivity, olderActivity), lessThan(0));
+    final equalLeft = olderActivity.copyWith(
+      id: 'thread-b',
+      updatedAt: '2026-09-04T01:00:00Z',
+    );
+    final equalRight = olderActivity.copyWith(
+      id: 'thread-a',
+      updatedAt: '2026-09-04T01:00:00Z',
+    );
+    expect(compareSessionRecords(equalLeft, equalRight), lessThan(0));
+  });
+
+  test('WorkspaceInfo preserves official project identity and roots', () {
+    final workspace = WorkspaceInfo.fromJson({
+      'id': 'project-1',
+      'name': 'recodex',
+      'position': 3,
+      'roots': [
+        {'path': '/work/recodex'},
+        {'path': '/work/shared'},
+      ],
+    });
+
+    expect(workspace.id, 'project-1');
+    expect(workspace.position, 3);
+    expect(workspace.path, '/work/recodex');
+    expect(workspace.roots, ['/work/recodex', '/work/shared']);
+  });
+
   test('TimelineTaskStatus distinguishes active and terminal states', () {
     expect(TimelineTaskStatus.processing.isActive, isTrue);
     expect(TimelineTaskStatus.waitingApproval.isActive, isTrue);
@@ -120,6 +174,63 @@ void main() {
     expect(TimelineTaskStatus.completed.isTerminal, isTrue);
     expect(TimelineTaskStatus.failed.label, '执行失败');
   });
+
+  test(
+    'TimelineSnapshotGuard keeps trusted state through unknown snapshots',
+    () {
+      final guard = TimelineSnapshotGuard();
+      guard.recordTrusted(TimelineTaskStatus.processing, turnId: 'turn-new');
+
+      expect(
+        guard.acceptSnapshot(TimelineTaskStatus.unknown, revision: 1),
+        isFalse,
+      );
+      expect(guard.trustedStatus, TimelineTaskStatus.processing);
+
+      // A delayed interrupted snapshot for the previous turn cannot terminate
+      // the active turn when it does not carry the current turn id.
+      expect(
+        guard.acceptSnapshot(
+          TimelineTaskStatus.interrupted,
+          turnId: 'turn-old',
+          revision: 2,
+        ),
+        isFalse,
+      );
+      expect(guard.trustedStatus, TimelineTaskStatus.processing);
+    },
+  );
+
+  test(
+    'TimelineSnapshotGuard rejects terminal status churn without a new turn',
+    () {
+      final guard = TimelineSnapshotGuard();
+      expect(
+        guard.acceptSnapshot(
+          TimelineTaskStatus.completed,
+          turnId: 'turn-1',
+          revision: 1,
+        ),
+        isTrue,
+      );
+      expect(
+        guard.acceptSnapshot(
+          TimelineTaskStatus.interrupted,
+          turnId: 'turn-1',
+          revision: 2,
+        ),
+        isFalse,
+      );
+      expect(guard.trustedStatus, TimelineTaskStatus.completed);
+
+      final unscoped = TimelineSnapshotGuard();
+      unscoped.recordTrusted(TimelineTaskStatus.completed);
+      expect(
+        unscoped.acceptSnapshot(TimelineTaskStatus.interrupted, revision: 1),
+        isFalse,
+      );
+    },
+  );
 
   test('SessionEvent preserves Codex turn duration metadata', () {
     final event = SessionEvent.fromJson({

@@ -25,6 +25,7 @@ class RemodexDrawer extends StatefulWidget {
     required this.themePreference,
     required this.onThemePreferenceChanged,
     this.onRefreshProjects,
+    this.refreshing = false,
     this.compact = false,
     super.key,
   });
@@ -45,6 +46,7 @@ class RemodexDrawer extends StatefulWidget {
   final RecodexThemePreference themePreference;
   final ValueChanged<RecodexThemePreference> onThemePreferenceChanged;
   final VoidCallback? onRefreshProjects;
+  final bool refreshing;
   final bool compact;
 
   @override
@@ -95,6 +97,9 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
     if (workspace == null) {
       return null;
     }
+    if (workspace.id.isNotEmpty) {
+      return 'project:${workspace.id}';
+    }
     if (workspace.path.isNotEmpty) {
       return workspace.path;
     }
@@ -108,6 +113,9 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
     final selected = widget.selectedWorkspace;
     if (selected == null) {
       return false;
+    }
+    if (selected.id.isNotEmpty && workspace.id.isNotEmpty) {
+      return selected.id == workspace.id;
     }
     if (selected.path.isNotEmpty && workspace.path == selected.path) {
       return true;
@@ -266,8 +274,11 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                             const SizedBox(width: 2),
                             LiquidIconButton(
                               icon: RecodexIcons.sync,
-                              tooltip: '刷新项目',
-                              onPressed: widget.onRefreshProjects,
+                              tooltip: widget.refreshing ? '正在刷新项目' : '刷新项目',
+                              onPressed: widget.refreshing
+                                  ? null
+                                  : widget.onRefreshProjects,
+                              loading: widget.refreshing,
                               size: 36,
                               iconSize: 20,
                               color: colors.textMuted,
@@ -344,7 +355,11 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
     final strict = widget.sessions.where((session) {
       if (session.isPinned || session.isArchived) return false;
       final value = _normalizeWorkspaceKey(session.workspace);
-      return (path.isNotEmpty && value == path) ||
+      return (workspace.id.isNotEmpty && session.projectId == workspace.id) ||
+          workspace.roots.any(
+            (root) => _normalizeWorkspaceKey(root) == value,
+          ) ||
+          (path.isNotEmpty && value == path) ||
           (name.isNotEmpty && value == name);
     }).toList();
     if (strict.isNotEmpty) return _dedupeSessions(strict);
@@ -365,19 +380,17 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
 
   List<SessionRecord> _dedupeSessions(Iterable<SessionRecord> records) {
     final byId = <String, SessionRecord>{};
-    final order = <String>[];
     for (final session in records) {
       final id = session.id.trim();
       if (id.isEmpty) continue;
       final previous = byId[id];
       if (previous == null) {
-        order.add(id);
         byId[id] = session;
-      } else if (session.updatedAtDate.isAfter(previous.updatedAtDate)) {
+      } else if (compareSessionRecords(session, previous) < 0) {
         byId[id] = session;
       }
     }
-    return [for (final id in order) byId[id]!];
+    return byId.values.toList()..sort(compareSessionRecords);
   }
 
   String _normalizeWorkspaceKey(String value) {

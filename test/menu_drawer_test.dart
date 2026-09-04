@@ -151,4 +151,42 @@ void main() {
     await tester.tap(find.text('修复任务列表'));
     expect(selected?.id, 'thread-1');
   });
+
+  testWidgets('shows project refresh progress while the catalog is loading', (
+    tester,
+  ) async {
+    var refreshed = false;
+    const workspace = WorkspaceInfo(name: 'recodex', path: '/work/recodex');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.light,
+        home: RemodexDrawer(
+          connected: true,
+          pairings: const [],
+          activePairing: null,
+          workspaces: const [workspace],
+          selectedWorkspace: workspace,
+          sessions: const [],
+          selectedSessionId: null,
+          onSelectPairing: (_) {},
+          onSelectWorkspace: (_) {},
+          onSelectSession: (_) {},
+          onPairing: () {},
+          onNewPairing: () {},
+          onSettings: () {},
+          themePreference: RecodexThemePreference.system,
+          onThemePreferenceChanged: (_) {},
+          onRefreshProjects: () => refreshed = true,
+          refreshing: true,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byTooltip('正在刷新项目'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    await tester.tap(find.byTooltip('正在刷新项目'));
+    expect(refreshed, isFalse);
+  });
 }

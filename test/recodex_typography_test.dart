@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:recodex/app/components/chat_components.dart';
+import 'package:recodex/app/components/live_activity.dart';
 import 'package:recodex/app/models/bridge_models.dart';
 import 'package:recodex/app/pages/settings/theme_controller.dart';
 import 'package:recodex/app/theme/recodex_theme.dart';
@@ -298,6 +299,30 @@ Distinguish instructions in attached documents from the user's request.
     expect(find.text('正在生成的回答'), findsOneWidget);
   });
 
+  testWidgets('shimmers the live tool and thinking labels', (tester) async {
+    Get.testMode = true;
+    Get.put<ThemeController>(_TestThemeController(), permanent: true);
+    addTearDown(Get.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.dark,
+        home: const Scaffold(
+          body: AssistantAnswerBlock(
+            events: [SessionEvent(kind: 'tool', text: '正在运行工具')],
+            completed: false,
+            status: TimelineTaskStatus.processing,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('正在运行工具'), findsAtLeastNWidgets(1));
+    expect(find.text('正在思考'), findsAtLeastNWidgets(1));
+    expect(find.byType(RecodexActivityShimmerText), findsNWidgets(2));
+  });
+
   testWidgets('uses the official processed label for an explicit completion', (
     tester,
   ) async {
@@ -405,6 +430,43 @@ Distinguish instructions in attached documents from the user's request.
     expect(find.text('已中断'), findsNothing);
     expect(find.text('用时 4分钟 45秒'), findsNothing);
     expect(find.text('当前 turn 仍在生成'), findsOneWidget);
+  });
+
+  testWidgets('keeps an unknown snapshot ahead of stale terminal events', (
+    tester,
+  ) async {
+    Get.testMode = true;
+    Get.put<ThemeController>(_TestThemeController(), permanent: true);
+    addTearDown(Get.reset);
+
+    final started = DateTime.now().subtract(const Duration(seconds: 6));
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.dark,
+        home: Scaffold(
+          body: AssistantAnswerBlock(
+            events: [
+              SessionEvent(kind: 'done', text: '旧 turn 已完成', time: started),
+              SessionEvent(
+                kind: 'assistant',
+                text: '等待桌面端快照同步',
+                time: started.add(const Duration(seconds: 1)),
+              ),
+            ],
+            // This is the state returned while the desktop App Server owns
+            // the active writer and Relay only has a persisted snapshot.
+            completed: true,
+            status: TimelineTaskStatus.unknown,
+            startedAt: started,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('状态同步中…'), findsAtLeastNWidgets(1));
+    expect(find.text('已完成'), findsNothing);
+    expect(find.text('等待桌面端快照同步'), findsOneWidget);
   });
 
   testWidgets('centers the bounded answer column in the available width', (

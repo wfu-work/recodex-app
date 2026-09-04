@@ -36,7 +36,10 @@ class _MainPageState extends State<MainPage> {
   static const double _headerReservedHeight = 142;
   static const double _composerReservedHeight = 286;
   static const double _scrollToLatestThreshold = 132;
-  static const double _scrollToLatestBottom = 178;
+  // Keep the jump-to-latest affordance close to the composer. The previous
+  // offset left an unnecessarily large dead zone between the control and the
+  // input surface, especially on compact windows.
+  static const double _scrollToLatestBottom = 154;
   static const Curve _composerDampedCurve = Cubic(0.18, 0.89, 0.32, 1.08);
 
   final BridgeController controller = Get.find();
@@ -109,6 +112,12 @@ class _MainPageState extends State<MainPage> {
           settingsPreferences?.showIndexHoverPreview.value ?? true;
       final reduceAnimations =
           settingsPreferences?.reduceAnimations.value ?? false;
+      final timelineIsRunning = controller.timelineStatus.value.isActive;
+      // A running turn gets a persistent live-activity affordance even when
+      // the reader is already at the bottom. Once the turn ends, the same
+      // slot falls back to the jump-to-latest arrow only when the reader has
+      // detached from the newest content.
+      final showScrollControl = timelineIsRunning || _showScrollToLatest;
       final answerCardRadius =
           settingsPreferences?.answerCardRadius.value ?? 24;
       final answerMaxWidth = settingsPreferences?.answerMaxWidth.value ?? 960;
@@ -271,6 +280,7 @@ class _MainPageState extends State<MainPage> {
                     onRefreshProjects: controller.connected.value
                         ? controller.refreshProjects
                         : null,
+                    refreshing: controller.timelineRefreshing.value,
                     compact: compactSidebar,
                   ),
                   onDrawerChanged: (open) {
@@ -469,28 +479,25 @@ class _MainPageState extends State<MainPage> {
                         right: 0,
                         bottom: _scrollToLatestBottom + bottomInset,
                         child: IgnorePointer(
-                          ignoring: !_showScrollToLatest,
+                          ignoring: !showScrollControl,
                           child: AnimatedOpacity(
                             duration: effectiveMediaQuery.disableAnimations
                                 ? Duration.zero
                                 : const Duration(milliseconds: 160),
-                            opacity: _showScrollToLatest ? 1 : 0,
+                            opacity: showScrollControl ? 1 : 0,
                             child: AnimatedScale(
                               duration: effectiveMediaQuery.disableAnimations
                                   ? Duration.zero
                                   : const Duration(milliseconds: 220),
                               curve: Curves.easeOutCubic,
-                              scale: _showScrollToLatest ? 1 : 0.82,
+                              scale: showScrollControl ? 1 : 0.82,
                               child: ExcludeSemantics(
-                                excluding: !_showScrollToLatest,
+                                excluding: !showScrollControl,
                                 child: TickerMode(
-                                  enabled: _showScrollToLatest,
+                                  enabled: showScrollControl,
                                   child: Center(
                                     child: ScrollToLatestButton(
-                                      running: controller
-                                          .timelineStatus
-                                          .value
-                                          .isActive,
+                                      running: timelineIsRunning,
                                       reduceMotion: reduceAnimations,
                                       onPressed: _scrollToLatest,
                                     ),
@@ -529,8 +536,7 @@ class _MainPageState extends State<MainPage> {
                                 // header.  The legacy boolean can otherwise
                                 // briefly disagree and leave a stop button
                                 // visible next to an "已中断/已完成" header.
-                                running:
-                                    controller.timelineStatus.value.isActive,
+                                running: timelineIsRunning,
                                 onStop: controller.interrupt,
                                 onModelChanged: controller.setComposerModel,
                                 onReasoningChanged:
@@ -1114,8 +1120,8 @@ class _TimelineIndexState extends State<_TimelineIndex> {
     // Codex keeps the rail quiet at rest and only expands the mark under the
     // pointer. The active question is distinguished by color instead of by a
     // permanently oversized bar.
-    if (index == _hoveredIndex) return 42;
-    return 14;
+    if (index == _hoveredIndex) return 32;
+    return 10;
   }
 
   @override
@@ -1127,11 +1133,11 @@ class _TimelineIndexState extends State<_TimelineIndex> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final count = markers.length;
-        // Keep the index rail compact when a transcript has many turns. The
-        // old 24px cap rendered as roughly 48px between marks on a Retina
-        // display, making the rail feel detached from the conversation.
+        // Keep the index rail compact when a transcript has many turns. A
+        // tighter 8–14px rhythm keeps the marks visually attached to the
+        // conversation while preserving enough separation to scan them.
         final itemExtent = (constraints.maxHeight / count)
-            .clamp(10.0, 18.0)
+            .clamp(8.0, 14.0)
             .toDouble();
         final railHeight = itemExtent * count;
         final railTop = (constraints.maxHeight - railHeight) / 2;

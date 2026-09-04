@@ -8,6 +8,7 @@ import 'package:get/get.dart';
 import '../models/bridge_models.dart';
 import '../pages/settings/theme_controller.dart';
 import '../theme/recodex_theme.dart';
+import 'live_activity.dart';
 import 'recodex_dropdown.dart';
 
 class AssistantBubble extends StatelessWidget {
@@ -650,6 +651,14 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
         (widget.completed
             ? TimelineTaskStatus.completed
             : TimelineTaskStatus.processing);
+    // When the bridge supplies an explicit snapshot state, an unknown/loading
+    // value is deliberate evidence that the Relay has not converged yet. Do
+    // not let a terminal marker from an older turn, or the legacy `completed`
+    // flag, turn that uncertainty into a fabricated success state.
+    final statusIsUnknown =
+        widget.status != null &&
+        (taskStatus == TimelineTaskStatus.unknown ||
+            taskStatus == TimelineTaskStatus.loading);
     final textBuffer = StringBuffer();
     final reasoningBuffer = StringBuffer();
     final answerChildren = <Widget>[];
@@ -709,7 +718,7 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
       final eventUsage = event.usage;
       if (eventUsage != null) mergeUsage(eventUsage);
       if (_isDoneEvent(event.kind)) {
-        if (!statusIsActive) hasTerminalEvent = true;
+        if (!statusIsActive && !statusIsUnknown) hasTerminalEvent = true;
         continue;
       }
       if (event.kind == 'token_usage') {
@@ -721,7 +730,7 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
         continue;
       }
       if (event.kind == 'interrupted') {
-        if (statusIsActive) continue;
+        if (statusIsActive || statusIsUnknown) continue;
         hasTerminalEvent = true;
         flushAnswerText();
         reasoningSteps.add(
@@ -833,7 +842,9 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
       );
     }
 
-    final isDone = widget.completed || statusIsTerminal || hasTerminalEvent;
+    final isDone =
+        !statusIsUnknown &&
+        (widget.completed || statusIsTerminal || hasTerminalEvent);
     if (answerChildren.isEmpty && (isDone || reasoningSteps.isEmpty)) {
       final fallbackText = switch (taskStatus) {
         TimelineTaskStatus.failed => '任务执行失败。',
@@ -1040,141 +1051,6 @@ class _AnswerStepRow extends StatelessWidget {
   }
 }
 
-class _FloatingThinkingIndicator extends StatefulWidget {
-  const _FloatingThinkingIndicator({this.size = 28});
-
-  final double size;
-
-  @override
-  State<_FloatingThinkingIndicator> createState() =>
-      _FloatingThinkingIndicatorState();
-}
-
-class _FloatingThinkingIndicatorState extends State<_FloatingThinkingIndicator>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  bool _reduceMotion = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1100),
-    );
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final media = MediaQuery.of(context);
-    final reduceMotion = media.disableAnimations || media.accessibleNavigation;
-    if (reduceMotion != _reduceMotion) {
-      _reduceMotion = reduceMotion;
-      if (_reduceMotion) {
-        _controller.stop();
-      } else {
-        _controller.repeat();
-      }
-    } else if (!_reduceMotion && !_controller.isAnimating) {
-      _controller.repeat();
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final dotSize = math.max(3.0, widget.size * 0.19);
-    Widget dot(int index, double progress) {
-      final phase = (progress + index * 0.17) % 1.0;
-      final lift = _reduceMotion
-          ? 0.0
-          : -math.sin(phase * math.pi * 2) * widget.size * 0.12;
-      final opacity = _reduceMotion
-          ? 0.64
-          : (0.44 + (math.sin(phase * math.pi * 2) + 1) * 0.22)
-                .clamp(0.36, 0.90)
-                .toDouble();
-      return Transform.translate(
-        offset: Offset(0, lift),
-        child: Opacity(
-          opacity: opacity,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: colors.textMuted,
-              shape: BoxShape.circle,
-            ),
-            child: SizedBox.square(dimension: dotSize),
-          ),
-        ),
-      );
-    }
-
-    Widget dots(double progress) {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          dot(0, progress),
-          SizedBox(width: dotSize * 0.72),
-          dot(1, progress),
-          SizedBox(width: dotSize * 0.72),
-          dot(2, progress),
-        ],
-      );
-    }
-
-    Widget indicator(double progress) {
-      final ringProgress = (progress + 0.28) % 1.0;
-      final ringScale = _reduceMotion ? 0.74 : 0.72 + ringProgress * 0.25;
-      final ringOpacity = _reduceMotion
-          ? 0.24
-          : (0.26 * (1 - ringProgress)).clamp(0.04, 0.26).toDouble();
-      return Stack(
-        alignment: Alignment.center,
-        children: [
-          Transform.scale(
-            scale: ringScale,
-            child: Opacity(
-              opacity: ringOpacity,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: colors.textMuted, width: 1.2),
-                ),
-                child: SizedBox.square(dimension: widget.size),
-              ),
-            ),
-          ),
-          dots(progress),
-        ],
-      );
-    }
-
-    if (_reduceMotion) {
-      return SizedBox(
-        width: widget.size,
-        height: widget.size,
-        child: indicator(0),
-      );
-    }
-    return SizedBox(
-      width: widget.size,
-      height: widget.size,
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (_, _) => indicator(_controller.value),
-      ),
-    );
-  }
-}
-
 class _LiveActivityRow extends StatelessWidget {
   const _LiveActivityRow({required this.text, this.detail});
 
@@ -1204,38 +1080,36 @@ class _LiveActivityRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
+    final textStyle = TextStyle(
+      color: colors.text.withValues(alpha: 0.92),
+      fontSize: _scaledFontSize(15, fontScale),
+      fontWeight: FontWeight.w500,
+    );
+    final detailStyle = TextStyle(
+      color: colors.textMuted,
+      fontSize: _scaledFontSize(13, fontScale),
+      fontWeight: FontWeight.w400,
+    );
     return Padding(
       padding: const EdgeInsets.only(top: 2, bottom: 2),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const _FloatingThinkingIndicator(size: 28),
-          const SizedBox(width: 4),
           Icon(RecodexIcons.terminal, size: 17, color: colors.textMuted),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              text,
+            child: RecodexActivityShimmerText(
+              text: text,
+              style: textStyle,
               maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: colors.text.withValues(alpha: 0.92),
-                fontSize: _scaledFontSize(15, fontScale),
-                fontWeight: FontWeight.w500,
-              ),
             ),
           ),
           if ((detail ?? '').trim().isNotEmpty) ...[
             const SizedBox(width: 12),
-            Text(
-              detail!,
+            RecodexActivityShimmerText(
+              text: detail!,
+              style: detailStyle,
               maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: colors.textMuted,
-                fontSize: _scaledFontSize(13, fontScale),
-                fontWeight: FontWeight.w400,
-              ),
             ),
           ],
         ],
@@ -1269,9 +1143,7 @@ class _AnswerStatusHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
-    final statusLabel = status == TimelineTaskStatus.unknown && done
-        ? TimelineTaskStatus.completed.label
-        : status.label;
+    final statusLabel = status.label;
     final statusColor = switch (status) {
       TimelineTaskStatus.waitingApproval => colors.warning,
       TimelineTaskStatus.failed => colors.error,
@@ -2189,8 +2061,6 @@ class ComposerBar extends StatelessWidget {
                       onChanged: onPermissionModeChanged,
                     ),
                     const Spacer(),
-                    const _FloatingThinkingIndicator(size: 24),
-                    const SizedBox(width: 4),
                     Flexible(child: _RunningModelLabel(context: this.context)),
                   ] else ...[
                     const SizedBox(width: 6),

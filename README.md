@@ -130,6 +130,7 @@ Relay 自动发送的 `stream.ack` 只表示已接收；App 还会对收到的�
 
 - `host.get_status`
 - `sync.request`
+- `project.list`
 - `thread.list`
 - `thread.read`
 - `thread.create`
@@ -142,6 +143,10 @@ Relay 自动发送的 `stream.ack` 只表示已接收；App 还会对收到的�
 
 Git、设备列表和旧版 Bridge 命令不属于当前 `codex.v1` 合约，不会发送未知
 消息来“兼容”它们。
+
+任务列表默认使用 Codex App Server 的 `recency_at` 降序（回退到旧版
+`updated_at`），项目列表使用 `project.list` 返回的 `position`。任务保留
+`recencyAt`、`projectId` 和项目根目录，用于在刷新和多根目录项目下保持稳定归属。
 
 ## 配置与连接
 

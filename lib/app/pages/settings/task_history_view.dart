@@ -155,12 +155,8 @@ class _TaskHistoryPageState extends State<TaskHistoryPage> {
     }).toList();
     filtered.sort((left, right) {
       return switch (_sort) {
-        _HistorySort.recent => right.updatedAtDate.compareTo(
-          left.updatedAtDate,
-        ),
-        _HistorySort.oldest => left.updatedAtDate.compareTo(
-          right.updatedAtDate,
-        ),
+        _HistorySort.recent => compareSessionRecords(left, right),
+        _HistorySort.oldest => compareSessionRecords(right, left),
         _HistorySort.title => left.displayTitle.compareTo(right.displayTitle),
       };
     });

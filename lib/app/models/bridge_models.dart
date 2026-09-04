@@ -1,13 +1,36 @@
 class WorkspaceInfo {
-  const WorkspaceInfo({required this.name, required this.path});
+  const WorkspaceInfo({
+    required this.name,
+    required this.path,
+    this.id = '',
+    this.position,
+    this.roots = const [],
+  });
 
   final String name;
   final String path;
+  final String id;
+  final int? position;
+  final List<String> roots;
 
   factory WorkspaceInfo.fromJson(Map<String, dynamic> json) {
+    final rawRoots = json['roots'];
+    final roots = rawRoots is List
+        ? rawRoots
+              .map((root) {
+                if (root is Map) return root['path']?.toString() ?? '';
+                return root?.toString() ?? '';
+              })
+              .where((path) => path.trim().isNotEmpty)
+              .toList(growable: false)
+        : const <String>[];
+    final rawPath = json['path']?.toString().trim() ?? '';
     return WorkspaceInfo(
-      name: json['name'] as String? ?? '',
-      path: json['path'] as String? ?? '',
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      path: rawPath.isNotEmpty ? rawPath : (roots.isEmpty ? '' : roots.first),
+      position: (json['position'] as num?)?.toInt(),
+      roots: roots,
     );
   }
 }
@@ -243,6 +266,116 @@ extension TimelineTaskStatusX on TimelineTaskStatus {
   };
 }
 
+/// Guards lifecycle values read from eventually-consistent thread snapshots.
+///
+/// A metadata-only read can legitimately return `unknown` while the desktop
+/// App Server is still persisting a turn.  It can also expose a previous
+/// terminal turn while a newer turn is already running.  The guard keeps the
+/// last trusted value until a snapshot contains positive evidence that it is
+/// safe to change, and rejects a lower-quality terminal downgrade without a
+/// new turn identity.
+class TimelineSnapshotGuard {
+  TimelineTaskStatus _trustedStatus = TimelineTaskStatus.unknown;
+  String? _trustedTurnId;
+  int? _lastRevision;
+
+  TimelineTaskStatus get trustedStatus => _trustedStatus;
+  String? get trustedTurnId => _trustedTurnId;
+  int? get lastRevision => _lastRevision;
+
+  void reset() {
+    _trustedStatus = TimelineTaskStatus.unknown;
+    _trustedTurnId = null;
+    _lastRevision = null;
+  }
+
+  /// Keeps the trusted lifecycle while forgetting the previous turn identity.
+  /// Used when a new active turn is observed before its id is available.
+  void clearTurnIdentity() {
+    _trustedTurnId = null;
+  }
+
+  /// A Relay/App Server reconnect starts a fresh revision namespace. Preserve
+  /// the visible lifecycle but allow the new connector to establish its first
+  /// snapshot revision without being rejected as stale.
+  void resetRevision() {
+    _lastRevision = null;
+  }
+
+  /// Records an event-driven lifecycle value, which is stronger than a
+  /// persisted snapshot and therefore does not participate in revision
+  /// ordering.
+  void recordTrusted(TimelineTaskStatus status, {String? turnId}) {
+    if (status == TimelineTaskStatus.unknown ||
+        status == TimelineTaskStatus.loading) {
+      return;
+    }
+    _trustedStatus = status;
+    final normalizedTurnId = turnId?.trim();
+    if (normalizedTurnId != null && normalizedTurnId.isNotEmpty) {
+      _trustedTurnId = normalizedTurnId;
+    }
+  }
+
+  /// Returns whether [status] may replace the current trusted snapshot.
+  bool acceptSnapshot(
+    TimelineTaskStatus status, {
+    String? turnId,
+    int? revision,
+  }) {
+    if (revision != null &&
+        _lastRevision != null &&
+        revision <= _lastRevision!) {
+      return false;
+    }
+    if (revision != null) _lastRevision = revision;
+
+    final normalizedTurnId = turnId?.trim();
+    final hasNewTurn =
+        normalizedTurnId != null &&
+        normalizedTurnId.isNotEmpty &&
+        normalizedTurnId != _trustedTurnId;
+
+    // Unknown/loading is a transport or hydration condition, not a lifecycle
+    // transition. Never erase an active or terminal value with it.
+    if (status == TimelineTaskStatus.unknown ||
+        status == TimelineTaskStatus.loading) {
+      if (_trustedStatus.isActive || _trustedStatus.isTerminal) return false;
+      _trustedStatus = status;
+      if (normalizedTurnId != null && normalizedTurnId.isNotEmpty) {
+        _trustedTurnId = normalizedTurnId;
+      }
+      return true;
+    }
+
+    if (_trustedStatus.isActive && status.isTerminal) {
+      // While a turn is visibly active, a terminal snapshot is only valid if
+      // it names that same turn.  Missing ids are ambiguous and therefore
+      // wait for a later authoritative snapshot/event.
+      if (normalizedTurnId == null || normalizedTurnId.isEmpty) return false;
+      if (_trustedTurnId == null || normalizedTurnId != _trustedTurnId) {
+        return false;
+      }
+    }
+
+    // A completed turn cannot become interrupted/failed merely because an
+    // older snapshot arrived out of order. A different turn id is the only
+    // snapshot-level evidence that a new terminal state is legitimate.
+    if (_trustedStatus.isTerminal &&
+        status.isTerminal &&
+        status != _trustedStatus &&
+        (_trustedTurnId == null || !hasNewTurn)) {
+      return false;
+    }
+
+    _trustedStatus = status;
+    if (normalizedTurnId != null && normalizedTurnId.isNotEmpty) {
+      _trustedTurnId = normalizedTurnId;
+    }
+    return true;
+  }
+}
+
 class SessionRecord {
   const SessionRecord({
     required this.id,
@@ -251,6 +384,8 @@ class SessionRecord {
     required this.status,
     required this.createdAt,
     required this.updatedAt,
+    this.recencyAt = '',
+    this.projectId = '',
     this.title = '',
     this.isPinned = false,
     this.isArchived = false,
@@ -262,6 +397,12 @@ class SessionRecord {
   final String status;
   final String createdAt;
   final String updatedAt;
+
+  /// App Server's sidebar-oriented last-access/activity timestamp. Older
+  /// servers do not return it, in which case [recencyAtDate] falls back to
+  /// [updatedAt].
+  final String recencyAt;
+  final String projectId;
 
   /// Official Codex thread name. This is a generated, user-facing title and
   /// is preferred over [prompt] when it is available.
@@ -276,6 +417,8 @@ class SessionRecord {
     String? status,
     String? createdAt,
     String? updatedAt,
+    String? recencyAt,
+    String? projectId,
     String? title,
     bool? isPinned,
     bool? isArchived,
@@ -287,6 +430,8 @@ class SessionRecord {
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      recencyAt: recencyAt ?? this.recencyAt,
+      projectId: projectId ?? this.projectId,
       title: title ?? this.title,
       isPinned: isPinned ?? this.isPinned,
       isArchived: isArchived ?? this.isArchived,
@@ -342,6 +487,10 @@ class SessionRecord {
       status: status,
       createdAt: json['createdAt'] as String? ?? '',
       updatedAt: json['updatedAt'] as String? ?? '',
+      recencyAt:
+          json['recencyAt'] as String? ?? json['recency_at'] as String? ?? '',
+      projectId:
+          json['projectId'] as String? ?? json['project_id'] as String? ?? '',
       title: json['title'] as String? ?? json['name'] as String? ?? '',
       isPinned: _jsonBool(
         json['isPinned'] ?? json['is_pinned'] ?? json['pinned'],
@@ -351,14 +500,41 @@ class SessionRecord {
   }
 
   DateTime get updatedAtDate {
-    final raw = int.tryParse(updatedAt);
-    if (raw != null) {
-      final milliseconds = raw.abs() < 100000000000 ? raw * 1000 : raw;
-      return DateTime.fromMillisecondsSinceEpoch(milliseconds);
-    }
-    return DateTime.tryParse(updatedAt) ??
-        DateTime.fromMillisecondsSinceEpoch(0);
+    return _sessionDate(updatedAt) ?? DateTime.fromMillisecondsSinceEpoch(0);
   }
+
+  DateTime get recencyAtDate {
+    final parsed = _sessionDate(recencyAt);
+    if (parsed != null) return parsed;
+    return updatedAtDate;
+  }
+}
+
+/// The single task ordering contract shared by the controller and sidebar
+/// widgets. `recencyAt` matches the current Codex sidebar; the remaining
+/// fields make equal timestamps deterministic across refreshes and pages.
+int compareSessionRecords(SessionRecord left, SessionRecord right) {
+  final recency = right.recencyAtDate.compareTo(left.recencyAtDate);
+  if (recency != 0) return recency;
+  final updated = right.updatedAtDate.compareTo(left.updatedAtDate);
+  if (updated != 0) return updated;
+  final created =
+      (_sessionDate(right.createdAt) ?? DateTime.fromMillisecondsSinceEpoch(0))
+          .compareTo(
+            _sessionDate(left.createdAt) ??
+                DateTime.fromMillisecondsSinceEpoch(0),
+          );
+  if (created != 0) return created;
+  return right.id.trim().compareTo(left.id.trim());
+}
+
+DateTime? _sessionDate(String value) {
+  final raw = int.tryParse(value.trim());
+  if (raw != null) {
+    final milliseconds = raw.abs() < 100000000000 ? raw * 1000 : raw;
+    return DateTime.fromMillisecondsSinceEpoch(milliseconds);
+  }
+  return DateTime.tryParse(value);
 }
 
 String _cleanTaskTitle(String value) {

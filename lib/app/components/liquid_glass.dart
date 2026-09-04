@@ -53,6 +53,7 @@ class LiquidIconButton extends StatelessWidget {
     this.size = 36,
     this.iconSize,
     this.color,
+    this.loading = false,
     super.key,
   });
 
@@ -62,6 +63,7 @@ class LiquidIconButton extends StatelessWidget {
   final double size;
   final double? iconSize;
   final Color? color;
+  final bool loading;
 
   @override
   Widget build(BuildContext context) {
@@ -69,14 +71,27 @@ class LiquidIconButton extends StatelessWidget {
     return Tooltip(
       message: tooltip ?? '',
       child: IconButton(
-        onPressed: onPressed,
+        onPressed: loading ? null : onPressed,
         padding: EdgeInsets.zero,
         constraints: BoxConstraints.tightFor(width: size, height: size),
         iconSize: iconSize ?? size * 0.52,
         visualDensity: VisualDensity.standard,
         color: color ?? colors.icon,
         disabledColor: (color ?? colors.icon).withValues(alpha: 0.36),
-        icon: Icon(icon),
+        icon: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 180),
+          child: loading
+              ? SizedBox(
+                  key: const ValueKey('loading'),
+                  width: (iconSize ?? size * 0.52) * 0.78,
+                  height: (iconSize ?? size * 0.52) * 0.78,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: color ?? colors.icon,
+                  ),
+                )
+              : Icon(icon, key: const ValueKey('icon')),
+        ),
       ),
     );
   }
