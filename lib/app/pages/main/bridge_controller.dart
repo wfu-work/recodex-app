@@ -2238,6 +2238,7 @@ class BridgeController extends GetxController {
     }
     _clearRemoteModels();
     _pendingCommands.clear();
+    _syncRecoveryInFlight = false;
     _scheduleTokenRefresh();
     cacheStale.value = true;
     unawaited(_activateSessionCache());
@@ -2354,6 +2355,7 @@ class BridgeController extends GetxController {
     final pending = _pendingCommands.remove(requestId);
     final success = message['success'] == true;
     if (!success) {
+      if (pending?.kind == 'sync.request') _syncRecoveryInFlight = false;
       final error = message['error'];
       final errorMap = error is Map
           ? Map<String, dynamic>.from(error)
@@ -2485,6 +2487,14 @@ class BridgeController extends GetxController {
       }
       _queueCatalogCacheWrite(syncedAt: DateTime.now().toUtc());
     } else {
+      // A snapshot starts a new journal baseline, including after the Agent
+      // restarts at sequence zero. Keeping the old cursor would discard all
+      // new lifecycle/content events until the new process caught up to it.
+      final sequence = map['latestSequence'];
+      if (sequence is num && sequence.isFinite && sequence >= 0) {
+        _lastIncomingSequence = sequence.toInt();
+        _seenIncomingMessageIds.clear();
+      }
       _applyThreadListResult(map['threads']);
       if (map['projects'] != null) _applyProjectListResult(map['projects']);
       _applyHostStatus(map['status']);
@@ -3409,7 +3419,14 @@ class BridgeController extends GetxController {
     DateTime? statusStartedAt;
     if (status.isActive) {
       currentSessionId.value = id;
-      if (timelineStatus.value.isTerminal ||
+      final turn = _asMap(thread['currentTurn']) ?? _asMap(thread['turn']);
+      final observedStartedAt = turn == null
+          ? null
+          : _turnTimestamp(turn, 'startedAt');
+      if (observedStartedAt != null &&
+          (turnId == null || _turnIdFromTurn(turn!) == turnId)) {
+        _currentTurnStartedAt = observedStartedAt;
+      } else if (timelineStatus.value.isTerminal ||
           timelineTurnStartedAt.value == null) {
         _currentTurnStartedAt = DateTime.now();
       }
@@ -3590,6 +3607,9 @@ class BridgeController extends GetxController {
       currentSessionId.value = id;
       _markSessionRunningForNotification(id);
       final startedAt =
+          (currentTurn != null && trackedTurnId == statusTurnId
+              ? _turnTimestamp(currentTurn, 'startedAt')
+              : null) ??
           _currentTurnStartedAt ??
           timelineTurnStartedAt.value ??
           DateTime.now();
@@ -4880,6 +4900,9 @@ class BridgeController extends GetxController {
     String? timelineTimedOutSessionId;
     _pendingCommands.removeWhere((_, pending) {
       final expired = pending.sentAt.isBefore(cutoff);
+      if (expired && pending.kind == 'sync.request') {
+        _syncRecoveryInFlight = false;
+      }
       if (expired && pending.kind == 'thread.list') catalogTimedOut = true;
       if (expired &&
           pending.kind == 'thread.read' &&
