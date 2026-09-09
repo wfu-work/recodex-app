@@ -151,11 +151,9 @@ class BridgeController extends GetxController {
   int _connectionAttempt = 0;
   String? _tokenRefreshContextKey;
   final _pendingCommands = <String, _PendingCommand>{};
-  // The Relay subscribes a historical thread through `thread.resume`. Keep a
-  // local marker so the read heartbeat does not send that command repeatedly;
-  // it is cleared when the socket is rebuilt or a resume command fails.
-  final _resumedTimelineSessions = <String>{};
-  final _timelineResumeRetryAt = <String, DateTime>{};
+  String? _timelineSnapshotHash;
+  String? _timelineSnapshotHashSessionId;
+  DateTime? _timelineSnapshotHashReceivedAt;
   final _seenIncomingMessageIds = <String>{};
   // A Relay connection is at-least-once. Keep a single recovery request in
   // flight when an incoming event sequence has a gap; otherwise advancing the
@@ -446,8 +444,6 @@ class BridgeController extends GetxController {
     _requestedEventsSessionId = null;
     _requestedEventsPrompt = null;
     _pendingCommands.clear();
-    _resumedTimelineSessions.clear();
-    _timelineResumeRetryAt.clear();
     _seenIncomingMessageIds.clear();
     _sessionLifecycles.clear();
     _notifiedTerminalSessions.clear();
@@ -1031,6 +1027,9 @@ class BridgeController extends GetxController {
     if (normalizedId.isEmpty) return;
     _timelineLoadTimer?.cancel();
     _timelineLoadTimeoutTimer?.cancel();
+    _timelineSnapshotHash = null;
+    _timelineSnapshotHashSessionId = null;
+    _timelineSnapshotHashReceivedAt = null;
     _timelineLoadingSessionId = normalizedId;
     _timelineLoadStartedAt = DateTime.now();
     timelineLoading.value = true;
@@ -1159,8 +1158,6 @@ class BridgeController extends GetxController {
     _tokenRefreshTimer?.cancel();
     _tokenRefreshTimer = null;
     _finishTimelineRefresh();
-    _resumedTimelineSessions.clear();
-    _timelineResumeRetryAt.clear();
     _finishHealthCheck('Relay 连接已断开。');
     _currentTurnStartedAt = null;
     try {
@@ -2251,13 +2248,25 @@ class BridgeController extends GetxController {
   }
 
   void _handleRelayError(Map<String, dynamic> message) {
+    final code = message['code'] as String? ?? 'relay.error';
+    // A rejected optional resource/frame must not invalidate the authenticated
+    // control channel. The Relay uses the same error envelope for these
+    // request-level failures; keep task streaming alive and let the sender's
+    // inline fallback handle the individual payload.
+    if (code == 'resource.rejected' ||
+        code == 'message.too_large' ||
+        code == 'rate.limited' ||
+        code == 'frame.invalid' ||
+        code.startsWith('resource.')) {
+      lastError.value = '部分资源未同步：${message['message'] ?? 'Relay 拒绝了可选数据'}';
+      return;
+    }
     final wasConnected = connected.value;
     _finishTimelineRefresh(
       error: '任务刷新失败：${message['message'] ?? 'Relay 返回错误'}',
     );
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
-    final code = message['code'] as String? ?? 'relay.error';
     final text = message['message'] as String? ?? 'Relay 连接被拒绝';
     lastError.value = _friendlyRelayError(code, text);
     _finishHealthCheck(lastError.value);
@@ -2355,24 +2364,6 @@ class BridgeController extends GetxController {
         // workspace fallback without surfacing an auxiliary capability error.
         return;
       }
-      if (pending?.kind == 'thread.resume') {
-        final resumeThreadId = pending?.threadId?.trim();
-        if (resumeThreadId != null && resumeThreadId.isNotEmpty) {
-          _resumedTimelineSessions.remove(resumeThreadId);
-          if (text.toLowerCase().contains('already has an active writer')) {
-            _timelineResumeRetryAt[resumeThreadId] = DateTime.now().add(
-              const Duration(seconds: 5),
-            );
-          } else {
-            _timelineResumeRetryAt.remove(resumeThreadId);
-          }
-        }
-        // Resuming is an auxiliary subscription step. The following
-        // thread.read still hydrates persisted content, and an active-writer
-        // conflict is expected when another Codex client owns the task.
-        // Do not turn that expected condition into a persistent UI error.
-        return;
-      }
       final isRefreshFailure = pending?.refreshToken != null;
       if (isRefreshFailure) {
         _finishTimelineRefresh(
@@ -2424,12 +2415,6 @@ class BridgeController extends GetxController {
           result,
           readGeneration: pending?.timelineReadGeneration,
         );
-      case 'thread.resume':
-        final resumedId = pending?.threadId?.trim();
-        if (resumedId != null && resumedId.isNotEmpty) {
-          _resumedTimelineSessions.add(resumedId);
-          _timelineResumeRetryAt.remove(resumedId);
-        }
       case 'thread.status':
         _handleThreadStatusResult(result, threadId: pending?.threadId);
       case 'turn.start':
@@ -2734,8 +2719,6 @@ class BridgeController extends GetxController {
     if (selected != null && selected.isNotEmpty) known.add(selected);
     if (current != null && current.isNotEmpty) known.add(current);
     _sessionLifecycles.removeWhere((id, _) => !known.contains(id));
-    _resumedTimelineSessions.removeWhere((id) => !known.contains(id));
-    _timelineResumeRetryAt.removeWhere((id, _) => !known.contains(id));
     _notifiedTerminalSessions.removeWhere((id) => !known.contains(id));
   }
 
@@ -3494,7 +3477,6 @@ class BridgeController extends GetxController {
     _markSessionRunningForNotification(record.id);
     _requestedEventsSessionId = record.id;
     _requestedEventsPrompt = _pendingPrompt ?? record.prompt;
-    _resumedTimelineSessions.add(record.id);
     _upsertSession(record);
     _appendSessionEvent(
       const SessionEvent(kind: 'running', text: '正在启动 Codex 任务...'),
@@ -3792,6 +3774,16 @@ class BridgeController extends GetxController {
       return;
     }
     final map = _asMap(value);
+    if (map?['unchanged'] == true) {
+      // This is an acknowledgement, never an empty transcript or a terminal
+      // lifecycle update. Keep deltas that arrived after the last snapshot.
+      if (map?['threadId'] == _requestedEventsSessionId &&
+          map?['threadId'] == _timelineSnapshotHashSessionId &&
+          map?['snapshotHash'] == _timelineSnapshotHash) {
+        _finishTimelineLoad(sessionId: _requestedEventsSessionId);
+      }
+      return;
+    }
     final thread = _asMap(map?['thread']) ?? map;
     final requestedSessionId = _requestedEventsSessionId;
     if (requestedSessionId == null || requestedSessionId.isEmpty) return;
@@ -3804,6 +3796,9 @@ class BridgeController extends GetxController {
     }
     final sessionId = _readString(thread['id']) ?? requestedSessionId;
     if (sessionId != requestedSessionId) return;
+    _timelineSnapshotHash = _readString(map?['snapshotHash']);
+    _timelineSnapshotHashSessionId = sessionId;
+    _timelineSnapshotHashReceivedAt = DateTime.now();
     final turns = _asList(thread['turns']);
     final latestTurn = _latestTurnFromSnapshot(turns);
     final latestTurnStatus = latestTurn == null
@@ -4035,11 +4030,10 @@ class BridgeController extends GetxController {
     // state so the user gets an actionable empty state instead of a spinner
     // that never resolves.
     _finishTimelineLoad(sessionId: requestedSessionId);
-    if (loaded.isEmpty) {
-      _rememberTimelineMemory(_timelineCacheKey(requestedSessionId), const []);
-      _queueTimelineCacheReplace(requestedSessionId, snapshot: const []);
-      return;
-    }
+    // The read can race a live event. An empty (or user-only) snapshot is not
+    // permission to erase deltas already rendered in memory; merge first and
+    // persist the merged value so a debounced cache write cannot resurrect an
+    // empty history on the next reload.
     final merged = _mergeLiveEvents(loaded);
     if (!_hasSameTimelineEvents(events, merged)) {
       events.assignAll(_boundedInMemoryEvents(merged));
@@ -4198,18 +4192,32 @@ class BridgeController extends GetxController {
     final normalized = rawType.trim();
     return switch (normalized) {
       'thread.created' => 'thread.created',
+      'thread/started' => 'thread.created',
       'thread.updated' => 'thread.updated',
+      'thread/status/changed' => 'thread.updated',
       'thread.queue.changed' => 'thread.queue.changed',
+      'thread/queue/changed' => 'thread.queue.changed',
       'turn.started' => 'turn.started',
+      'turn/started' => 'turn.started',
       'turn.completed' => 'turn.completed',
+      'turn/completed' => 'turn.completed',
       'message.assistant.delta' => 'message.assistant.delta',
+      'item/agentMessage/delta' => 'message.assistant.delta',
       'reasoning.delta' => 'reasoning.delta',
+      'item/reasoning/summaryTextDelta' => 'reasoning.delta',
       'tool.output' => 'tool.output',
+      'item/commandExecution/outputDelta' => 'tool.output',
       'diff.updated' => 'diff.updated',
+      'turn/diff/updated' => 'diff.updated',
+      'item/fileChange/outputDelta' => 'diff.updated',
       'item.started' => 'item.started',
+      'item/started' => 'item.started',
       'item.updated' => 'item.updated',
+      'item/updated' => 'item.updated',
       'item.completed' => 'item.completed',
+      'item/completed' => 'item.completed',
       'usage.updated' => 'usage.updated',
+      'thread/tokenUsage/updated' => 'usage.updated',
       'approval.requested' => 'approval.requested',
       'error' => 'error',
       _ => '',
@@ -4297,17 +4305,25 @@ class BridgeController extends GetxController {
     final turnData = nestedTurn ?? data;
     final eventTurnId =
         _readString(message['turnId']) ??
+        _readString(message['turn_id']) ??
         _readString(event['turnId']) ??
+        _readString(event['turn_id']) ??
         _readString(data['turnId']) ??
+        _readString(data['turn_id']) ??
         _turnIdFromTurn(nestedTurn ?? const <String, dynamic>{}) ??
-        _readString(_asMap(data['item'])?['turnId']);
+        _readString(_asMap(data['item'])?['turnId']) ??
+        _readString(_asMap(data['item'])?['turn_id']);
     final eventUsage = _extractTokenUsage(data);
     final explicitThreadId =
         _readString(message['threadId']) ??
+        _readString(message['thread_id']) ??
         _readString(event['threadId']) ??
+        _readString(event['thread_id']) ??
         _readString(data['threadId']) ??
+        _readString(data['thread_id']) ??
         _readString(_asMap(data['thread'])?['id']) ??
-        _readString(_asMap(data['item'])?['threadId']);
+        _readString(_asMap(data['item'])?['threadId']) ??
+        _readString(_asMap(data['item'])?['thread_id']);
     final threadId =
         explicitThreadId ??
         currentSessionId.value ??
@@ -4440,7 +4456,6 @@ class BridgeController extends GetxController {
       case 'thread.created':
         final record = _sessionFromThread(data);
         if (record != null) {
-          _resumedTimelineSessions.add(record.id);
           _upsertSession(record);
           _deriveWorkspaces(sessions);
         }
@@ -4821,7 +4836,19 @@ class BridgeController extends GetxController {
         deviceId: deviceId.value,
         targetDeviceId: targetDeviceId.value,
         sequence: _outgoingSequence,
-        command: {'type': type, ...command},
+        command: {
+          'type': type,
+          ...command,
+          if (type == 'thread.read' &&
+              !force &&
+              !timelineLoading.value &&
+              _timelineSnapshotHashSessionId == threadId &&
+              _timelineSnapshotHash != null &&
+              _timelineSnapshotHashReceivedAt != null &&
+              DateTime.now().difference(_timelineSnapshotHashReceivedAt!) <
+                  const Duration(minutes: 1))
+            'snapshotHash': _timelineSnapshotHash,
+        },
         threadId: threadId,
         turnId: turnId,
       ),
@@ -4837,7 +4864,8 @@ class BridgeController extends GetxController {
     return type == 'thread.list' ||
         type == 'project.list' ||
         type == 'thread.read' ||
-        type == 'thread.status';
+        type == 'thread.status' ||
+        type == 'sync.request';
   }
 
   bool _isTransientSyncError(String message) {
@@ -4853,10 +4881,6 @@ class BridgeController extends GetxController {
     _pendingCommands.removeWhere((_, pending) {
       final expired = pending.sentAt.isBefore(cutoff);
       if (expired && pending.kind == 'thread.list') catalogTimedOut = true;
-      if (expired && pending.kind == 'thread.resume') {
-        final id = pending.threadId?.trim();
-        if (id != null && id.isNotEmpty) _resumedTimelineSessions.remove(id);
-      }
       if (expired &&
           pending.kind == 'thread.read' &&
           timelineLoading.value &&
@@ -5256,8 +5280,6 @@ class BridgeController extends GetxController {
     _heartbeatTimer = null;
     _tokenRefreshTimer?.cancel();
     _tokenRefreshTimer = null;
-    _resumedTimelineSessions.clear();
-    _timelineResumeRetryAt.clear();
     _finishHealthCheck('Relay 连接已断开，请重试。');
     connected.value = false;
     connectionLabel.value = 'offline';
@@ -5301,8 +5323,6 @@ class BridgeController extends GetxController {
     _heartbeatTimer = null;
     _tokenRefreshTimer?.cancel();
     _tokenRefreshTimer = null;
-    _resumedTimelineSessions.clear();
-    _timelineResumeRetryAt.clear();
     _finishHealthCheck(_connectionTestError(error));
     connected.value = false;
     connectionLabel.value = 'failed';
@@ -5361,8 +5381,6 @@ class BridgeController extends GetxController {
       return;
     }
 
-    _ensureTimelineResumed(selectedId);
-
     // Always poll the compact status for the selected task. The catalog may
     // briefly expose `notLoaded`/an older terminal row while the host is
     // already processing a new turn, and a full thread.read is too expensive
@@ -5416,18 +5434,6 @@ class BridgeController extends GetxController {
         token: refreshToken,
       );
     }
-  }
-
-  void _ensureTimelineResumed(String sessionId) {
-    final id = sessionId.trim();
-    if (id.isEmpty || _resumedTimelineSessions.contains(id)) return;
-    final retryAt = _timelineResumeRetryAt[id];
-    if (retryAt != null && retryAt.isAfter(DateTime.now())) return;
-    final pending = _pendingCommands.values.any(
-      (command) => command.kind == 'thread.resume' && command.threadId == id,
-    );
-    if (pending) return;
-    _sendCommand('thread.resume', {}, threadId: id);
   }
 
   void _syncSessionCompletionNotifications(List<SessionRecord> nextSessions) {
