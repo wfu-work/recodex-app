@@ -741,6 +741,26 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
         latestLiveEvent = event;
         continue;
       }
+      if (event.kind == 'reconnecting') {
+        flushAnswerText();
+        flushReasoningText();
+        final lines = event.text.trim().split('\n');
+        final title = lines.isEmpty || lines.first.trim().isEmpty
+            ? '正在重新连接'
+            : lines.first.trim();
+        final detail = lines.length > 1
+            ? lines.skip(1).join('\n').trim()
+            : null;
+        reasoningSteps.add(
+          _AnswerStep(
+            icon: title == '连接已恢复' ? RecodexIcons.check : RecodexIcons.warning,
+            title: title,
+            detail: detail,
+          ),
+        );
+        latestLiveEvent = event;
+        continue;
+      }
       if (event.kind == 'interrupted') {
         if (statusIsActive || statusIsUnknown) continue;
         hasTerminalEvent = true;
@@ -948,14 +968,115 @@ class _ReasoningContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final groups = <List<_AnswerStep>>[];
+    for (final step in steps) {
+      final isExecutionStep =
+          step.icon != RecodexIcons.reasoning &&
+          step.icon != RecodexIcons.warning &&
+          step.icon != RecodexIcons.check;
+      if (isExecutionStep &&
+          groups.isNotEmpty &&
+          groups.last.every((item) => item.icon != RecodexIcons.reasoning)) {
+        groups.last.add(step);
+      } else {
+        groups.add([step]);
+      }
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        for (var index = 0; index < steps.length; index += 1) ...[
+        for (var index = 0; index < groups.length; index += 1) ...[
           if (index > 0) const SizedBox(height: 12),
-          steps[index].icon == RecodexIcons.reasoning
-              ? _ReasoningTextRow(text: steps[index].title)
-              : _AnswerStepRow(step: steps[index]),
+          groups[index].length > 1
+              ? _ExecutionGroup(steps: groups[index])
+              : groups[index].first.icon == RecodexIcons.reasoning
+              ? _ReasoningTextRow(text: groups[index].first.title)
+              : _AnswerStepRow(step: groups[index].first),
+        ],
+      ],
+    );
+  }
+}
+
+class _ExecutionGroup extends StatefulWidget {
+  const _ExecutionGroup({required this.steps});
+
+  final List<_AnswerStep> steps;
+
+  @override
+  State<_ExecutionGroup> createState() => _ExecutionGroupState();
+}
+
+class _ExecutionGroupState extends State<_ExecutionGroup> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final count = widget.steps.length;
+    final latest = widget.steps.last.detail ?? widget.steps.last.title;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Semantics(
+          button: true,
+          label: _expanded ? '收起执行过程' : '展开执行过程',
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 2),
+              child: Row(
+                children: [
+                  Icon(
+                    RecodexIcons.terminal,
+                    size: 14,
+                    color: colors.textMuted,
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '执行过程 · 已运行 $count 个工具',
+                    style: TextStyle(
+                      color: colors.textMuted,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      latest,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: TextStyle(
+                        color: colors.textMuted.withValues(alpha: 0.78),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Icon(
+                    _expanded
+                        ? RecodexIcons.chevronDown
+                        : RecodexIcons.chevronRight,
+                    size: 15,
+                    color: colors.textMuted,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (_expanded) ...[
+          const SizedBox(height: 6),
+          for (var index = 0; index < widget.steps.length; index++) ...[
+            if (index > 0) const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.only(left: 22),
+              child: _AnswerStepRow(step: widget.steps[index]),
+            ),
+          ],
         ],
       ],
     );
@@ -1026,18 +1147,25 @@ class _AnswerStepRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
+    final isTransport =
+        step.icon == RecodexIcons.warning || step.icon == RecodexIcons.check;
+    final titleColor = isTransport && step.icon == RecodexIcons.warning
+        ? colors.warning
+        : isTransport && step.icon == RecodexIcons.check
+        ? colors.success
+        : colors.textMuted;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Icon(step.icon, size: 16, color: colors.textMuted),
-        const SizedBox(width: 9),
+        Icon(step.icon, size: 14, color: titleColor),
+        const SizedBox(width: 8),
         Flexible(
           child: Text(
             step.title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: colors.textMuted,
+              color: titleColor,
               fontSize: _scaledFontSize(13.5, fontScale),
               fontWeight: FontWeight.w500,
             ),
@@ -1107,8 +1235,8 @@ class _LiveActivityRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(RecodexIcons.terminal, size: 17, color: colors.textMuted),
-          const SizedBox(width: 10),
+          Icon(RecodexIcons.terminal, size: 14, color: colors.textMuted),
+          const SizedBox(width: 8),
           Expanded(
             child: RecodexActivityShimmerText(
               text: text,
@@ -1287,6 +1415,9 @@ class _AnswerText extends StatelessWidget {
     final widgets = <Widget>[];
     var inModifiedFiles = false;
     final modifiedFiles = <_ModifiedFileReference>[];
+    var inCodeBlock = false;
+    var codeLanguage = '';
+    final codeLines = <String>[];
 
     void flushModifiedFiles() {
       if (modifiedFiles.isEmpty) return;
@@ -1300,8 +1431,34 @@ class _AnswerText extends StatelessWidget {
       modifiedFiles.clear();
     }
 
+    void flushCodeBlock() {
+      if (!inCodeBlock) return;
+      widgets.add(
+        _AnswerCodeBlock(code: codeLines.join('\n'), language: codeLanguage),
+      );
+      codeLines.clear();
+      codeLanguage = '';
+      inCodeBlock = false;
+    }
+
     for (final rawLine in lines) {
       final line = rawLine.trimRight();
+      final fence = line.trimLeft();
+      if (fence.startsWith('```')) {
+        if (inCodeBlock) {
+          flushCodeBlock();
+        } else {
+          flushModifiedFiles();
+          inModifiedFiles = false;
+          inCodeBlock = true;
+          codeLanguage = fence.substring(3).trim();
+        }
+        continue;
+      }
+      if (inCodeBlock) {
+        codeLines.add(line);
+        continue;
+      }
       if (line.trim().isEmpty) {
         flushModifiedFiles();
         inModifiedFiles = false;
@@ -1325,11 +1482,81 @@ class _AnswerText extends StatelessWidget {
       inModifiedFiles = false;
       widgets.add(_AnswerLine(text: line));
     }
+    flushCodeBlock();
     flushModifiedFiles();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: widgets,
+    );
+  }
+}
+
+class _AnswerCodeBlock extends StatelessWidget {
+  const _AnswerCodeBlock({required this.code, required this.language});
+
+  final String code;
+  final String language;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final normalizedLanguage = language.trim().toLowerCase();
+    final label =
+        normalizedLanguage.isEmpty ||
+            normalizedLanguage == 'text' ||
+            normalizedLanguage == 'plaintext' ||
+            normalizedLanguage == 'txt'
+        ? '纯文本'
+        : language.trim();
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 12),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xff242424) : const Color(0xfff1f1f1),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: colors.glassBorder.withValues(alpha: isDark ? 0.55 : 0.8),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(RecodexIcons.code, size: 15, color: colors.textMuted),
+                  const SizedBox(width: 8),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: colors.textMuted,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SelectableText(
+                  code,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontFamily: 'SFMono-Regular',
+                    fontFamilyFallback: const ['Menlo', 'monospace'],
+                    fontSize: 14,
+                    height: 1.55,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1363,7 +1590,7 @@ class _AnswerLine extends StatelessWidget {
       style: TextStyle(
         color: colors.text,
         fontSize: _scaledFontSize(isHeading ? 16.5 : 15.5, fontScale),
-        height: 1.55,
+        height: 1.48,
         fontWeight: isHeading ? FontWeight.w600 : FontWeight.w400,
         letterSpacing: 0,
       ),
@@ -1371,21 +1598,23 @@ class _AnswerLine extends StatelessWidget {
 
     if (!isBullet) {
       return Padding(
-        padding: EdgeInsets.only(bottom: isHeading ? 8 : 6),
+        padding: EdgeInsets.only(bottom: isHeading ? 7 : 5),
         child: richText,
       );
     }
     return Padding(
-      padding: EdgeInsets.only(left: depth * 20.0, bottom: 8),
+      padding: EdgeInsets.only(left: depth * 20.0 + 4, bottom: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
             padding: const EdgeInsets.only(top: 10),
-            child: Icon(
-              RecodexIcons.circle,
-              size: depth == 0 ? 6 : 5,
-              color: colors.textMuted,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: colors.textMuted,
+                shape: BoxShape.circle,
+              ),
+              child: SizedBox.square(dimension: depth == 0 ? 5 : 4),
             ),
           ),
           const SizedBox(width: 10),
@@ -1698,84 +1927,143 @@ class _GitChangePanel extends StatelessWidget {
     final fontScale = Get.find<ThemeController>().fontScale.value;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final panelColor = isDark
-        ? const Color(0xff171717).withValues(alpha: 0.86)
-        : colors.assistantBubble.withValues(alpha: 0.78);
-    final rowDivider = colors.textMuted.withValues(alpha: isDark ? 0.14 : 0.12);
-    final fileCountLabel = '已编辑 ${summary.files.length} 个文件';
+        ? const Color(0xff242424)
+        : colors.assistantBubble;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var index = 0; index < summary.files.length; index++) ...[
+          _GitChangeFileCard(
+            file: summary.files[index],
+            panelColor: panelColor,
+            borderColor: colors.glassBorder,
+            cardRadius: cardRadius,
+            fontScale: fontScale,
+            onUndo: onUndo,
+            onReview: onFileTap == null
+                ? null
+                : () => onFileTap!(summary.files[index]),
+          ),
+          if (index != summary.files.length - 1) const SizedBox(height: 8),
+        ],
+      ],
+    );
+  }
+}
+
+class _GitChangeFileCard extends StatelessWidget {
+  const _GitChangeFileCard({
+    required this.file,
+    required this.panelColor,
+    required this.borderColor,
+    required this.cardRadius,
+    required this.fontScale,
+    this.onUndo,
+    this.onReview,
+  });
+
+  final GitFileChange file;
+  final Color panelColor;
+  final Color borderColor;
+  final double cardRadius;
+  final double fontScale;
+  final VoidCallback? onUndo;
+  final VoidCallback? onReview;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final fileName = _baseName(file.path).isEmpty
+        ? file.path
+        : _baseName(file.path);
     return DecoratedBox(
       decoration: BoxDecoration(
         color: panelColor,
         borderRadius: BorderRadius.circular(
           _conversationCardRadius(cardRadius),
         ),
-        border: Border.all(color: colors.glassBorder.withValues(alpha: 0.92)),
-        boxShadow: [
-          BoxShadow(
-            color: colors.headerShadow.withValues(alpha: isDark ? 0.26 : 0.10),
-            offset: const Offset(0, 14),
-            blurRadius: 30,
-          ),
-        ],
+        border: Border.all(color: borderColor.withValues(alpha: 0.9)),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
-            child: Row(
-              children: [
-                Icon(RecodexIcons.gitCompare, size: 21, color: colors.icon),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          fileCountLabel,
-                          style: TextStyle(
-                            color: colors.text,
-                            fontSize: _scaledFontSize(16, fontScale),
-                            fontWeight: FontWeight.w600,
-                            height: 1.1,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: _DeltaText(
-                          added: summary.added,
-                          removed: summary.removed,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (onUndo != null)
-                  _GitActionButton(
-                    icon: RecodexIcons.undo,
-                    tooltip: '撤销',
-                    onPressed: onUndo,
-                  ),
-              ],
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+        child: Row(
+          children: [
+            DecoratedBox(
+              decoration: BoxDecoration(
+                color: colors.glassColor.withValues(alpha: 0.58),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const SizedBox(
+                width: 42,
+                height: 42,
+                child: Icon(RecodexIcons.fileText, size: 20),
+              ),
             ),
-          ),
-          Divider(height: 1, color: rowDivider),
-          for (var index = 0; index < summary.files.length; index++) ...[
-            _GitFileRow(
-              file: summary.files[index],
-              onTap: onFileTap == null
-                  ? null
-                  : () => onFileTap!(summary.files[index]),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '已编辑 $fileName',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.text,
+                      fontSize: _scaledFontSize(15, fontScale),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  _DeltaText(added: file.added, removed: file.removed),
+                ],
+              ),
             ),
-            if (index != summary.files.length - 1)
-              Divider(height: 1, color: rowDivider),
+            if (onUndo != null) ...[
+              _GitLabelAction(
+                label: '撤销',
+                icon: RecodexIcons.undo,
+                onPressed: onUndo!,
+              ),
+              const SizedBox(width: 4),
+            ],
+            if (onReview != null)
+              _GitLabelAction(
+                label: '审核',
+                icon: RecodexIcons.gitCompare,
+                onPressed: onReview!,
+              ),
           ],
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GitLabelAction extends StatelessWidget {
+  const _GitLabelAction({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return TextButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 15),
+      label: Text(label),
+      style: TextButton.styleFrom(
+        foregroundColor: colors.textMuted,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
       ),
     );
   }
@@ -1863,35 +2151,6 @@ GitChangeSummary? _mergeGitSummaries(List<GitChangeSummary> summaries) {
   );
 }
 
-class _GitActionButton extends StatelessWidget {
-  const _GitActionButton({
-    required this.icon,
-    required this.tooltip,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    return Tooltip(
-      message: tooltip,
-      child: IconButton(
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints.tightFor(width: 34, height: 34),
-        onPressed: onPressed,
-        icon: Icon(icon, size: 18),
-        color: colors.textMuted,
-        disabledColor: colors.textMuted.withValues(alpha: 0.36),
-      ),
-    );
-  }
-}
-
 class GitFileChange {
   const GitFileChange({
     required this.path,
@@ -1902,55 +2161,6 @@ class GitFileChange {
   final String path;
   final int added;
   final int removed;
-}
-
-class _GitFileRow extends StatelessWidget {
-  const _GitFileRow({required this.file, this.onTap});
-
-  final GitFileChange file;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final fontScale = Get.find<ThemeController>().fontScale.value;
-    final fileName = _baseName(file.path);
-    final content = Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 16, 14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Icon(
-            RecodexIcons.fileText,
-            size: 18,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: Text(
-                fileName.isEmpty ? file.path : fileName,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.primary,
-                  fontSize: _scaledFontSize(15.5, fontScale),
-                  fontWeight: FontWeight.w500,
-                  height: 1.12,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 14),
-          _DeltaText(added: file.added, removed: file.removed),
-        ],
-      ),
-    );
-    if (onTap == null) return content;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(onTap: onTap, child: content),
-    );
-  }
 }
 
 class _DeltaText extends StatelessWidget {
@@ -2036,7 +2246,15 @@ class ComposerBar extends StatelessWidget {
               TextField(
                 controller: controller,
                 focusNode: focusNode,
-                enabled: enabled && !running,
+                // Keep the normal composer decoration while a turn is
+                // running. `enabled: false` makes Flutter apply the global
+                // disabled opacity/colors to the hint and padding, which
+                // causes the input surface to jump when the stop state
+                // appears. A read-only field preserves the layout and still
+                // prevents edits until the turn finishes.
+                enabled: enabled,
+                readOnly: running,
+                showCursor: enabled && !running,
                 minLines: 1,
                 maxLines: 4,
                 style: TextStyle(
@@ -2050,6 +2268,7 @@ class ComposerBar extends StatelessWidget {
                     color: colors.textMuted.withValues(alpha: 0.72),
                     fontWeight: FontWeight.w400,
                   ),
+                  disabledBorder: InputBorder.none,
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
@@ -2062,7 +2281,7 @@ class ComposerBar extends StatelessWidget {
                 children: [
                   _ComposerIconButton(
                     icon: RecodexIcons.add,
-                    onPressed: enabled ? () {} : null,
+                    onPressed: enabled && !running ? () {} : null,
                   ),
                   if (running) ...[
                     const SizedBox(width: 6),
@@ -2073,7 +2292,15 @@ class ComposerBar extends StatelessWidget {
                       onChanged: onPermissionModeChanged,
                     ),
                     const Spacer(),
-                    Flexible(child: _RunningModelLabel(context: this.context)),
+                    // Keep the running controls as one intrinsic trailing
+                    // group. A Flexible model label used to consume the row
+                    // width and visually leave the model/stop controls in
+                    // the middle of the composer instead of at its right
+                    // edge.
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 240),
+                      child: _RunningModelLabel(context: this.context),
+                    ),
                   ] else ...[
                     const SizedBox(width: 6),
                     Expanded(
@@ -2349,7 +2576,7 @@ List<InlineSpan> _inlineSpans(BuildContext context, String text) {
   final isDark = Theme.of(context).brightness == Brightness.dark;
   final spans = <InlineSpan>[];
   final matches = RegExp(
-    r'\[([^\]]+)\]\(((?:/|[A-Za-z]:\\)[^)]+)\)|`([^`]+)`|((?:/|[A-Za-z]:\\)[^\s，。；、]+(?::\d+)?)',
+    r'\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|((?:/|[A-Za-z]:\\)[^\s，。；、]+(?::\d+)?)',
   ).allMatches(text).toList();
   var cursor = 0;
   for (final match in matches) {
@@ -2359,7 +2586,11 @@ List<InlineSpan> _inlineSpans(BuildContext context, String text) {
     final markdownLabel = match.group(1);
     final markdownTarget = match.group(2);
     if (markdownTarget != null) {
-      spans.add(_fileLinkSpan(context, markdownTarget, markdownLabel));
+      if (_isFileLinkTarget(markdownTarget)) {
+        spans.add(_fileLinkSpan(context, markdownTarget, markdownLabel));
+      } else {
+        spans.add(TextSpan(text: markdownLabel ?? markdownTarget));
+      }
       cursor = match.end;
       continue;
     }
@@ -2404,14 +2635,28 @@ List<InlineSpan> _inlineSpans(BuildContext context, String text) {
 }
 
 InlineSpan _fileLinkSpan(BuildContext context, String target, String? label) {
-  final color = Theme.of(context).colorScheme.primary;
+  // Codex keeps file references visibly link-like in both themes. The app's
+  // neutral primary color is intentionally black/white, so using it here
+  // would make file links blend into normal answer text.
+  final color = Theme.of(context).brightness == Brightness.dark
+      ? const Color(0xff73b8ff)
+      : const Color(0xff1769aa);
   final parsed = _parseFileLinkTarget(target);
   final fallbackName = _baseName(parsed.path);
   final labelName = (label ?? '').trim();
-  final fileName = labelName.isEmpty || labelName.startsWith('/')
+  // Codex links often repeat the full path and line number in the Markdown
+  // label. Reduce both the label and target to one basename for a compact
+  // file reference (for example, `bridge_controller.dart`).
+  final labelPath = labelName.isEmpty
+      ? ''
+      : _parseFileLinkTarget(labelName).path;
+  final fileName =
+      labelPath.isEmpty ||
+          labelPath.startsWith('/') ||
+          labelPath.contains('/') ||
+          RegExp(r'^[A-Za-z]:\\').hasMatch(labelPath)
       ? fallbackName
-      : labelName;
-  final suffix = parsed.line == null ? '' : ' (line ${parsed.line})';
+      : _baseName(labelPath);
   return WidgetSpan(
     alignment: PlaceholderAlignment.middle,
     child: Padding(
@@ -2422,7 +2667,7 @@ InlineSpan _fileLinkSpan(BuildContext context, String target, String? label) {
           Icon(RecodexIcons.fileText, size: 16, color: color),
           const SizedBox(width: 4),
           Text(
-            '$fileName$suffix',
+            fileName,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
@@ -2439,10 +2684,29 @@ InlineSpan _fileLinkSpan(BuildContext context, String target, String? label) {
 }
 
 ({String path, String? line}) _parseFileLinkTarget(String target) {
-  final trimmed = target.trim();
+  var trimmed = target.trim();
+  if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+    trimmed = trimmed.substring(1, trimmed.length - 1).trim();
+  }
   final match = RegExp(r'^(.*):(\d+)$').firstMatch(trimmed);
-  if (match == null) return (path: trimmed, line: null);
-  return (path: match.group(1) ?? trimmed, line: match.group(2));
+  final pathWithUri = match?.group(1) ?? trimmed;
+  final line = match?.group(2);
+  if (pathWithUri.toLowerCase().startsWith('file://')) {
+    final uri = Uri.tryParse(pathWithUri);
+    final path = uri == null ? pathWithUri : uri.path;
+    return (path: Uri.decodeFull(path), line: line);
+  }
+  return (path: pathWithUri, line: line);
+}
+
+bool _isFileLinkTarget(String target) {
+  var trimmed = target.trim();
+  if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+    trimmed = trimmed.substring(1, trimmed.length - 1).trim();
+  }
+  return trimmed.toLowerCase().startsWith('file://') ||
+      trimmed.startsWith('/') ||
+      RegExp(r'^[A-Za-z]:\\').hasMatch(trimmed);
 }
 
 bool _isModifiedFilesHeader(String line) {

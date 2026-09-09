@@ -23,6 +23,7 @@ val releaseStorePassword = releaseSigningValue("storePassword", "ANDROID_STORE_P
 val releaseKeyAlias = releaseSigningValue("keyAlias", "ANDROID_KEY_ALIAS")
 val releaseKeyPassword = releaseSigningValue("keyPassword", "ANDROID_KEY_PASSWORD")
 val releaseSigningProblems = mutableListOf<String>()
+val allowUnsignedRelease = providers.gradleProperty("allowUnsignedRelease").orNull == "true"
 
 if (releaseStoreFilePath == null) releaseSigningProblems += "storeFile / ANDROID_KEYSTORE_PATH"
 if (releaseStoreFilePath != null && releaseStoreFile?.isFile != true) {
@@ -38,7 +39,7 @@ val releaseBuildRequested =
         taskName.contains("release", ignoreCase = true)
     }
 
-if (releaseBuildRequested && releaseSigningProblems.isNotEmpty()) {
+if (releaseBuildRequested && !allowUnsignedRelease && releaseSigningProblems.isNotEmpty()) {
     throw GradleException(
         "Android release signing is not configured: ${releaseSigningProblems.joinToString()}. " +
             "Copy android/key.properties.example to android/key.properties, or provide the " +
@@ -83,8 +84,10 @@ android {
 
     buildTypes {
         release {
-            signingConfigs.findByName("release")?.let { releaseSigningConfig ->
-                signingConfig = releaseSigningConfig
+            if (!allowUnsignedRelease) {
+                signingConfigs.findByName("release")?.let { releaseSigningConfig ->
+                    signingConfig = releaseSigningConfig
+                }
             }
             isMinifyEnabled = true
             isShrinkResources = true

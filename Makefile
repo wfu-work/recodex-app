@@ -16,6 +16,7 @@ PROJECT_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 BUILD_DIR := $(PROJECT_ROOT)/build
 PACKAGE_DIR ?= $(BUILD_DIR)/packages
 ANDROID_SYMBOLS_DIR ?= $(BUILD_DIR)/symbols/android
+ANDROID_UNSIGNED_APK ?= $(PACKAGE_DIR)/recodex-$(APP_VERSION)-android-unsigned.apk
 APP_VERSION ?= $(shell sed -n 's/^version:[[:space:]]*//p' "$(PROJECT_ROOT)/pubspec.yaml" | head -n 1 | cut -d+ -f1)
 MACOS_APP_NAME ?= recodex
 DMG_VOLUME_NAME ?= RecoDex
@@ -39,7 +40,7 @@ DESKTOP_PLATFORM :=
 endif
 
 .PHONY: all help deps check analyze test doctor devices dev build build-all package desktop \
-	android android-apk android-appbundle apk aab ios ipa macos windows linux web dmg \
+	android android-apk android-apk-unsigned android-appbundle apk apk-unsigned aab ios ipa macos windows linux web dmg \
 	build-android build-ios build-macos build-windows build-linux build-web build-dmg clean
 
 all: check build
@@ -64,6 +65,7 @@ help:
 	@echo "移动端与 Web 软件包："
 	@echo "  make android                     同时编译 Android APK 和 AAB"
 	@echo "  make apk                         编译签名并混淆的 Android APK"
+	@echo "  make apk-unsigned                编译无需正式签名的 Android APK"
 	@echo "  make aab                         编译签名并混淆的 Android App Bundle"
 	@echo "  make ios                         编译 iOS IPA（仅 macOS，需签名配置）"
 	@echo "  make web                         编译 Web Release"
@@ -123,6 +125,14 @@ android_obfuscation_args = $(if $(and $(filter release profile,$(BUILD_MODE)),$(
 
 android-apk: deps
 	"$(FLUTTER)" build apk --$(BUILD_MODE) $(call android_obfuscation_args,apk) $(BUILD_ARGS) $(ANDROID_ARGS)
+
+android-apk-unsigned: deps
+	ORG_GRADLE_PROJECT_allowUnsignedRelease=true "$(FLUTTER)" build apk --release $(call android_obfuscation_args,apk-unsigned) $(BUILD_ARGS) $(ANDROID_ARGS)
+	@mkdir -p "$(PACKAGE_DIR)"
+	@cp "$(BUILD_DIR)/app/outputs/flutter-apk/app-release.apk" "$(ANDROID_UNSIGNED_APK)"
+	@echo "未签名 Android APK 已生成：$(ANDROID_UNSIGNED_APK)"
+
+apk-unsigned: android-apk-unsigned
 
 android-appbundle: deps
 	"$(FLUTTER)" build appbundle --$(BUILD_MODE) $(call android_obfuscation_args,aab) $(BUILD_ARGS) $(ANDROID_ARGS)

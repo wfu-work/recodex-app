@@ -307,23 +307,6 @@ class _MainPageState extends State<MainPage> {
                                       controller.lastError.value = '',
                                 ),
                               ),
-                            if (_gitChangeSummary != null)
-                              SliverPadding(
-                                padding: EdgeInsets.fromLTRB(
-                                  answerHorizontalPadding,
-                                  26,
-                                  answerHorizontalPadding,
-                                  0,
-                                ),
-                                sliver: SliverToBoxAdapter(
-                                  child: GitChangeCard(
-                                    summary: _gitChangeSummary!,
-                                    cardRadius: answerCardRadius,
-                                    onUndo: _confirmUndoChanges,
-                                    onFileTap: _openGitDiff,
-                                  ),
-                                ),
-                              ),
                             SliverPadding(
                               padding: EdgeInsets.fromLTRB(
                                 answerHorizontalPadding,
@@ -412,6 +395,23 @@ class _MainPageState extends State<MainPage> {
                                 },
                               ),
                             ),
+                            if (_gitChangeSummary != null)
+                              SliverPadding(
+                                padding: EdgeInsets.fromLTRB(
+                                  answerHorizontalPadding,
+                                  8,
+                                  answerHorizontalPadding,
+                                  0,
+                                ),
+                                sliver: SliverToBoxAdapter(
+                                  child: GitChangeCard(
+                                    summary: _gitChangeSummary!,
+                                    cardRadius: answerCardRadius,
+                                    onUndo: _confirmUndoChanges,
+                                    onFileTap: _openGitDiff,
+                                  ),
+                                ),
+                              ),
                             SliverToBoxAdapter(
                               child: SizedBox(
                                 key: _timelineBottomKey,

@@ -149,6 +149,7 @@ class BridgeController extends GetxController {
   bool _tokenRotationInProgress = false;
   int _tokenRefreshRetryAttempt = 0;
   int _connectionAttempt = 0;
+  int _reconnectAttemptCount = 0;
   String? _tokenRefreshContextKey;
   final _pendingCommands = <String, _PendingCommand>{};
   String? _timelineSnapshotHash;
@@ -2223,6 +2224,10 @@ class BridgeController extends GetxController {
     _timelineSnapshotGuard.resetRevision();
     connected.value = true;
     connectionLabel.value = 'online';
+    if (_reconnectAttemptCount > 0) {
+      _appendTransportTimelineEvent('连接已恢复');
+    }
+    _reconnectAttemptCount = 0;
     _hadOnlineConnection = true;
     _credentialRefreshBlocked = false;
     _tokenRefreshRetryAttempt = 0;
@@ -2310,7 +2315,9 @@ class BridgeController extends GetxController {
       _tokenRefreshTimer = null;
       unawaited(_closeSocket());
       unawaited(_storeConnectionHints());
+      return;
     }
+    _scheduleReconnect(reason: lastError.value);
   }
 
   /// Closes the expired-token socket before scheduling the replacement
@@ -2344,7 +2351,7 @@ class BridgeController extends GetxController {
           // A credential rotation is an intentional lifecycle operation, so
           // it must finish even when the user disabled ordinary network
           // auto-reconnect in settings.
-          _scheduleReconnect(force: true);
+          _scheduleReconnect(force: true, reason: '连接凭证正在更新。');
         }
       }
     }());
@@ -5327,6 +5334,7 @@ class BridgeController extends GetxController {
     }
     _scheduleReconnect(
       force: _forceTokenRefresh && endpointGrant.value.isNotEmpty,
+      reason: 'Relay 连接已断开。',
     );
   }
 
@@ -5369,6 +5377,7 @@ class BridgeController extends GetxController {
     }
     _scheduleReconnect(
       force: _forceTokenRefresh && endpointGrant.value.isNotEmpty,
+      reason: _connectionTestError(error),
     );
   }
 
@@ -6059,6 +6068,7 @@ class BridgeController extends GetxController {
 
   bool _isLiveStatusEvent(SessionEvent event) {
     return event.kind == 'running' ||
+        event.kind == 'reconnecting' ||
         event.kind == 'assistant' ||
         event.kind == 'reasoning' ||
         event.kind == 'tool_call' ||
@@ -6604,7 +6614,7 @@ class BridgeController extends GetxController {
     );
   }
 
-  void _scheduleReconnect({bool force = false}) {
+  void _scheduleReconnect({bool force = false, String? reason}) {
     final preferences = Get.isRegistered<SettingsPreferencesController>()
         ? Get.find<SettingsPreferencesController>()
         : null;
@@ -6617,7 +6627,11 @@ class BridgeController extends GetxController {
         _reconnectTimer != null) {
       return;
     }
+    _reconnectAttemptCount += 1;
     connectionLabel.value = 'reconnecting';
+    _appendTransportTimelineEvent(
+      '正在重新连接 $_reconnectAttemptCount/5${reason == null || reason.trim().isEmpty ? '' : '\n$reason'}',
+    );
     _reconnectTimer = Timer(const Duration(seconds: 3), () {
       _reconnectTimer = null;
       final currentPreferences =
@@ -6634,6 +6648,23 @@ class BridgeController extends GetxController {
         unawaited(_autoConnect(fromReconnect: true));
       }
     });
+  }
+
+  void _appendTransportTimelineEvent(String text) {
+    final sessionId = selectedSessionId.value ?? currentSessionId.value;
+    if (sessionId == null || sessionId.trim().isEmpty) return;
+    final hasActiveTurn =
+        timelineStatus.value.isActive ||
+        events.any((event) => event.kind == 'running');
+    if (!hasActiveTurn) return;
+    _appendSessionEvent(
+      SessionEvent(
+        kind: 'reconnecting',
+        text: text,
+        itemId: 'transport-reconnect-$sessionId',
+        turnId: _currentTurnId,
+      ),
+    );
   }
 
   void _fail(Object error) {
