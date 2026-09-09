@@ -90,6 +90,7 @@ class RelayProtocol {
     required String endpointName,
     required String token,
     Map<String, dynamic>? resume,
+    bool test = false,
   }) async {
     final requestId = randomId('hello');
     final issuedAt = DateTime.now().millisecondsSinceEpoch;
@@ -124,6 +125,7 @@ class RelayProtocol {
       'capabilities': capabilities,
     };
     if (resume != null) hello['resume'] = resume;
+    if (test) hello['test'] = true;
     return hello;
   }
 

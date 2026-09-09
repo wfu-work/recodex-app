@@ -182,6 +182,9 @@ class ConnectionSettingsPage extends StatelessWidget {
             inputEndpointId: profile.deviceId,
             inputEndpointType: profile.endpointType,
             inputDeviceKey: profile.deviceKey,
+            inputEndpointGrant: profile.endpointGrant,
+            inputTokenExpiresAt: profile.tokenExpiresAt,
+            inputGrantExpiresAt: profile.grantExpiresAt,
           );
     if (!context.mounted) return;
     _showMessage(context, error ?? '连接测试成功，Relay 连接正常。');

@@ -388,16 +388,25 @@ class _EventImageData {
   const _EventImageData({
     this.thumbnailBytes,
     this.originalBytes,
+    this.originalDataUrl = '',
     this.resourceUri,
   });
 
   final Uint8List? thumbnailBytes;
   final Uint8List? originalBytes;
+  final String originalDataUrl;
   final Uri? resourceUri;
 
   static _EventImageData? tryParse(EventAttachment attachment) {
     final thumbnailBytes = _decodeImageDataUrl(attachment.thumbnailDataUrl);
-    final originalBytes = _decodeImageDataUrl(attachment.dataUrl);
+    // Do not eagerly decode a full-resolution inline image when a thumbnail
+    // is available. Timeline cards are built for every visible event and
+    // retaining a second multi-megabyte Uint8List per image quickly grows the
+    // Flutter external heap. The preview can fall back to the thumbnail or a
+    // signed resource URL and only one payload is kept in memory.
+    final originalBytes = thumbnailBytes == null
+        ? _decodeImageDataUrl(attachment.dataUrl)
+        : null;
     final resourceUri = _isExpired(attachment.expiresAt)
         ? null
         : _safeImageUri(attachment.resourceUrl);
@@ -409,6 +418,9 @@ class _EventImageData {
     return _EventImageData(
       thumbnailBytes: thumbnailBytes,
       originalBytes: originalBytes,
+      // Keep the original data URL as a reference only; bytes are decoded
+      // when the preview opens, rather than during timeline card builds.
+      originalDataUrl: attachment.dataUrl,
       resourceUri: resourceUri,
     );
   }
@@ -430,7 +442,7 @@ class _EventImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bytes = preview
-        ? image.originalBytes
+        ? image.originalBytes ?? _decodeImageDataUrl(image.originalDataUrl)
         : image.thumbnailBytes ?? image.originalBytes;
     if (bytes != null) {
       return Image.memory(

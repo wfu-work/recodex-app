@@ -19,6 +19,16 @@ void main() {
     expect(hello['version'], RelayProtocol.version);
     expect(hello['type'], 'connect.hello');
     expect(hello['capabilities'], RelayProtocol.capabilities);
+    final testHello = await RelayProtocol.connectHello(
+      keyPair: keyPair,
+      spaceId: 'space-1',
+      endpointId: 'app-1',
+      endpointType: 'app',
+      endpointName: 'Test phone',
+      token: 'connect-token',
+      test: true,
+    );
+    expect(testHello['test'], isTrue);
     final proof = Map<String, dynamic>.from(hello['endpointProof'] as Map);
     final canonical = [
       'relay-connect-v1',

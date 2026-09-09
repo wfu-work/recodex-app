@@ -279,14 +279,15 @@ class _PairingPageState extends State<PairingPage> {
                         const SizedBox(height: 18),
                         _TextSettingRow(
                           title: '接入端授权凭证',
-                          subtitle: '可选，用于连接令牌到期后自动续期',
+                          subtitle: '建议填写；连接令牌到期后由它自动续期（通常有效 30 天）',
                           controller: _grantController,
                           keyboardType: TextInputType.text,
                           onSubmitted: (_) => _savePairing(),
                         ),
                         const SizedBox(height: 18),
                         _PairingHint(
-                          text: '私钥只保存在本机；Relay 仅登记上方的 Ed25519 公钥和连接令牌哈希。',
+                          text:
+                              '建议同时保存 Endpoint Grant：短期连接令牌会自动续期；Grant 失效后需重新签发。私钥只保存在本机。',
                           error: false,
                         ),
                         const SizedBox(height: 22),
@@ -514,8 +515,9 @@ class _PairingPageState extends State<PairingPage> {
       controller.lastError.value = '请先填写空间 ID、目标主机接入端 ID 和本机接入端 ID。';
       return;
     }
-    if (token.isEmpty) {
-      controller.lastError.value = '请先填写连接令牌；接入端授权凭证用于后续自动续期。';
+    final grant = _grantController.text.trim();
+    if (token.isEmpty && grant.isEmpty) {
+      controller.lastError.value = '请填写连接令牌或接入端授权凭证。';
       return;
     }
     setState(() => _testing = true);
@@ -530,6 +532,17 @@ class _PairingPageState extends State<PairingPage> {
         inputEndpointId: endpointId,
         inputEndpointType: controller.endpointType.value,
         inputDeviceKey: _draftDeviceKey,
+        inputEndpointGrant: grant,
+        inputTokenExpiresAt:
+            _editingProfile != null &&
+                token == _editingProfile!.pairingToken.trim()
+            ? _editingProfile!.tokenExpiresAt
+            : 0,
+        inputGrantExpiresAt:
+            _editingProfile != null &&
+                grant == _editingProfile!.endpointGrant.trim()
+            ? _editingProfile!.grantExpiresAt
+            : 0,
       );
       if (!mounted) return;
       if (error == null) {
@@ -571,7 +584,26 @@ class _PairingPageState extends State<PairingPage> {
       controller.lastError.value = '请填写配对名称或目标主机接入端 ID。';
       return;
     }
-    final base = _editingProfile ?? controller.createDraftPairing();
+    final editing = _editingProfile;
+    final latest = editing == null ? null : controller.pairingById(editing.id);
+    // A background renewal updates the saved profile while this editor can
+    // remain open for minutes. Use that newest profile as the base and only
+    // keep a credential value from the form when the user actually changed
+    // that field; otherwise saving an unrelated label would restore the
+    // already-rotated token (and its old expiry).
+    final base = latest ?? editing ?? controller.createDraftPairing();
+    var nextToken = _tokenController.text.trim();
+    var nextGrant = _grantController.text.trim();
+    if (editing != null && latest != null) {
+      if (nextToken == editing.pairingToken.trim() &&
+          latest.pairingToken != editing.pairingToken) {
+        nextToken = latest.pairingToken;
+      }
+      if (nextGrant == editing.endpointGrant.trim() &&
+          latest.endpointGrant != editing.endpointGrant) {
+        nextGrant = latest.endpointGrant;
+      }
+    }
     final profile = base.copyWith(
       name: name.isEmpty ? target : name,
       baseUrl: _baseUrlController.text,
@@ -580,8 +612,14 @@ class _PairingPageState extends State<PairingPage> {
       deviceId: _endpointIdController.text,
       deviceKey: _draftDeviceKey,
       endpointPublicKey: _publicKeyController.text.trim(),
-      pairingToken: _tokenController.text,
-      endpointGrant: _grantController.text,
+      pairingToken: nextToken,
+      endpointGrant: nextGrant,
+      tokenExpiresAt: nextToken == base.pairingToken.trim()
+          ? base.tokenExpiresAt
+          : 0,
+      grantExpiresAt: nextGrant == base.endpointGrant.trim()
+          ? base.grantExpiresAt
+          : 0,
     );
     setState(() => _saving = true);
     try {

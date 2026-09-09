@@ -36,12 +36,26 @@ dependencies:
   flutter_local_notifications: ^21.0.0
   cryptography: ^2.7.0
   lucide_icons_flutter: ^3.1.15
+  path: ^1.9.1
+  path_provider: ^2.1.6
+  # Keep the SQLite stack usable with the app's Dart 3.11 minimum. Newer
+  # releases currently raise the SDK floor to Dart 3.12, while these ranges
+  # retain the same API and support the existing Flutter targets.
+  sqflite: ">=2.4.2 <2.4.3"
+  sqflite_common: ">=2.5.6 <2.5.7"
+  sqflite_common_ffi: ">=2.3.7 <2.4.0"
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
 
   flutter_lints: ^6.0.0
+
+# sqflite_common 2.5.6 accepts Dart 3.11, but its broad synchronized range
+# otherwise resolves to 3.4.1+, whose SDK floor is Dart 3.12. Pin the
+# compatible implementation so the package keeps its declared minimum.
+dependency_overrides:
+  synchronized: ">=3.4.0 <3.4.1"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

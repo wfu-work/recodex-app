@@ -9,12 +9,28 @@ import 'package:get_storage/get_storage.dart';
 
 import '../../models/bridge_models.dart';
 import '../../services/relay_protocol.dart';
+import '../../services/session_cache.dart';
 import '../../services/task_notification_controller.dart';
 import '../settings/settings_preferences_controller.dart';
 
 class BridgeController extends GetxController {
   static const _storageContainer = 'recodex';
   static const _commandTimeout = Duration(seconds: 35);
+  static const _tokenRefreshLead = Duration(minutes: 1);
+  static const _unknownTokenRefreshInterval = Duration(minutes: 5);
+  static const _tokenRefreshRetry = Duration(seconds: 15);
+  // These are fallback reconciliation intervals. Normal streaming updates
+  // arrive from the Relay event channel; the shorter intervals close the
+  // recovery window when a desktop-owned thread cannot be resumed.
+  static const _liveTimelineInterval = Duration(seconds: 2);
+  static const _catalogRefreshInterval = Duration(seconds: 15);
+  static const _activeTimelineReadInterval = Duration(seconds: 5);
+  static const _cacheWriteDebounce = Duration(milliseconds: 250);
+  // Keep the live transcript bounded. Full history remains available in the
+  // persistent SessionCache and is loaded on demand when a task is selected.
+  static const _maxInMemoryTimelineEvents = 500;
+  static const _maxInMemoryTimelineThreads = 5;
+  static const _maxInMemoryEventTextChars = 1_000_000;
   static final _storage = GetStorage(_storageContainer);
   static const _legacySecureStorage = FlutterSecureStorage();
   static const _pairingsStorageKey = 'recodex_pairings_v2';
@@ -93,10 +109,19 @@ class BridgeController extends GetxController {
   /// the first hydration of the selected conversation.
   final timelineRefreshing = false.obs;
 
+  /// Cache-first state exposed to the UI. A stale cache is still useful and
+  /// should remain visible while the Relay performs the next authoritative
+  /// reconciliation.
+  final cacheHydrating = false.obs;
+  final cacheStale = false.obs;
+  final cacheLastUpdated = Rxn<DateTime>();
+
   WebSocket? _socket;
   StreamSubscription<dynamic>? _socketSubscription;
   Timer? _reconnectTimer;
   Timer? _liveTimelineTimer;
+  Timer? _catalogRefreshTimer;
+  Timer? _cacheWriteTimer;
   Timer? _handshakeTimer;
   Timer? _heartbeatTimer;
   Timer? _healthCheckTimer;
@@ -104,6 +129,7 @@ class BridgeController extends GetxController {
   Timer? _timelineLoadTimeoutTimer;
   Timer? _timelineStatusTimer;
   Timer? _timelineRefreshTimeoutTimer;
+  Timer? _tokenRefreshTimer;
   int _outgoingSequence = 0;
   int _lastIncomingSequence = 0;
   int _maxFrameSize = RelayProtocol.defaultMaxFrameSize;
@@ -118,6 +144,12 @@ class BridgeController extends GetxController {
   String? _pendingHelloRequestId;
   SimpleKeyPair? _keyPair;
   bool _forceTokenRefresh = false;
+  Future<void>? _tokenRefreshInFlight;
+  bool _credentialRefreshBlocked = false;
+  bool _tokenRotationInProgress = false;
+  int _tokenRefreshRetryAttempt = 0;
+  int _connectionAttempt = 0;
+  String? _tokenRefreshContextKey;
   final _pendingCommands = <String, _PendingCommand>{};
   // The Relay subscribes a historical thread through `thread.resume`. Keep a
   // local marker so the read heartbeat does not send that command repeatedly;
@@ -125,6 +157,10 @@ class BridgeController extends GetxController {
   final _resumedTimelineSessions = <String>{};
   final _timelineResumeRetryAt = <String, DateTime>{};
   final _seenIncomingMessageIds = <String>{};
+  // A Relay connection is at-least-once. Keep a single recovery request in
+  // flight when an incoming event sequence has a gap; otherwise advancing the
+  // cursor before replay would permanently skip the missing events.
+  bool _syncRecoveryInFlight = false;
   Completer<String?>? _healthCheckCompleter;
   final _credentialsLoaded = Completer<void>();
   String? _requestedEventsSessionId;
@@ -144,6 +180,22 @@ class BridgeController extends GetxController {
   bool _sessionRestoreAttempted = false;
   final _sessionLifecycles = <String, _SessionLifecycle>{};
   final _notifiedTerminalSessions = <String>{};
+  final SessionCache _sessionCache = SessionCache();
+  SessionCacheScope? _cacheScope;
+  String? _cacheLoadedScopeKey;
+  int _cacheGeneration = 0;
+  Future<void>? _cacheLoadInFlight;
+  final _timelineMemoryCache = <String, List<SessionEvent>>{};
+  final _timelineMemoryCacheAccess = <String, int>{};
+  int _timelineMemoryCacheClock = 0;
+  final _pendingTimelineCacheWrites = <String, List<SessionEvent>>{};
+  final _pendingTimelineCacheReplacements = <String>{};
+  bool _pendingCatalogCacheWrite = false;
+  int? _pendingCacheSequence;
+  DateTime? _pendingCacheSyncedAt;
+  Future<void>? _cacheFlushInFlight;
+  bool _cacheFlushRequested = false;
+  DateTime? _lastTimelineReadRequestedAt;
 
   bool get canUseWorkspace =>
       connected.value && selectedWorkspace.value != null;
@@ -312,15 +364,26 @@ class BridgeController extends GetxController {
     super.onInit();
     unawaited(_loadStoredCredentials());
     unawaited(_applySavedTaskPreferences());
+    // Credentials are loaded asynchronously; [_loadStoredCredentials] will
+    // activate the scope again once the selected pairing is known.
+    unawaited(_activateSessionCache());
   }
 
   @override
   void onClose() {
     stopLiveTimelineRefresh();
+    _catalogRefreshTimer?.cancel();
+    _catalogRefreshTimer = null;
+    _cacheWriteTimer?.cancel();
+    _cacheWriteTimer = null;
     _timelineStatusTimer?.cancel();
     _timelineStatusTimer = null;
     _finishTimelineRefresh();
     _clearTimelineLoadState();
+    unawaited(() async {
+      await _flushCacheWrites();
+      await _sessionCache.close();
+    }());
     unawaited(disconnect(silent: true));
     super.onClose();
   }
@@ -389,6 +452,24 @@ class BridgeController extends GetxController {
     _sessionLifecycles.clear();
     _notifiedTerminalSessions.clear();
     _sessionRestoreAttempted = false;
+    _timelineMemoryCache.clear();
+    _timelineMemoryCacheAccess.clear();
+    _timelineMemoryCacheClock = 0;
+    _pendingTimelineCacheWrites.clear();
+    _pendingTimelineCacheReplacements.clear();
+    _pendingCatalogCacheWrite = false;
+    _pendingCacheSequence = null;
+    _pendingCacheSyncedAt = null;
+    _cacheFlushRequested = false;
+    _cacheWriteTimer?.cancel();
+    _cacheWriteTimer = null;
+    _cacheScope = null;
+    _cacheLoadedScopeKey = null;
+    _cacheGeneration += 1;
+    cacheHydrating.value = false;
+    cacheStale.value = false;
+    cacheLastUpdated.value = null;
+    unawaited(_activateSessionCache());
   }
 
   void _resetToEmptyConfiguration() {
@@ -447,16 +528,33 @@ class BridgeController extends GetxController {
     String? inputEndpointId,
     String? inputEndpointType,
     String? inputEndpointGrant,
+    bool fromReconnect = false,
   }) async {
     await _ensureCredentialsLoaded();
+    final attempt = ++_connectionAttempt;
+    // A new explicit connection attempt supersedes any rotation cleanup that
+    // may still be waiting on a platform WebSocket close callback.
+    _tokenRotationInProgress = false;
+    final previousToken = pairingToken.value;
+    final previousGrant = endpointGrant.value;
+    final trimmedToken = token.trim();
+    final trimmedGrant = inputEndpointGrant?.trim();
+    final credentialsChanged =
+        (trimmedToken.isNotEmpty && trimmedToken != previousToken) ||
+        (trimmedGrant != null && trimmedGrant != previousGrant);
     _manualDisconnect = false;
+    if (!fromReconnect || credentialsChanged) {
+      _credentialRefreshBlocked = false;
+    }
     _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     busy.value = true;
     lastError.value = '';
     connectionLabel.value = 'connecting';
 
     try {
       await _closeSocket();
+      if (!_isCurrentConnectionAttempt(attempt)) return;
       final normalizedBaseUrl = _normalizeRelayUrl(inputBaseUrl);
       final nextSpaceId = inputSpaceId == null
           ? spaceId.value
@@ -478,8 +576,6 @@ class BridgeController extends GetxController {
           normalizedBaseUrl != baseUrl.value ||
           identityChanged ||
           nextTargetDeviceId != targetDeviceId.value;
-      final previousToken = pairingToken.value;
-      final previousGrant = endpointGrant.value;
       baseUrl.value = normalizedBaseUrl;
       spaceId.value = nextSpaceId;
       targetDeviceId.value = nextTargetDeviceId;
@@ -503,19 +599,30 @@ class BridgeController extends GetxController {
       deviceName.value = inputDeviceName.trim().isEmpty
           ? 'Flutter phone'
           : inputDeviceName.trim();
-      final trimmedToken = token.trim();
-      if (trimmedToken.isNotEmpty) {
-        if (trimmedToken != previousToken) {
-          tokenExpiresAt.value = 0;
-          _forceTokenRefresh = false;
-        }
-        pairingToken.value = trimmedToken;
-      }
-      if (inputEndpointGrant != null) {
-        if (inputEndpointGrant.trim() != previousGrant) {
+      // Keep the historical connect() contract: an omitted/blank token means
+      // "reuse the configured token".  Grant-only pairings already have an
+      // empty observable token, while reconnects must not erase a still-valid
+      // token merely because the caller did not repeat it.
+      if (trimmedToken.isNotEmpty && trimmedToken != previousToken) {
+        tokenExpiresAt.value = 0;
+        _forceTokenRefresh = false;
+        if (inputEndpointGrant == null) {
+          // An explicitly replaced Token is not proof that it belongs to the
+          // previously paired Endpoint. Do not silently combine it with the
+          // old proof-bound Grant: that could mint a token for the old
+          // pairing and make the user's newly pasted Token appear to be
+          // ignored. Callers that intentionally rotate only the Token while
+          // retaining its Grant must pass the Grant explicitly.
+          endpointGrant.value = '';
           grantExpiresAt.value = 0;
         }
-        endpointGrant.value = inputEndpointGrant.trim();
+      }
+      if (trimmedToken.isNotEmpty) pairingToken.value = trimmedToken;
+      if (inputEndpointGrant != null) {
+        if (trimmedGrant != previousGrant) {
+          grantExpiresAt.value = 0;
+        }
+        endpointGrant.value = trimmedGrant ?? '';
       }
       if (spaceId.value.isEmpty ||
           targetDeviceId.value.isEmpty ||
@@ -526,16 +633,38 @@ class BridgeController extends GetxController {
         );
       }
       _keyPair ??= await _loadOrCreateKeyPair();
+      if (!_isCurrentConnectionAttempt(attempt)) return;
       endpointPublicKey.value = await RelayProtocol.publicKey(_keyPair!);
-      final connectToken = await _usableConnectToken(trimmedToken);
-      _socket = await WebSocket.connect(baseUrl.value);
-      _socketSubscription = _socket!.listen(
-        _handleRawMessage,
-        onDone: _handleDone,
-        onError: _handleSocketError,
+      final connectToken = await _usableConnectToken(
+        trimmedToken,
+        attempt: attempt,
       );
+      if (!_isCurrentConnectionAttempt(attempt)) return;
+      final socket = await WebSocket.connect(baseUrl.value);
+      if (!_isCurrentConnectionAttempt(attempt)) {
+        await _closeSocketInstance(socket);
+        return;
+      }
+      _socket = socket;
+      _socketSubscription = socket.listen(
+        (raw) {
+          if (_isCurrentSocket(socket, attempt)) _handleRawMessage(raw);
+        },
+        onDone: () {
+          if (_isCurrentSocket(socket, attempt)) {
+            _handleDone(socket: socket, attempt: attempt);
+          }
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (_isCurrentSocket(socket, attempt)) {
+            _handleSocketError(error, socket: socket, attempt: attempt);
+          }
+        },
+        cancelOnError: false,
+      );
+      final keyPair = _keyPair!;
       final hello = await RelayProtocol.connectHello(
-        keyPair: _keyPair!,
+        keyPair: keyPair,
         spaceId: spaceId.value,
         endpointId: deviceId.value,
         endpointType: endpointType.value,
@@ -548,8 +677,12 @@ class BridgeController extends GetxController {
                 'lastAck': _lastIncomingSequence,
               },
       );
+      if (!_isCurrentConnectionAttempt(attempt)) {
+        await _closeSocketInstance(socket);
+        return;
+      }
       _pendingHelloRequestId = hello['requestId'] as String?;
-      _socket!.add(jsonEncode(hello));
+      socket.add(jsonEncode(hello));
       connectionLabel.value = 'auth';
       _handshakeTimer?.cancel();
       _handshakeTimer = Timer(const Duration(seconds: 10), () {
@@ -559,14 +692,23 @@ class BridgeController extends GetxController {
           _scheduleReconnect();
         }
       });
-      unawaited(_storeConnectionHints());
+      unawaited(_storeConnectionHints(expectedAttempt: attempt));
     } catch (error) {
+      if (!_isCurrentConnectionAttempt(attempt)) return;
       _fail(_connectionTestError(error));
       connectionLabel.value = 'failed';
       connected.value = false;
-      _scheduleReconnect();
+      if (_isTerminalRefreshFailure(error) ||
+          error.toString().toLowerCase().contains('auth.grant_required')) {
+        _credentialRefreshBlocked = true;
+        _forceTokenRefresh = false;
+        _tokenRefreshTimer?.cancel();
+        _tokenRefreshTimer = null;
+      } else {
+        _scheduleReconnect();
+      }
     } finally {
-      busy.value = false;
+      if (attempt == _connectionAttempt) busy.value = false;
     }
   }
 
@@ -587,16 +729,10 @@ class BridgeController extends GetxController {
     required String inputEndpointId,
     required String inputEndpointType,
     required String inputDeviceKey,
+    String inputEndpointGrant = '',
+    int inputTokenExpiresAt = 0,
+    int inputGrantExpiresAt = 0,
   }) async {
-    WebSocket? socket;
-    StreamSubscription<dynamic>? subscription;
-    Timer? timeout;
-    final result = Completer<String?>();
-
-    void complete(String? error) {
-      if (!result.isCompleted) result.complete(error);
-    }
-
     try {
       final normalizedBaseUrl = _normalizeRelayUrl(inputBaseUrl);
       final nextSpaceId = inputSpaceId.trim();
@@ -605,15 +741,16 @@ class BridgeController extends GetxController {
       final nextEndpointType = inputEndpointType.trim().isEmpty
           ? 'app'
           : inputEndpointType.trim();
-      final connectToken = token.trim();
+      var connectToken = token.trim();
+      final draftGrant = inputEndpointGrant.trim();
       final encodedKey = inputDeviceKey.trim();
       if (nextSpaceId.isEmpty ||
           nextTargetDeviceId.isEmpty ||
           nextEndpointId.isEmpty) {
         return '请先填写空间 ID、目标主机接入端 ID 和本机接入端 ID。';
       }
-      if (connectToken.isEmpty) {
-        return '请先填写连接令牌；接入端授权凭证用于后续自动续期。';
+      if (connectToken.isEmpty && draftGrant.isEmpty) {
+        return '请填写连接令牌或接入端授权凭证。';
       }
       if (encodedKey.isEmpty) {
         return '接入端公钥尚未生成，请稍后再试。';
@@ -626,6 +763,7 @@ class BridgeController extends GetxController {
       if (_canReuseActiveConnection(
         normalizedBaseUrl: normalizedBaseUrl,
         token: connectToken,
+        endpointGrant: draftGrant,
         spaceId: nextSpaceId,
         targetDeviceId: nextTargetDeviceId,
         endpointId: nextEndpointId,
@@ -638,8 +776,99 @@ class BridgeController extends GetxController {
       final keyPair = await RelayProtocol.keyPairFromSeed(
         RelayProtocol.decodeBase64Url(encodedKey),
       );
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final normalizedTokenExpiresAt = inputTokenExpiresAt > 0
+          ? inputTokenExpiresAt
+          : 0;
+      final normalizedGrantExpiresAt = inputGrantExpiresAt > 0
+          ? inputGrantExpiresAt
+          : 0;
+      final shouldRefreshBeforeHandshake =
+          draftGrant.isNotEmpty &&
+          (connectToken.isEmpty ||
+              normalizedTokenExpiresAt <= 0 ||
+              normalizedTokenExpiresAt <=
+                  now + _tokenRefreshLead.inMilliseconds ||
+              normalizedGrantExpiresAt > 0 &&
+                  normalizedGrantExpiresAt <=
+                      now + _tokenRefreshLead.inMilliseconds);
+
+      // A Grant-only draft, or a draft whose token expiry is unknown/stale,
+      // should be tested with a freshly minted token. This avoids reporting a
+      // false failure merely because an editor still shows yesterday's token.
+      if (shouldRefreshBeforeHandshake) {
+        final refreshed = await _requestConnectToken(
+          relay: Uri.parse(normalizedBaseUrl),
+          keyPair: keyPair,
+          grant: draftGrant,
+          expectedSpaceId: nextSpaceId,
+          expectedEndpointId: nextEndpointId,
+          expectedEndpointType: nextEndpointType,
+        );
+        connectToken = refreshed.token;
+      }
+
+      var refreshAttempted = shouldRefreshBeforeHandshake;
+      while (true) {
+        final attempt = await _testConnectionHandshake(
+          relayUrl: normalizedBaseUrl,
+          keyPair: keyPair,
+          token: connectToken,
+          deviceName: inputDeviceName,
+          spaceId: nextSpaceId,
+          endpointId: nextEndpointId,
+          endpointType: nextEndpointType,
+        );
+        if (attempt.error == null) return null;
+        if (!refreshAttempted &&
+            draftGrant.isNotEmpty &&
+            _isRefreshableRelayCode(attempt.code ?? '')) {
+          // Relay is authoritative when expiry metadata is missing or stale.
+          // Retry exactly once with the proof-bound Grant, then surface the
+          // server's friendly error instead of looping indefinitely.
+          final refreshed = await _requestConnectToken(
+            relay: Uri.parse(normalizedBaseUrl),
+            keyPair: keyPair,
+            grant: draftGrant,
+            expectedSpaceId: nextSpaceId,
+            expectedEndpointId: nextEndpointId,
+            expectedEndpointType: nextEndpointType,
+          );
+          connectToken = refreshed.token;
+          refreshAttempted = true;
+          continue;
+        }
+        return attempt.error;
+      }
+    } catch (error) {
+      return _connectionTestError(error);
+    }
+  }
+
+  /// Performs one isolated authentication handshake for [testConnection].
+  /// The returned code lets the caller distinguish a stale Connect Token from
+  /// transport/protocol failures without exposing raw credential material.
+  Future<_ConnectionTestAttempt> _testConnectionHandshake({
+    required String relayUrl,
+    required SimpleKeyPair keyPair,
+    required String token,
+    required String deviceName,
+    required String spaceId,
+    required String endpointId,
+    required String endpointType,
+  }) async {
+    WebSocket? socket;
+    StreamSubscription<dynamic>? subscription;
+    Timer? timeout;
+    final result = Completer<_ConnectionTestAttempt>();
+
+    void complete(_ConnectionTestAttempt attempt) {
+      if (!result.isCompleted) result.complete(attempt);
+    }
+
+    try {
       socket = await WebSocket.connect(
-        normalizedBaseUrl,
+        relayUrl,
       ).timeout(const Duration(seconds: 10));
       subscription = socket.listen(
         (raw) {
@@ -649,42 +878,59 @@ class BridgeController extends GetxController {
             if (type == 'relay.error') {
               final code = decoded['code'] as String? ?? 'relay.error';
               final message = decoded['message'] as String? ?? 'Relay 拒绝了连接';
-              complete(_friendlyRelayError(code, message));
+              complete(
+                _ConnectionTestAttempt(
+                  error: _friendlyRelayError(code, message),
+                  code: code,
+                ),
+              );
               return;
             }
             if (type != 'connect.welcome') return;
             RelayProtocol.validateWelcome(decoded);
-            if (decoded['spaceId'] != nextSpaceId ||
-                decoded['endpointId'] != nextEndpointId) {
-              complete('Relay 返回的空间 ID 或接入端 ID 与当前配置不一致。');
+            if (decoded['spaceId'] != spaceId ||
+                decoded['endpointId'] != endpointId) {
+              complete(
+                const _ConnectionTestAttempt(
+                  error: 'Relay 返回的空间 ID 或接入端 ID 与当前配置不一致。',
+                ),
+              );
               return;
             }
-            complete(null);
+            complete(const _ConnectionTestAttempt());
           } catch (error) {
-            complete(_connectionTestError(error));
+            complete(
+              _ConnectionTestAttempt(error: _connectionTestError(error)),
+            );
           }
         },
-        onError: (Object error) => complete(_connectionTestError(error)),
-        onDone: () => complete('Relay 在认证完成前关闭了连接。'),
+        onError: (Object error) => complete(
+          _ConnectionTestAttempt(error: _connectionTestError(error)),
+        ),
+        onDone: () =>
+            complete(const _ConnectionTestAttempt(error: 'Relay 在认证完成前关闭了连接。')),
         cancelOnError: false,
       );
       final hello = await RelayProtocol.connectHello(
         keyPair: keyPair,
-        spaceId: nextSpaceId,
-        endpointId: nextEndpointId,
-        endpointType: nextEndpointType,
-        endpointName: inputDeviceName.trim().isEmpty
+        spaceId: spaceId,
+        endpointId: endpointId,
+        endpointType: endpointType,
+        endpointName: deviceName.trim().isEmpty
             ? 'Flutter phone'
-            : inputDeviceName.trim(),
-        token: connectToken,
+            : deviceName.trim(),
+        token: token,
+        test: true,
       );
       socket.add(jsonEncode(hello));
       timeout = Timer(const Duration(seconds: 10), () {
-        complete('Relay 认证超时，请检查地址、令牌和网络连接。');
+        complete(
+          const _ConnectionTestAttempt(error: 'Relay 认证超时，请检查地址、令牌和网络连接。'),
+        );
       });
       return await result.future;
     } catch (error) {
-      return _connectionTestError(error);
+      return _ConnectionTestAttempt(error: _connectionTestError(error));
     } finally {
       timeout?.cancel();
       await subscription?.cancel();
@@ -721,6 +967,7 @@ class BridgeController extends GetxController {
   bool _canReuseActiveConnection({
     required String normalizedBaseUrl,
     required String token,
+    required String endpointGrant,
     required String spaceId,
     required String targetDeviceId,
     required String endpointId,
@@ -733,6 +980,7 @@ class BridgeController extends GetxController {
         socket.readyState == WebSocket.open &&
         normalizedBaseUrl == baseUrl.value &&
         token == pairingToken.value &&
+        endpointGrant == this.endpointGrant.value &&
         spaceId == this.spaceId.value &&
         targetDeviceId == this.targetDeviceId.value &&
         endpointId == deviceId.value &&
@@ -750,12 +998,18 @@ class BridgeController extends GetxController {
   }
 
   Future<void> disconnect({bool silent = false}) async {
+    _connectionAttempt += 1;
     _manualDisconnect = true;
     _finishTimelineRefresh();
     _clearTimelineLoadState();
     _requestedEventsSessionId = null;
     _requestedEventsPrompt = null;
     _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _tokenRefreshTimer?.cancel();
+    _tokenRefreshTimer = null;
+    _tokenRotationInProgress = false;
+    _credentialRefreshBlocked = false;
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     _heartbeatTimer?.cancel();
@@ -764,6 +1018,7 @@ class BridgeController extends GetxController {
     await _closeSocket();
     connected.value = false;
     connectionLabel.value = 'offline';
+    cacheStale.value = true;
     _clearRemoteModels();
     _hadOnlineConnection = false;
   }
@@ -901,15 +1156,49 @@ class BridgeController extends GetxController {
     _handshakeTimer = null;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+    _tokenRefreshTimer?.cancel();
+    _tokenRefreshTimer = null;
     _finishTimelineRefresh();
     _resumedTimelineSessions.clear();
     _timelineResumeRetryAt.clear();
     _finishHealthCheck('Relay 连接已断开。');
     _currentTurnStartedAt = null;
-    await subscription?.cancel();
-    if (socket != null) {
-      await socket.close();
+    try {
+      await subscription?.cancel().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {},
+      );
+    } catch (_) {
+      // Continue closing the underlying socket even if a stream controller
+      // reports an error while the connection is being replaced.
     }
+    await _closeSocketInstance(socket);
+  }
+
+  Future<void> _closeSocketForRotation(WebSocket? socket) async {
+    if (socket != null && identical(_socket, socket)) {
+      await _closeSocket();
+    } else if (socket != null) {
+      await _closeSocketInstance(socket);
+    } else if (_socket != null) {
+      await _closeSocket();
+    }
+  }
+
+  Future<void> _closeSocketInstance(WebSocket? socket) async {
+    if (socket == null || socket.readyState == WebSocket.closed) return;
+    try {
+      await socket.close().timeout(
+        const Duration(seconds: 3),
+        onTimeout: () {},
+      );
+    } catch (_) {
+      // A stale/platform socket must never block a new connection attempt.
+    }
+  }
+
+  bool _isCurrentSocket(WebSocket socket, int attempt) {
+    return identical(_socket, socket) && attempt == _connectionAttempt;
   }
 
   void selectWorkspace(WorkspaceInfo? workspace) {
@@ -945,6 +1234,10 @@ class BridgeController extends GetxController {
   void selectSession(SessionRecord session) {
     if (session.id.trim().isEmpty) return;
 
+    final previousSessionId = selectedSessionId.value?.trim();
+    if (previousSessionId != null && previousSessionId != session.id.trim()) {
+      _rememberVisibleTimeline();
+    }
     _clearTimelineLoadState();
 
     final workspace = _workspaceForSession(session);
@@ -980,9 +1273,21 @@ class BridgeController extends GetxController {
     }
     _requestedEventsSessionId = session.id;
     _requestedEventsPrompt = session.prompt;
-    events.clear();
-    _bumpTimelineRevision();
-    _beginTimelineLoad(session.id);
+    final cachedEvents = _readTimelineMemory(_timelineCacheKey(session.id));
+    if (previousSessionId == session.id.trim() ||
+        cachedEvents == null ||
+        cachedEvents.isEmpty) {
+      if (previousSessionId != session.id.trim() && events.isNotEmpty) {
+        events.clear();
+        _bumpTimelineRevision();
+      }
+      _beginTimelineLoad(session.id);
+    } else {
+      events.assignAll(_boundedInMemoryEvents(cachedEvents));
+      _bumpTimelineRevision();
+      _finishTimelineLoad(sessionId: session.id);
+    }
+    unawaited(_loadCachedTimeline(session.id));
 
     if (!connected.value) {
       _failTimelineLoad('尚未连接 Relay，无法加载任务对话，请连接后重试。');
@@ -1023,9 +1328,14 @@ class BridgeController extends GetxController {
     if (selected?.isRunning == true) {
       _markSessionRunningForNotification(selectedId);
     }
-    events.clear();
-    _bumpTimelineRevision();
-    _beginTimelineLoad(selectedId);
+    _rememberVisibleTimeline();
+    if (events.isEmpty) {
+      _beginTimelineLoad(selectedId);
+    } else {
+      // Keep the last visible transcript while the forced read reconciles it.
+      _finishTimelineLoad(sessionId: selectedId);
+    }
+    unawaited(_loadCachedTimeline(selectedId));
     if (!connected.value) {
       _failTimelineLoad('尚未连接 Relay，无法加载任务对话，请连接后重试。');
       return;
@@ -1038,6 +1348,7 @@ class BridgeController extends GetxController {
   /// The last persisted task is intentionally kept in [_storedSessionId];
   /// that value is used to restore the previous task after a Relay reconnect.
   void startNewConversation() {
+    _rememberVisibleTimeline();
     _clearTimelineLoadState();
     currentSessionId.value = null;
     selectedSessionId.value = null;
@@ -1070,8 +1381,7 @@ class BridgeController extends GetxController {
     // missing from the task open on the desktop.
     final selectedId = selectedSessionId.value?.trim() ?? '';
     if (selectedId.isNotEmpty && !_pendingSessionStart) {
-      events.add(SessionEvent(kind: 'user', text: trimmedPrompt));
-      _bumpTimelineRevision();
+      _appendSessionEvent(SessionEvent(kind: 'user', text: trimmedPrompt));
       currentSessionId.value = selectedId;
       _currentTurnId = null;
       _lastTerminalTurnId = null;
@@ -1094,8 +1404,7 @@ class BridgeController extends GetxController {
       return;
     }
 
-    events.add(SessionEvent(kind: 'user', text: trimmedPrompt));
-    _bumpTimelineRevision();
+    _appendSessionEvent(SessionEvent(kind: 'user', text: trimmedPrompt));
     currentSessionId.value = null;
     _currentTurnId = null;
     _lastTerminalTurnId = null;
@@ -1261,9 +1570,18 @@ class BridgeController extends GetxController {
 
   void startLiveTimelineRefresh() {
     _liveTimelineTimer?.cancel();
-    _refreshLiveTimeline();
-    _liveTimelineTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+    _catalogRefreshTimer?.cancel();
+    // One catalog read paints the sidebar immediately. The fast loop below
+    // only asks for compact status and relies on Relay events for content;
+    // completed histories are reconciled on a much slower cadence.
+    _refreshLiveTimeline(includeCatalog: true);
+    _liveTimelineTimer = Timer.periodic(_liveTimelineInterval, (_) {
       _refreshLiveTimeline();
+    });
+    _catalogRefreshTimer = Timer.periodic(_catalogRefreshInterval, (_) {
+      if (connected.value && !timelineRefreshing.value) {
+        refreshProjects();
+      }
     });
   }
 
@@ -1310,6 +1628,436 @@ class BridgeController extends GetxController {
   void stopLiveTimelineRefresh() {
     _liveTimelineTimer?.cancel();
     _liveTimelineTimer = null;
+    _catalogRefreshTimer?.cancel();
+    _catalogRefreshTimer = null;
+  }
+
+  SessionCacheScope? _buildSessionCacheScope() {
+    final pairing = activePairing;
+    final pairingId = pairing?.id.trim() ?? activePairingId.value?.trim() ?? '';
+    final space = spaceId.value.trim();
+    final endpoint = deviceId.value.trim();
+    final target = targetDeviceId.value.trim();
+    if (pairingId.isEmpty ||
+        space.isEmpty ||
+        endpoint.isEmpty ||
+        target.isEmpty) {
+      return null;
+    }
+    final parts = [pairingId, space, endpoint, target];
+    final key = parts.map(Uri.encodeComponent).join('\u001f');
+    return SessionCacheScope(
+      key: key,
+      pairingId: pairingId,
+      spaceId: space,
+      endpointId: endpoint,
+      targetDeviceId: target,
+    );
+  }
+
+  String _timelineCacheKey(String threadId, {SessionCacheScope? scope}) {
+    final activeScope = scope ?? _cacheScope;
+    if (activeScope == null) return threadId.trim();
+    return '${activeScope.key}\u0000${threadId.trim()}';
+  }
+
+  Future<void> _activateSessionCache() async {
+    final scope = _buildSessionCacheScope();
+    if (scope == null) {
+      // Invalidate any load that belongs to a pairing which has just been
+      // cleared or is still being replaced.  Do this only for the no-scope
+      // transition; incrementing the generation for an already-active scope
+      // would invalidate the in-flight operation that callers are meant to
+      // share below.
+      _cacheGeneration += 1;
+      _cacheScope = null;
+      _cacheLoadedScopeKey = null;
+      cacheHydrating.value = false;
+      cacheStale.value = false;
+      cacheLastUpdated.value = null;
+      return;
+    }
+    if (_cacheScope?.key == scope.key) {
+      final inFlight = _cacheLoadInFlight;
+      if (inFlight != null) return inFlight;
+      if (_cacheLoadedScopeKey == scope.key) return;
+    }
+    // A different scope (or a fresh load after the previous scope was
+    // invalidated) gets a new generation.  Do not bump this before the
+    // in-flight check above: connect/welcome can call activation twice in the
+    // same frame, and the second call should await—not cancel—the first load.
+    final generation = ++_cacheGeneration;
+    _cacheScope = scope;
+    cacheHydrating.value = true;
+    cacheStale.value = true;
+    final operation = () async {
+      final snapshot = await _sessionCache.load(
+        scope,
+        timelineThreadId: _storedSessionId,
+      );
+      if (generation != _cacheGeneration || _cacheScope?.key != scope.key) {
+        return;
+      }
+      _applyCachedSnapshot(scope, snapshot);
+      // The catalog is intentionally loaded without every conversation
+      // history. Hydrate only the task that was restored into the main view;
+      // other timelines are fetched lazily when the user selects them.
+      final selectedId = selectedSessionId.value?.trim() ?? '';
+      if (selectedId.isNotEmpty) {
+        await _loadCachedTimeline(selectedId);
+      }
+      if (generation != _cacheGeneration || _cacheScope?.key != scope.key) {
+        return;
+      }
+      _cacheLoadedScopeKey = scope.key;
+      cacheLastUpdated.value = snapshot.syncedAt;
+      // Do not feed a persisted sequence back into sync.request. Connector
+      // sequences are process-local and may have been reset after a restart;
+      // the cached value is retained only as freshness metadata.
+    }();
+    _cacheLoadInFlight = operation;
+    try {
+      await operation;
+    } finally {
+      if (identical(_cacheLoadInFlight, operation)) {
+        _cacheLoadInFlight = null;
+        if (generation == _cacheGeneration) cacheHydrating.value = false;
+      }
+    }
+  }
+
+  void _applyCachedSnapshot(
+    SessionCacheScope scope,
+    SessionCacheSnapshot snapshot,
+  ) {
+    if (snapshot.sessions.isNotEmpty) {
+      final known = sessions.map((item) => item.id.trim()).toSet();
+      final merged = List<SessionRecord>.of(sessions);
+      for (final cached in snapshot.sessions) {
+        if (known.add(cached.id.trim())) merged.add(cached);
+      }
+      merged.sort(compareSessionRecords);
+      sessions.assignAll(merged.map(_sessionWithLiveStatus));
+    }
+    if (snapshot.workspaces.isNotEmpty) {
+      final known = <String>{
+        for (final workspace in workspaces)
+          _normalizeWorkspaceKey(
+            workspace.path.isNotEmpty ? workspace.path : workspace.name,
+          ),
+      };
+      final merged = List<WorkspaceInfo>.of(workspaces);
+      for (final cached in snapshot.workspaces) {
+        final key = _normalizeWorkspaceKey(
+          cached.path.isNotEmpty ? cached.path : cached.name,
+        );
+        if (key.isNotEmpty && known.add(key)) merged.add(cached);
+      }
+      if (merged.isNotEmpty) workspaces.assignAll(merged);
+    }
+    for (final entry in snapshot.eventsByThread.entries) {
+      final key = _timelineCacheKey(entry.key, scope: scope);
+      // A live event or an authoritative thread.read may have populated this
+      // key while the disk snapshot was being decoded. Never let the older
+      // snapshot roll that newer value back (an empty list is meaningful too).
+      if (!_timelineMemoryCache.containsKey(key)) {
+        _rememberTimelineMemory(key, entry.value);
+      }
+    }
+    _deriveWorkspaces(sessions);
+    selectedWorkspace.value ??= _restoreSelectedWorkspace();
+    selectedWorkspace.value ??= _defaultWorkspace();
+    _restoreLastSelectedSession(sessions.toList(growable: false));
+    final selectedId = selectedSessionId.value?.trim();
+    if (selectedId == null || selectedId.isEmpty || events.isNotEmpty) return;
+    final cachedEvents = _readTimelineMemory(
+      _timelineCacheKey(selectedId, scope: scope),
+    );
+    if (cachedEvents == null || cachedEvents.isEmpty) return;
+    events.assignAll(cachedEvents);
+    _bumpTimelineRevision();
+    _finishTimelineLoad(sessionId: selectedId);
+    SessionRecord? selected;
+    for (final session in sessions) {
+      if (session.id.trim() == selectedId) {
+        selected = session;
+        break;
+      }
+    }
+    if (selected?.isRunning == true) {
+      _setTimelineStatus(TimelineTaskStatus.processing);
+    } else if (timelineStatus.value == TimelineTaskStatus.unknown ||
+        timelineStatus.value == TimelineTaskStatus.loading) {
+      _setTimelineStatus(TimelineTaskStatus.completed);
+    }
+  }
+
+  Future<void> _loadCachedTimeline(String threadId) async {
+    final id = threadId.trim();
+    final scope = _cacheScope;
+    if (id.isEmpty || scope == null) return;
+    final key = _timelineCacheKey(id, scope: scope);
+    final inMemory = _readTimelineMemory(key);
+    if (inMemory != null && inMemory.isNotEmpty) {
+      if (selectedSessionId.value?.trim() == id && events.isEmpty) {
+        events.assignAll(_boundedInMemoryEvents(inMemory));
+        _bumpTimelineRevision();
+        _finishTimelineLoad(sessionId: id);
+      }
+      return;
+    }
+    final generation = _cacheGeneration;
+    final loaded = await _sessionCache.loadTimeline(scope, id);
+    if (generation != _cacheGeneration || _cacheScope?.key != scope.key) return;
+    if (loaded.isEmpty) return;
+    // A stream event or a newer thread.read can arrive while the disk query is
+    // in flight. In that case the in-memory entry is already the fresher
+    // source; do not overwrite it with the older query result.
+    if (_timelineMemoryCache.containsKey(key)) {
+      final current = _timelineMemoryCache[key]!;
+      if (selectedSessionId.value?.trim() == id &&
+          events.isEmpty &&
+          current.isNotEmpty) {
+        events.assignAll(_boundedInMemoryEvents(current));
+        _bumpTimelineRevision();
+        _finishTimelineLoad(sessionId: id);
+      }
+      return;
+    }
+    _rememberTimelineMemory(key, loaded);
+    if (selectedSessionId.value?.trim() != id) return;
+    final merged = _mergeLiveEvents(loaded);
+    if (!_hasSameTimelineEvents(events, merged)) {
+      events.assignAll(_boundedInMemoryEvents(merged));
+      _bumpTimelineRevision();
+    }
+    _finishTimelineLoad(sessionId: id);
+  }
+
+  void _rememberVisibleTimeline() {
+    final id = selectedSessionId.value?.trim();
+    if (id == null || id.isEmpty || _cacheScope == null || events.isEmpty) {
+      return;
+    }
+    _rememberTimelineMemory(_timelineCacheKey(id), events);
+  }
+
+  List<SessionEvent>? _readTimelineMemory(String key) {
+    final value = _timelineMemoryCache[key];
+    if (value == null) return null;
+    _timelineMemoryCacheAccess[key] = ++_timelineMemoryCacheClock;
+    return value;
+  }
+
+  void _rememberTimelineMemory(String key, List<SessionEvent> source) {
+    final bounded = _boundedInMemoryEvents(source);
+    _timelineMemoryCache.remove(key);
+    _timelineMemoryCache[key] = bounded;
+    _timelineMemoryCacheAccess[key] = ++_timelineMemoryCacheClock;
+    while (_timelineMemoryCache.length > _maxInMemoryTimelineThreads) {
+      String? oldestKey;
+      var oldestAccess = 1 << 62;
+      for (final entry in _timelineMemoryCacheAccess.entries) {
+        if (entry.key == key) continue;
+        if (entry.value < oldestAccess) {
+          oldestKey = entry.key;
+          oldestAccess = entry.value;
+        }
+      }
+      if (oldestKey == null) break;
+      _timelineMemoryCache.remove(oldestKey);
+      _timelineMemoryCacheAccess.remove(oldestKey);
+    }
+  }
+
+  List<SessionEvent> _boundedInMemoryEvents(List<SessionEvent> source) {
+    if (source.isEmpty) return const <SessionEvent>[];
+    final window = source.length <= _maxInMemoryTimelineEvents
+        ? source
+        : source.sublist(source.length - _maxInMemoryTimelineEvents);
+    final firstUser = source.firstWhere(
+      (event) => event.kind == 'user',
+      orElse: () => window.first,
+    );
+    final selected = window.contains(firstUser)
+        ? window
+        : <SessionEvent>[
+            firstUser,
+            ...source.sublist(source.length - (_maxInMemoryTimelineEvents - 1)),
+          ];
+    return selected
+        .map((event) {
+          final text = event.text.length <= _maxInMemoryEventTextChars
+              ? event.text
+              : '${event.text.substring(0, _maxInMemoryEventTextChars)}\n…';
+          var attachmentsChanged = false;
+          final attachments = event.attachments
+              .map((attachment) {
+                // Keep the small preview/resource reference. An original
+                // base64 payload is redundant once a thumbnail or signed
+                // resource URL exists and is a common source of heap spikes.
+                if (attachment.thumbnailDataUrl.trim().isNotEmpty ||
+                    attachment.resourceUrl.trim().isNotEmpty ||
+                    attachment.dataUrl.length > 2 * 1024 * 1024) {
+                  if (attachment.dataUrl.isNotEmpty) attachmentsChanged = true;
+                  return attachment.copyWith(dataUrl: '');
+                }
+                return attachment;
+              })
+              .toList(growable: false);
+          if (text == event.text && !attachmentsChanged) {
+            return event;
+          }
+          return event.copyWith(text: text, attachments: attachments);
+        })
+        .toList(growable: false);
+  }
+
+  void _trimVisibleTimeline() {
+    var changed = false;
+    final bounded = _boundedInMemoryEvents(events)
+        .map((event) {
+          if (event.text.length <= _maxInMemoryEventTextChars) return event;
+          changed = true;
+          return event.copyWith(
+            text: '${event.text.substring(0, _maxInMemoryEventTextChars)}\n…',
+          );
+        })
+        .toList(growable: false);
+    if (changed || bounded.length != events.length) events.assignAll(bounded);
+  }
+
+  void _queueCatalogCacheWrite({DateTime? syncedAt}) {
+    if (_cacheScope == null) return;
+    _pendingCatalogCacheWrite = true;
+    _pendingCacheSequence = _lastIncomingSequence;
+    if (syncedAt != null) _pendingCacheSyncedAt = syncedAt;
+    _scheduleCacheFlush();
+  }
+
+  /// Coalesces live stream changes into one current snapshot. The cache
+  /// service diffs this snapshot against its row index and emits only changed
+  /// rows/deletions to SQLite.
+  void _queueTimelineCacheWrite(String? threadId) {
+    final id = threadId?.trim();
+    if (id == null || id.isEmpty || _cacheScope == null) return;
+    final key = _timelineCacheKey(id);
+    final snapshot = _boundedInMemoryEvents(events);
+    _rememberTimelineMemory(key, snapshot);
+    // If an authoritative replacement is already queued in this debounce
+    // window, update its snapshot in place; it must include newer live events.
+    _pendingTimelineCacheWrites[key] = snapshot;
+    _scheduleCacheFlush();
+  }
+
+  /// Queues an authoritative timeline snapshot. This is used after
+  /// `thread.read`, where stale rows must be removed as well as new rows
+  /// written.
+  void _queueTimelineCacheReplace(
+    String? threadId, {
+    List<SessionEvent>? snapshot,
+  }) {
+    final id = threadId?.trim();
+    if (id == null || id.isEmpty || _cacheScope == null) return;
+    final key = _timelineCacheKey(id);
+    final next = _boundedInMemoryEvents(snapshot ?? events);
+    _rememberTimelineMemory(key, next);
+    _pendingTimelineCacheReplacements.add(key);
+    _pendingTimelineCacheWrites[key] = next;
+    _scheduleCacheFlush();
+  }
+
+  void _scheduleCacheFlush() {
+    if (_cacheWriteTimer != null) return;
+    _cacheWriteTimer = Timer(_cacheWriteDebounce, () {
+      _cacheWriteTimer = null;
+      unawaited(_flushCacheWrites());
+    });
+  }
+
+  Future<void> _flushCacheWrites() {
+    final inFlight = _cacheFlushInFlight;
+    if (inFlight != null) {
+      _cacheFlushRequested = true;
+      return inFlight;
+    }
+    final operation = _drainCacheWrites();
+    _cacheFlushInFlight = operation;
+    return operation.whenComplete(() {
+      if (identical(_cacheFlushInFlight, operation)) {
+        _cacheFlushInFlight = null;
+      }
+    });
+  }
+
+  Future<void> _drainCacheWrites() async {
+    do {
+      _cacheFlushRequested = false;
+      await _flushCacheBatch();
+    } while (_cacheFlushRequested || _hasPendingCacheWrites());
+  }
+
+  bool _hasPendingCacheWrites() {
+    return _pendingCatalogCacheWrite || _pendingTimelineCacheWrites.isNotEmpty;
+  }
+
+  Future<void> _flushCacheBatch() async {
+    final scope = _cacheScope;
+    if (scope == null) {
+      _pendingCatalogCacheWrite = false;
+      _pendingTimelineCacheWrites.clear();
+      _pendingTimelineCacheReplacements.clear();
+      return;
+    }
+    final generation = _cacheGeneration;
+    final writeCatalog = _pendingCatalogCacheWrite;
+    final pendingSessions = _pendingCacheSequence;
+    final pendingSyncedAt = _pendingCacheSyncedAt;
+    final pendingTimelines = Map<String, List<SessionEvent>>.of(
+      _pendingTimelineCacheWrites,
+    );
+    final pendingReplacements = Set<String>.of(
+      _pendingTimelineCacheReplacements,
+    );
+    _pendingCatalogCacheWrite = false;
+    _pendingCacheSequence = null;
+    _pendingCacheSyncedAt = null;
+    _pendingTimelineCacheWrites.clear();
+    _pendingTimelineCacheReplacements.clear();
+    if (writeCatalog) {
+      if (generation != _cacheGeneration || _cacheScope?.key != scope.key) {
+        return;
+      }
+      await _sessionCache.saveCatalog(
+        scope,
+        sessions: sessions.toList(growable: false),
+        workspaces: workspaces.toList(growable: false),
+        lastSequence: pendingSessions,
+        syncedAt: pendingSyncedAt,
+      );
+      if (pendingSyncedAt != null && generation == _cacheGeneration) {
+        cacheLastUpdated.value = pendingSyncedAt;
+        cacheStale.value = false;
+      }
+    }
+    for (final entry in pendingTimelines.entries) {
+      if (generation != _cacheGeneration || _cacheScope?.key != scope.key) {
+        return;
+      }
+      final separator = entry.key.indexOf('\u0000');
+      final threadId = separator < 0
+          ? entry.key
+          : entry.key.substring(separator + 1);
+      if (pendingReplacements.contains(entry.key)) {
+        await _sessionCache.saveTimeline(scope, threadId, entry.value);
+      } else {
+        await _sessionCache.saveTimelineIncremental(
+          scope,
+          threadId,
+          entry.value,
+        );
+      }
+    }
   }
 
   Future<void> clearStoredCredentials() async {
@@ -1392,17 +2140,37 @@ class BridgeController extends GetxController {
       final messageId = _readString(decoded['messageId']);
       if (messageId != null && !_rememberIncomingMessage(messageId)) return;
       final sequence = decoded['sequence'];
-      if (sequence is num && sequence.toInt() > _lastIncomingSequence) {
-        _lastIncomingSequence = sequence.toInt();
-        final from = decoded['from'] as String? ?? targetDeviceId.value;
-        if (from.isNotEmpty) {
-          _sendRaw(
-            RelayProtocol.ack(
-              stream: decoded['streamId'] as String? ?? RelayProtocol.streamId,
-              sequence: _lastIncomingSequence,
-              targetDeviceId: from,
-            ),
-          );
+      if (sequence is num && sequence.isFinite) {
+        final incoming = sequence.toInt();
+        // Do not consume an out-of-order frame. syncAfter(lastSequence) can
+        // replay the missing range from the Connector event journal (or fall
+        // back to an authoritative snapshot after a restart).
+        if (incoming > _lastIncomingSequence + 1) {
+          if (!_syncRecoveryInFlight) {
+            _syncRecoveryInFlight = true;
+            if (!_sendCommand('sync.request', {
+              if (_lastIncomingSequence > 0)
+                'lastSequence': _lastIncomingSequence,
+            }, force: true)) {
+              _syncRecoveryInFlight = false;
+            }
+          }
+          return;
+        }
+        if (incoming > 0 && incoming <= _lastIncomingSequence) return;
+        if (incoming > _lastIncomingSequence) {
+          _lastIncomingSequence = incoming;
+          final from = decoded['from'] as String? ?? targetDeviceId.value;
+          if (from.isNotEmpty) {
+            _sendRaw(
+              RelayProtocol.ack(
+                stream:
+                    decoded['streamId'] as String? ?? RelayProtocol.streamId,
+                sequence: _lastIncomingSequence,
+                targetDeviceId: from,
+              ),
+            );
+          }
         }
       }
       final productMessage = RelayProtocol.unwrapProductMessage(decoded);
@@ -1459,6 +2227,8 @@ class BridgeController extends GetxController {
     connected.value = true;
     connectionLabel.value = 'online';
     _hadOnlineConnection = true;
+    _credentialRefreshBlocked = false;
+    _tokenRefreshRetryAttempt = 0;
     lastError.value = '';
     if (shouldNotifyReconnect &&
         Get.isRegistered<TaskNotificationController>()) {
@@ -1471,6 +2241,9 @@ class BridgeController extends GetxController {
     }
     _clearRemoteModels();
     _pendingCommands.clear();
+    _scheduleTokenRefresh();
+    cacheStale.value = true;
+    unawaited(_activateSessionCache());
     unawaited(_storeConnectionHints());
     refreshProjects(recoverEvents: true);
     _sendCommand('model.list', {'includeHidden': false, 'limit': 100});
@@ -1495,26 +2268,76 @@ class BridgeController extends GetxController {
     }
     connected.value = false;
     connectionLabel.value = 'failed';
+    cacheStale.value = true;
+    final recoverableCredentialFailure =
+        _isRefreshableRelayCode(code) && endpointGrant.value.isNotEmpty;
     if (wasConnected &&
+        !recoverableCredentialFailure &&
         !_manualDisconnect &&
         Get.isRegistered<TaskNotificationController>()) {
       unawaited(
         Get.find<TaskNotificationController>().notifyRelayDisconnected(),
       );
     }
-    if (code == 'auth.token_expired' && endpointGrant.value.isNotEmpty) {
+    if (recoverableCredentialFailure) {
+      // Both codes are recoverable when the proof-bound Grant is still
+      // available. Keep every credential in storage and force the next
+      // handshake to mint a fresh short-lived token.
       _forceTokenRefresh = true;
-      _scheduleReconnect();
+      _credentialRefreshBlocked = false;
+      _beginCredentialRecoveryReconnect();
       return;
     }
     if (code.startsWith('auth.') || code == 'connection.revoked') {
-      pairingToken.value = '';
-      endpointGrant.value = '';
-      tokenExpiresAt.value = 0;
-      grantExpiresAt.value = 0;
+      // Preserve the credentials so the user can inspect/rotate them from the
+      // pairing page. Blindly clearing the Grant made an expired token
+      // unrecoverable and caused an endless reconnect loop.
+      _credentialRefreshBlocked = true;
       _forceTokenRefresh = false;
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      _tokenRefreshTimer?.cancel();
+      _tokenRefreshTimer = null;
+      unawaited(_closeSocket());
       unawaited(_storeConnectionHints());
     }
+  }
+
+  /// Closes the expired-token socket before scheduling the replacement
+  /// handshake.  Leaving the old socket alive while a reconnect timer is
+  /// pending lets late frames race with the new connection and can also make
+  /// Relay count two active sessions for the same endpoint.
+  void _beginCredentialRecoveryReconnect() {
+    if (_tokenRotationInProgress) return;
+    final attempt = _connectionAttempt;
+    final grant = endpointGrant.value;
+    final relayUrl = baseUrl.value;
+    final socket = _socket;
+    _tokenRotationInProgress = true;
+    connected.value = false;
+    connectionLabel.value = 'reconnecting';
+    unawaited(() async {
+      try {
+        await _closeSocketForRotation(socket);
+      } catch (_) {
+        // Closing an expired socket is best-effort; the reconnect attempt
+        // below remains the source of truth for recovery.
+      } finally {
+        if (attempt == _connectionAttempt) {
+          _tokenRotationInProgress = false;
+        }
+        if (attempt == _connectionAttempt &&
+            !_manualDisconnect &&
+            !_credentialRefreshBlocked &&
+            endpointGrant.value == grant &&
+            baseUrl.value == relayUrl) {
+          // A credential rotation is an intentional lifecycle operation, so
+          // it must finish even when the user disabled ordinary network
+          // auto-reconnect in settings.
+          _scheduleReconnect(force: true);
+        }
+      }
+    }());
   }
 
   void _handleCommandResult(Map<String, dynamic> message) {
@@ -1658,6 +2481,7 @@ class BridgeController extends GetxController {
   }
 
   void _applySyncResult(Object? value) {
+    _syncRecoveryInFlight = false;
     final map = _asMap(value);
     if (map == null) return;
     final mode = _readString(map['mode']);
@@ -1674,10 +2498,12 @@ class BridgeController extends GetxController {
         _sendCommand('thread.list', {'limit': 100});
         _sendCommand('project.list', {'limit': 100});
       }
+      _queueCatalogCacheWrite(syncedAt: DateTime.now().toUtc());
     } else {
       _applyThreadListResult(map['threads']);
       if (map['projects'] != null) _applyProjectListResult(map['projects']);
       _applyHostStatus(map['status']);
+      _queueCatalogCacheWrite(syncedAt: DateTime.now().toUtc());
     }
   }
 
@@ -1693,9 +2519,12 @@ class BridgeController extends GetxController {
     // event is already in flight. Keep the local running marker visible until
     // the matching terminal event arrives instead of making the sidebar
     // flicker back to a completed state on every catalog refresh.
-    sessions.assignAll(
-      next.map(_sessionWithLiveStatus).toList()..sort(compareSessionRecords),
-    );
+    final reconciled = next.map(_sessionWithLiveStatus).toList()
+      ..sort(compareSessionRecords);
+    if (!_sameSessionList(sessions, reconciled)) {
+      sessions.assignAll(reconciled);
+    }
+    _pruneSessionState();
     final selectedId = selectedSessionId.value;
     if (selectedId != null &&
         !next.any((session) => session.id == selectedId)) {
@@ -1709,6 +2538,30 @@ class BridgeController extends GetxController {
     // Older Codex threads can contain megabytes of tool output, so forcing a
     // full read here would make the Relay connection flap while polling.
     _loadLatestSessionEventsForSelectedWorkspace();
+    // Only a successful authoritative catalog response advances freshness.
+    _queueCatalogCacheWrite(syncedAt: DateTime.now().toUtc());
+  }
+
+  bool _sameSessionList(List<SessionRecord> current, List<SessionRecord> next) {
+    if (current.length != next.length) return false;
+    for (var index = 0; index < current.length; index += 1) {
+      final left = current[index];
+      final right = next[index];
+      if (left.id != right.id ||
+          left.workspace != right.workspace ||
+          left.prompt != right.prompt ||
+          left.status != right.status ||
+          left.createdAt != right.createdAt ||
+          left.updatedAt != right.updatedAt ||
+          left.recencyAt != right.recencyAt ||
+          left.projectId != right.projectId ||
+          left.title != right.title ||
+          left.isPinned != right.isPinned ||
+          left.isArchived != right.isArchived) {
+        return false;
+      }
+    }
+    return true;
   }
 
   SessionRecord _preserveCatalogLifecycle(SessionRecord incoming) {
@@ -1747,6 +2600,7 @@ class BridgeController extends GetxController {
     if (items.isEmpty) {
       _officialWorkspaces.clear();
       _deriveWorkspaces(sessions);
+      _queueCatalogCacheWrite();
       return;
     }
     if (projects.isEmpty) return;
@@ -1756,6 +2610,7 @@ class BridgeController extends GetxController {
     _deriveWorkspaces(sessions);
     selectedWorkspace.value ??= _restoreSelectedWorkspace();
     selectedWorkspace.value ??= _defaultWorkspace();
+    _queueCatalogCacheWrite();
   }
 
   List<Object?> _projectListItems(Object? value) {
@@ -1865,6 +2720,23 @@ class BridgeController extends GetxController {
       sessions.add(record);
     }
     sessions.sort(compareSessionRecords);
+    _pruneSessionState();
+    _queueCatalogCacheWrite();
+  }
+
+  void _pruneSessionState() {
+    final known = sessions
+        .map((session) => session.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final selected = selectedSessionId.value?.trim();
+    final current = currentSessionId.value?.trim();
+    if (selected != null && selected.isNotEmpty) known.add(selected);
+    if (current != null && current.isNotEmpty) known.add(current);
+    _sessionLifecycles.removeWhere((id, _) => !known.contains(id));
+    _resumedTimelineSessions.removeWhere((id) => !known.contains(id));
+    _timelineResumeRetryAt.removeWhere((id, _) => !known.contains(id));
+    _notifiedTerminalSessions.removeWhere((id) => !known.contains(id));
   }
 
   SessionRecord _sessionWithLiveStatus(SessionRecord session) {
@@ -2855,6 +3727,7 @@ class BridgeController extends GetxController {
       }
       if (previous.status != sessionStatus) {
         sessions[sessionIndex] = previous.copyWith(status: sessionStatus);
+        _queueCatalogCacheWrite();
       }
     } else {
       final parsed = _sessionFromThread(value);
@@ -3162,12 +4035,18 @@ class BridgeController extends GetxController {
     // state so the user gets an actionable empty state instead of a spinner
     // that never resolves.
     _finishTimelineLoad(sessionId: requestedSessionId);
-    if (loaded.isEmpty) return;
+    if (loaded.isEmpty) {
+      _rememberTimelineMemory(_timelineCacheKey(requestedSessionId), const []);
+      _queueTimelineCacheReplace(requestedSessionId, snapshot: const []);
+      return;
+    }
     final merged = _mergeLiveEvents(loaded);
     if (!_hasSameTimelineEvents(events, merged)) {
-      events.assignAll(merged);
+      events.assignAll(_boundedInMemoryEvents(merged));
       _bumpTimelineRevision();
     }
+    _rememberTimelineMemory(_timelineCacheKey(requestedSessionId), events);
+    _queueTimelineCacheReplace(requestedSessionId);
   }
 
   /// App Server versions have returned turns in both chronological and
@@ -3790,6 +4669,7 @@ class BridgeController extends GetxController {
     });
     _pendingSessionStart = false;
     _pendingPrompt = null;
+    _queueCatalogCacheWrite();
     _sendCommand('thread.list', {'limit': 100});
   }
 
@@ -3947,6 +4827,9 @@ class BridgeController extends GetxController {
       ),
     );
     if (!sent) _pendingCommands.remove(requestId);
+    if (sent && type == 'thread.read') {
+      _lastTimelineReadRequestedAt = DateTime.now();
+    }
     return sent;
   }
 
@@ -4357,23 +5240,34 @@ class BridgeController extends GetxController {
     return '';
   }
 
-  void _handleDone() {
+  void _handleDone({WebSocket? socket, int? attempt}) {
+    if (socket != null &&
+        attempt != null &&
+        !_isCurrentSocket(socket, attempt)) {
+      return;
+    }
     final wasConnected = connected.value;
+    final rotating = _tokenRotationInProgress;
+    _markTokenRefreshNeededIfExpired();
     _finishTimelineRefresh(error: '任务刷新失败：Relay 连接已断开。');
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+    _tokenRefreshTimer?.cancel();
+    _tokenRefreshTimer = null;
     _resumedTimelineSessions.clear();
     _timelineResumeRetryAt.clear();
     _finishHealthCheck('Relay 连接已断开，请重试。');
     connected.value = false;
     connectionLabel.value = 'offline';
+    cacheStale.value = true;
     _clearRemoteModels();
     if (timelineLoading.value) {
       _failTimelineLoad('Relay 连接已断开，任务对话未加载完成，请重试。');
     }
     if (wasConnected &&
+        !rotating &&
         !_manualDisconnect &&
         Get.isRegistered<TaskNotificationController>()) {
       unawaited(
@@ -4382,44 +5276,74 @@ class BridgeController extends GetxController {
     }
     _socket = null;
     _socketSubscription = null;
-    _scheduleReconnect();
+    if (rotating) {
+      _tokenRotationInProgress = false;
+      return;
+    }
+    _scheduleReconnect(
+      force: _forceTokenRefresh && endpointGrant.value.isNotEmpty,
+    );
   }
 
-  void _handleSocketError(Object error) {
+  void _handleSocketError(Object error, {WebSocket? socket, int? attempt}) {
+    if (socket != null &&
+        attempt != null &&
+        !_isCurrentSocket(socket, attempt)) {
+      return;
+    }
     final wasConnected = connected.value;
+    final rotating = _tokenRotationInProgress;
+    _markTokenRefreshNeededIfExpired();
     _finishTimelineRefresh(error: '任务刷新失败：Relay 连接异常，请重试。');
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+    _tokenRefreshTimer?.cancel();
+    _tokenRefreshTimer = null;
     _resumedTimelineSessions.clear();
     _timelineResumeRetryAt.clear();
     _finishHealthCheck(_connectionTestError(error));
     connected.value = false;
     connectionLabel.value = 'failed';
+    cacheStale.value = true;
     _clearRemoteModels();
     if (timelineLoading.value) {
       _failTimelineLoad('Relay 连接异常，任务对话加载失败，请重试。');
     }
     _fail(_connectionTestError(error));
     if (wasConnected &&
+        !rotating &&
         !_manualDisconnect &&
         Get.isRegistered<TaskNotificationController>()) {
       unawaited(
         Get.find<TaskNotificationController>().notifyRelayDisconnected(),
       );
     }
-    _scheduleReconnect();
+    if (rotating) {
+      _tokenRotationInProgress = false;
+      return;
+    }
+    _scheduleReconnect(
+      force: _forceTokenRefresh && endpointGrant.value.isNotEmpty,
+    );
   }
 
-  void _refreshLiveTimeline({bool force = false, int? refreshToken}) {
+  void _refreshLiveTimeline({
+    bool force = false,
+    int? refreshToken,
+    bool includeCatalog = false,
+  }) {
     if (!connected.value) return;
-    final listSent = _sendCommand(
-      'thread.list',
-      {'limit': 100},
-      force: force,
-      refreshToken: refreshToken,
-    );
+    var listSent = false;
+    if (includeCatalog || force) {
+      listSent = _sendCommand(
+        'thread.list',
+        {'limit': 100},
+        force: force,
+        refreshToken: refreshToken,
+      );
+    }
 
     // A manual refresh always rehydrates the selected task. The periodic
     // refresh only reads detail while the selected task is active (or still
@@ -4437,6 +5361,8 @@ class BridgeController extends GetxController {
       return;
     }
 
+    _ensureTimelineResumed(selectedId);
+
     // Always poll the compact status for the selected task. The catalog may
     // briefly expose `notLoaded`/an older terminal row while the host is
     // already processing a new turn, and a full thread.read is too expensive
@@ -4451,11 +5377,16 @@ class BridgeController extends GetxController {
     final selectedIsRunning = sessions.any(
       (session) => session.id.trim() == selectedId && session.isRunning,
     );
+    final lastRead = _lastTimelineReadRequestedAt;
+    final activeReadDue =
+        timelineStatus.value.isActive &&
+        (lastRead == null ||
+            DateTime.now().difference(lastRead) >= _activeTimelineReadInterval);
     final shouldRead =
         force ||
-        timelineStatus.value.isActive ||
         timelineLoading.value ||
-        selectedIsRunning;
+        activeReadDue ||
+        selectedIsRunning && lastRead == null;
     if (!shouldRead || (timelineLoadError.value.isNotEmpty && !force)) {
       return;
     }
@@ -4485,6 +5416,18 @@ class BridgeController extends GetxController {
         token: refreshToken,
       );
     }
+  }
+
+  void _ensureTimelineResumed(String sessionId) {
+    final id = sessionId.trim();
+    if (id.isEmpty || _resumedTimelineSessions.contains(id)) return;
+    final retryAt = _timelineResumeRetryAt[id];
+    if (retryAt != null && retryAt.isAfter(DateTime.now())) return;
+    final pending = _pendingCommands.values.any(
+      (command) => command.kind == 'thread.resume' && command.threadId == id,
+    );
+    if (pending) return;
+    _sendCommand('thread.resume', {}, threadId: id);
   }
 
   void _syncSessionCompletionNotifications(List<SessionRecord> nextSessions) {
@@ -4787,6 +5730,14 @@ class BridgeController extends GetxController {
         isDelta: event.isDelta,
       );
     }
+    // A single tool/output item can be much larger than the timeline window.
+    // Cap the retained Dart string while the complete payload remains in the
+    // durable App Server history.
+    if (event.text.length > _maxInMemoryEventTextChars) {
+      event = event.copyWith(
+        text: '${event.text.substring(0, _maxInMemoryEventTextChars)}\n…',
+      );
+    }
     // Empty deltas are lifecycle notifications, not visible transcript
     // content. Ignore them so a heartbeat cannot create blank answer cards.
     if (event.text.isEmpty &&
@@ -4806,6 +5757,9 @@ class BridgeController extends GetxController {
       if (last?.kind == 'running') {
         events[events.length - 1] = event;
         _bumpTimelineRevision();
+        _queueTimelineCacheWrite(
+          selectedSessionId.value ?? currentSessionId.value,
+        );
         return;
       }
     }
@@ -4818,7 +5772,11 @@ class BridgeController extends GetxController {
           : _mergeSnapshotEvent(existing, event);
       if (!_sameTimelineEvent(existing, merged)) {
         events[existingIndex] = merged;
+        _trimVisibleTimeline();
         _bumpTimelineRevision();
+        _queueTimelineCacheWrite(
+          selectedSessionId.value ?? currentSessionId.value,
+        );
       }
       return;
     }
@@ -4834,13 +5792,19 @@ class BridgeController extends GetxController {
         final merged = _mergeDeltaEvent(existing, event);
         if (!_sameTimelineEvent(existing, merged)) {
           events[fallbackIndex] = merged;
+          _trimVisibleTimeline();
           _bumpTimelineRevision();
+          _queueTimelineCacheWrite(
+            selectedSessionId.value ?? currentSessionId.value,
+          );
         }
         return;
       }
     }
     events.add(event);
+    _trimVisibleTimeline();
     _bumpTimelineRevision();
+    _queueTimelineCacheWrite(selectedSessionId.value ?? currentSessionId.value);
   }
 
   int _latestUnidentifiedDeltaIndex(SessionEvent event) {
@@ -5032,10 +5996,12 @@ class BridgeController extends GetxController {
   bool _sameTimelineEvent(SessionEvent a, SessionEvent b) {
     if (a.kind != b.kind ||
         a.text != b.text ||
+        a.time?.toUtc() != b.time?.toUtc() ||
         a.durationMs != b.durationMs ||
         a.itemId != b.itemId ||
         a.turnId != b.turnId ||
         a.isDelta != b.isDelta ||
+        !_sameTokenUsage(a.usage, b.usage) ||
         a.attachments.length != b.attachments.length) {
       return false;
     }
@@ -5052,6 +6018,14 @@ class BridgeController extends GetxController {
       }
     }
     return true;
+  }
+
+  bool _sameTokenUsage(TokenUsage? left, TokenUsage? right) {
+    if (identical(left, right)) return true;
+    if (left == null || right == null) return false;
+    return left.inputTokens == right.inputTokens &&
+        left.outputTokens == right.outputTokens &&
+        left.totalTokens == right.totalTokens;
   }
 
   bool _isLiveStatusEvent(SessionEvent event) {
@@ -5281,6 +6255,7 @@ class BridgeController extends GetxController {
       final selectedProfile = activePairing;
       if (selectedProfile != null) {
         await _applyPairing(selectedProfile);
+        unawaited(_activateSessionCache());
         shouldAutoConnect =
             selectedProfile.isComplete &&
             (preferences?.autoConnect.value ?? true);
@@ -5444,9 +6419,15 @@ class BridgeController extends GetxController {
     return 'flutter_${DateTime.now().millisecondsSinceEpoch}';
   }
 
-  Future<void> _storeConnectionHints() async {
+  Future<void> _storeConnectionHints({int? expectedAttempt}) async {
+    if (expectedAttempt != null && expectedAttempt != _connectionAttempt) {
+      return;
+    }
     try {
       await initializeStorage();
+      if (expectedAttempt != null && expectedAttempt != _connectionAttempt) {
+        return;
+      }
       final current = activePairing;
       if (current != null) {
         final index = pairings.indexWhere(
@@ -5459,6 +6440,9 @@ class BridgeController extends GetxController {
           );
         }
         await _persistPairings();
+      }
+      if (expectedAttempt != null && expectedAttempt != _connectionAttempt) {
+        return;
       }
       await _storage.write('recodex_base_url', baseUrl.value);
       await _storage.write('recodex_space_id', spaceId.value);
@@ -5577,7 +6561,7 @@ class BridgeController extends GetxController {
     }
   }
 
-  Future<void> _autoConnect() {
+  Future<void> _autoConnect({bool fromReconnect = false}) {
     return connect(
       inputBaseUrl: baseUrl.value,
       token: pairingToken.value,
@@ -5587,15 +6571,17 @@ class BridgeController extends GetxController {
       inputEndpointId: deviceId.value,
       inputEndpointType: endpointType.value,
       inputEndpointGrant: endpointGrant.value,
+      fromReconnect: fromReconnect,
     );
   }
 
-  void _scheduleReconnect() {
+  void _scheduleReconnect({bool force = false}) {
     final preferences = Get.isRegistered<SettingsPreferencesController>()
         ? Get.find<SettingsPreferencesController>()
         : null;
     if (_manualDisconnect ||
-        preferences != null && !preferences.autoReconnect.value ||
+        _credentialRefreshBlocked ||
+        !force && preferences != null && !preferences.autoReconnect.value ||
         (pairingToken.value.isEmpty && endpointGrant.value.isEmpty) ||
         spaceId.value.isEmpty ||
         targetDeviceId.value.isEmpty ||
@@ -5610,12 +6596,13 @@ class BridgeController extends GetxController {
           ? Get.find<SettingsPreferencesController>()
           : null;
       if (!_manualDisconnect &&
+          !_credentialRefreshBlocked &&
           !connected.value &&
-          (currentPreferences?.autoReconnect.value ?? true) &&
+          (force || (currentPreferences?.autoReconnect.value ?? true)) &&
           (pairingToken.value.isNotEmpty || endpointGrant.value.isNotEmpty) &&
           spaceId.value.isNotEmpty &&
           targetDeviceId.value.isNotEmpty) {
-        unawaited(_autoConnect());
+        unawaited(_autoConnect(fromReconnect: true));
       }
     });
   }
@@ -5631,6 +6618,9 @@ class BridgeController extends GetxController {
     if (error is SocketException) {
       return '无法连接 Relay，请检查地址和网络连接。';
     }
+    if (error is _ConnectTokenRefreshException) {
+      return _friendlyRelayError(error.code, error.message);
+    }
     final text = error.toString().replaceFirst(
       RegExp(r'^[A-Za-z_]\w*:\s*'),
       '',
@@ -5640,9 +6630,28 @@ class BridgeController extends GetxController {
 
   String _friendlyRelayError(String code, String message) {
     final normalized = '${code.trim()} ${message.trim()}'.toLowerCase();
+    if (code == 'RELAY_RETRYABLE' ||
+        normalized.contains('relay_retryable') ||
+        normalized.contains('temporarily unavailable')) {
+      return '连接令牌自动续期暂时失败，将在稍后重试。';
+    }
     if (normalized.contains('connection limit exceeded') ||
         normalized.contains('connect token connection limit')) {
       return '连接令牌已达到并发连接上限，请断开其它连接或提高令牌的连接上限。';
+    }
+    if (code == 'auth.grant_expired' ||
+        code == 'auth.grant_revoked' ||
+        code == 'auth.invalid_grant' ||
+        normalized.contains('auth.grant_expired') ||
+        normalized.contains('auth.grant_revoked') ||
+        normalized.contains('auth.invalid_grant') ||
+        normalized.contains('endpoint grant expired') ||
+        normalized.contains('endpoint grant was revoked')) {
+      return '接入端授权凭证已失效，请从 Relay 控制台重新签发一组连接凭证。';
+    }
+    if (code == 'auth.grant_required' ||
+        normalized.contains('auth.grant_required')) {
+      return '连接令牌已过期。请填写同一次签发的接入端授权凭证，客户端才能自动续期。';
     }
     if (code == 'auth.token_expired' ||
         normalized.contains('token expired') ||
@@ -5670,27 +6679,59 @@ class BridgeController extends GetxController {
     return 'Relay 连接失败，请检查连接配置后重试。';
   }
 
-  Future<String> _usableConnectToken(String suppliedToken) async {
-    if (suppliedToken.isNotEmpty) pairingToken.value = suppliedToken;
-    final hasGrant = endpointGrant.value.isNotEmpty;
+  Future<String> _usableConnectToken(
+    String suppliedToken, {
+    int? attempt,
+  }) async {
+    final operationAttempt = attempt ?? _connectionAttempt;
+    if (suppliedToken.isNotEmpty && suppliedToken != pairingToken.value) {
+      pairingToken.value = suppliedToken;
+      tokenExpiresAt.value = 0;
+      _forceTokenRefresh = false;
+    }
+    if (_credentialRefreshBlocked) {
+      throw StateError('auth.grant_expired');
+    }
+    final operationGrant = endpointGrant.value;
+    final operationRelayUrl = baseUrl.value;
+    final hasGrant = operationGrant.isNotEmpty;
     final expiresAt = tokenExpiresAt.value;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final tokenIsExpiring =
+        expiresAt > 0 && expiresAt <= now + _tokenRefreshLead.inMilliseconds;
     final needsRefresh =
-        (hasGrant || _forceTokenRefresh) &&
+        hasGrant &&
         (pairingToken.value.isEmpty ||
             _forceTokenRefresh ||
-            (expiresAt > 0 &&
-                expiresAt <= DateTime.now().millisecondsSinceEpoch + 60000));
+            expiresAt <= 0 ||
+            tokenIsExpiring);
     if (needsRefresh) {
       try {
-        await _refreshConnectToken();
+        await _refreshConnectTokenOnce(
+          attempt: operationAttempt,
+          grant: operationGrant,
+          relayUrl: operationRelayUrl,
+        );
+        if (operationAttempt != _connectionAttempt) {
+          return pairingToken.value;
+        }
       } catch (error) {
+        // A refresh belonging to an older pairing must not report an error or
+        // schedule work against the newly selected pairing.
+        if (operationAttempt != _connectionAttempt) return pairingToken.value;
         final stillUsable =
             !_forceTokenRefresh &&
             pairingToken.value.isNotEmpty &&
-            (expiresAt == 0 ||
-                expiresAt > DateTime.now().millisecondsSinceEpoch);
+            (expiresAt <= 0 || expiresAt > now);
         if (!stillUsable) rethrow;
+        if (connected.value) {
+          _scheduleTokenRefresh(delay: _refreshRetryDelay(error));
+        }
       }
+    }
+    if (!hasGrant &&
+        (_forceTokenRefresh || (expiresAt > 0 && expiresAt <= now))) {
+      throw StateError('auth.grant_required');
     }
     if (pairingToken.value.isEmpty) {
       throw StateError('缺少连接令牌');
@@ -5698,11 +6739,274 @@ class BridgeController extends GetxController {
     return pairingToken.value;
   }
 
-  Future<void> _refreshConnectToken() async {
-    if (_keyPair == null || endpointGrant.value.isEmpty) {
+  bool _isCurrentConnectionAttempt(int attempt) {
+    return attempt == _connectionAttempt && !_manualDisconnect;
+  }
+
+  Future<void> _refreshConnectTokenOnce({
+    int? attempt,
+    String? grant,
+    String? relayUrl,
+  }) {
+    final operationAttempt = attempt ?? _connectionAttempt;
+    final operationGrant = grant ?? endpointGrant.value;
+    final operationRelayUrl = relayUrl ?? baseUrl.value;
+    final contextKey = [
+      operationAttempt,
+      operationRelayUrl,
+      operationGrant,
+    ].join('\u0000');
+    final inFlight = _tokenRefreshInFlight;
+    if (inFlight != null && _tokenRefreshContextKey == contextKey) {
+      return inFlight;
+    }
+    late Future<void> future;
+    future = () async {
+      try {
+        await _refreshConnectToken(
+          attempt: operationAttempt,
+          grant: operationGrant,
+          relayUrl: operationRelayUrl,
+        );
+      } finally {
+        if (identical(_tokenRefreshInFlight, future)) {
+          _tokenRefreshInFlight = null;
+          _tokenRefreshContextKey = null;
+        }
+      }
+    }();
+    _tokenRefreshInFlight = future;
+    _tokenRefreshContextKey = contextKey;
+    return future;
+  }
+
+  void _scheduleTokenRefresh({Duration? delay}) {
+    _tokenRefreshTimer?.cancel();
+    _tokenRefreshTimer = null;
+    if (!connected.value ||
+        _manualDisconnect ||
+        _credentialRefreshBlocked ||
+        _tokenRotationInProgress ||
+        endpointGrant.value.isEmpty) {
+      return;
+    }
+    final expiry = tokenExpiresAt.value;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final calculated = expiry <= 0
+        ? _unknownTokenRefreshInterval
+        : Duration(
+            milliseconds: (expiry - now - _tokenRefreshLead.inMilliseconds)
+                .clamp(1000, 0x7fffffffffffffff)
+                .toInt(),
+          );
+    _tokenRefreshTimer = Timer(delay ?? calculated, () {
+      _tokenRefreshTimer = null;
+      unawaited(_runScheduledTokenRefresh());
+    });
+  }
+
+  Future<void> _runScheduledTokenRefresh() async {
+    if (!connected.value ||
+        _manualDisconnect ||
+        _credentialRefreshBlocked ||
+        _tokenRotationInProgress ||
+        endpointGrant.value.isEmpty) {
+      return;
+    }
+    final socket = _socket;
+    if (socket == null || socket.readyState != WebSocket.open) return;
+    final attempt = _connectionAttempt;
+    final grant = endpointGrant.value;
+    final relayUrl = baseUrl.value;
+    var rotationStarted = false;
+    try {
+      await _refreshConnectTokenOnce(
+        attempt: attempt,
+        grant: grant,
+        relayUrl: relayUrl,
+      );
+      if (!connected.value ||
+          _manualDisconnect ||
+          attempt != _connectionAttempt ||
+          endpointGrant.value != grant ||
+          !identical(_socket, socket)) {
+        return;
+      }
+      // A Connect Token is part of the first handshake frame, so rotate the
+      // WebSocket after a successful refresh. The close is intentional and
+      // must not be reported as a network failure.
+      _tokenRotationInProgress = true;
+      rotationStarted = true;
+      connected.value = false;
+      connectionLabel.value = 'reconnecting';
+      await _closeSocketForRotation(socket);
+      // The rotation close is detached from the normal socket callbacks, so
+      // finish it here even when the platform omits a close event.
+      _tokenRotationInProgress = false;
+      if (attempt == _connectionAttempt &&
+          !_manualDisconnect &&
+          endpointGrant.value == grant &&
+          baseUrl.value == relayUrl &&
+          !_credentialRefreshBlocked) {
+        // Reconnect with the newly minted first-frame token regardless of the
+        // ordinary network auto-reconnect preference.
+        _scheduleReconnect(force: true);
+      }
+    } catch (error) {
+      if (attempt != _connectionAttempt ||
+          endpointGrant.value != grant ||
+          baseUrl.value != relayUrl) {
+        return;
+      }
+      if (rotationStarted) {
+        _tokenRotationInProgress = false;
+        connected.value = false;
+        connectionLabel.value = 'reconnecting';
+        if (!_manualDisconnect && !_credentialRefreshBlocked) {
+          _scheduleReconnect(force: true);
+        }
+        return;
+      }
+      if (_isTerminalRefreshFailure(error)) {
+        _credentialRefreshBlocked = true;
+        _forceTokenRefresh = false;
+        _tokenRefreshTimer?.cancel();
+        _tokenRefreshTimer = null;
+        lastError.value = _connectionTestError(error);
+        connectionLabel.value = 'failed';
+        _tokenRotationInProgress = true;
+        rotationStarted = true;
+        connected.value = false;
+        try {
+          await _closeSocketForRotation(socket);
+        } finally {
+          _tokenRotationInProgress = false;
+        }
+        return;
+      }
+      // Keep the current socket alive during a transient outage. A later
+      // attempt (or Relay's token_expired frame) will force the same refresh
+      // path again without spinning a reconnect loop.
+      lastError.value = '连接令牌自动续期暂时失败，将在稍后重试。';
+      _tokenRefreshRetryAttempt += 1;
+      _scheduleTokenRefresh(delay: _refreshRetryDelay(error));
+    } finally {
+      if (rotationStarted) {
+        _tokenRotationInProgress = false;
+      }
+    }
+  }
+
+  bool _isTerminalRefreshFailure(Object error) {
+    if (_isRetryableRefreshFailure(error)) return false;
+    if (error is _ConnectTokenRefreshException && error.terminal) return true;
+    final text = error.toString().toLowerCase();
+    return text.contains('auth.grant_expired') ||
+        text.contains('auth.grant_revoked') ||
+        text.contains('auth.invalid_grant') ||
+        text.contains('auth.grant_required') ||
+        text.contains('auth.account_unavailable') ||
+        text.contains('auth.space_unavailable') ||
+        text.contains('auth.endpoint_type_mismatch') ||
+        text.contains('auth.refresh_invalid') ||
+        text.contains('auth.refresh_rejected') ||
+        text.contains('auth.proof_') ||
+        text.contains('auth_context_changed') ||
+        text.contains('invalid_message');
+  }
+
+  bool _isRetryableRefreshFailure(Object error) {
+    if (error is _ConnectTokenRefreshException) return error.retryable;
+    return error.toString().toLowerCase().contains('relay_retryable');
+  }
+
+  Duration _refreshRetryDelay(Object error) {
+    if (error is _ConnectTokenRefreshException && error.retryAfter != null) {
+      final requested = error.retryAfter!;
+      return requested < const Duration(milliseconds: 250)
+          ? const Duration(milliseconds: 250)
+          : requested;
+    }
+    final exponent = _tokenRefreshRetryAttempt.clamp(0, 3).toInt();
+    return _tokenRefreshRetry * (1 << exponent);
+  }
+
+  bool _isRefreshableRelayCode(String code) {
+    return code == 'auth.token_expired' || code == 'auth.invalid_token';
+  }
+
+  void _markTokenRefreshNeededIfExpired() {
+    final expiry = tokenExpiresAt.value;
+    if (endpointGrant.value.isNotEmpty &&
+        (expiry <= 0 ||
+            expiry <=
+                DateTime.now().millisecondsSinceEpoch +
+                    _tokenRefreshLead.inMilliseconds)) {
+      _forceTokenRefresh = true;
+    } else if (endpointGrant.value.isEmpty &&
+        expiry > 0 &&
+        expiry <= DateTime.now().millisecondsSinceEpoch) {
+      _credentialRefreshBlocked = true;
+    }
+  }
+
+  Future<void> _refreshConnectToken({
+    required int attempt,
+    required String grant,
+    required String relayUrl,
+  }) async {
+    final keyPair = _keyPair;
+    if (keyPair == null || grant.isEmpty) {
       throw StateError('缺少接入端授权凭证或接入端私钥');
     }
-    final relay = Uri.parse(baseUrl.value);
+    if (grantExpiresAt.value > 0 &&
+        grantExpiresAt.value <= DateTime.now().millisecondsSinceEpoch) {
+      throw StateError('auth.grant_expired');
+    }
+    final relay = Uri.parse(relayUrl);
+    final refreshed = await _requestConnectToken(
+      relay: relay,
+      keyPair: keyPair,
+      grant: grant,
+      expectedSpaceId: spaceId.value,
+      expectedEndpointId: deviceId.value,
+      expectedEndpointType: endpointType.value,
+    );
+    // A refresh request can outlive a manual disconnect or pairing switch.
+    // Never apply its result to a different connection context.
+    if (attempt != _connectionAttempt ||
+        _manualDisconnect ||
+        _keyPair != keyPair ||
+        endpointGrant.value != grant ||
+        baseUrl.value != relayUrl) {
+      return;
+    }
+    pairingToken.value = refreshed.token;
+    tokenExpiresAt.value = refreshed.expiresAt;
+    _forceTokenRefresh = false;
+    if (refreshed.grantExpiresAt != null) {
+      grantExpiresAt.value = refreshed.grantExpiresAt!;
+    }
+    _tokenRefreshRetryAttempt = 0;
+    await _storeConnectionHints(expectedAttempt: attempt);
+  }
+
+  Future<_ConnectTokenRefreshResult> _requestConnectToken({
+    required Uri relay,
+    required SimpleKeyPair keyPair,
+    required String grant,
+    required String expectedSpaceId,
+    required String expectedEndpointId,
+    required String expectedEndpointType,
+  }) async {
+    if (grant.trim().isEmpty) throw StateError('缺少接入端授权凭证');
+    if (!const {'ws', 'wss'}.contains(relay.scheme) ||
+        !relay.hasAuthority ||
+        relay.userInfo.isNotEmpty ||
+        relay.query.isNotEmpty ||
+        relay.fragment.isNotEmpty) {
+      throw StateError('Relay 连接地址不适合用于 Token 刷新');
+    }
     if (relay.scheme == 'ws' && !_isLoopbackHost(relay.host)) {
       throw StateError('非本机 Relay 的 Token 刷新必须使用 HTTPS');
     }
@@ -5712,16 +7016,23 @@ class BridgeController extends GetxController {
       query: '',
       fragment: '',
     );
-    final client = HttpClient();
+    if (endpoint.scheme == 'http' && !_isLoopbackHost(endpoint.host)) {
+      throw StateError('非本机 Relay 的 Token 刷新必须使用 HTTPS');
+    }
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
     try {
       final request = await client.postUrl(endpoint);
+      request.followRedirects = false;
       request.headers.contentType = ContentType.json;
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      request.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
       request.add(
         utf8.encode(
           jsonEncode(
             await RelayProtocol.connectTokenRefreshRequest(
-              keyPair: _keyPair!,
-              endpointGrant: endpointGrant.value,
+              keyPair: keyPair,
+              endpointGrant: grant,
             ),
           ),
         ),
@@ -5730,42 +7041,94 @@ class BridgeController extends GetxController {
         const Duration(seconds: 10),
       );
       final bodyText = await response.transform(utf8.decoder).join();
-      final decoded = jsonDecode(bodyText);
-      final body = decoded is Map
-          ? Map<String, dynamic>.from(decoded)
-          : const <String, dynamic>{};
+      Map<String, dynamic> body;
+      try {
+        final decoded = jsonDecode(bodyText);
+        body = decoded is Map
+            ? Map<String, dynamic>.from(decoded)
+            : const <String, dynamic>{};
+      } catch (_) {
+        body = const <String, dynamic>{};
+      }
       final dataValue = body['data'];
       final data = dataValue is Map
           ? Map<String, dynamic>.from(dataValue)
           : body;
       final relayCode = body['code'];
       final errorCode = data['errorCode'];
+      final statusRetryable =
+          _isRetryableHttpStatus(response.statusCode) ||
+          _isRetryableEnvelopeCode(relayCode);
       final rejected =
           response.statusCode < 200 ||
           response.statusCode >= 300 ||
-          (relayCode is num && relayCode.toInt() != 200);
+          (relayCode is num &&
+              relayCode.isFinite &&
+              relayCode == relayCode.toInt() &&
+              relayCode.toInt() != 200);
       if (rejected) {
-        throw StateError(
-          '${errorCode ?? body['msg'] ?? 'auth.refresh_rejected'}',
+        final code = errorCode is String && errorCode.trim().isNotEmpty
+            ? errorCode.trim()
+            : 'auth.refresh_rejected';
+        final message = body['msg']?.toString().trim().isNotEmpty == true
+            ? body['msg'].toString()
+            : 'Connect Token 刷新被拒绝（HTTP ${response.statusCode}）';
+        if (statusRetryable) {
+          throw _ConnectTokenRefreshException(
+            code: 'RELAY_RETRYABLE',
+            message: message,
+            retryable: true,
+            retryAfter: _retryAfterDuration(
+              response.headers.value(HttpHeaders.retryAfterHeader),
+            ),
+          );
+        }
+        throw _ConnectTokenRefreshException(
+          code: code,
+          message: message,
+          terminal: _isTerminalRefreshCode(code),
         );
       }
       final nextToken = data['connectToken'];
-      final nextExpiresAt = data['expiresAt'];
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final nextExpiresAtInt = _safeRefreshInteger(data['expiresAt']);
       if (nextToken is! String ||
           nextToken.length < 32 ||
           !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(nextToken) ||
-          nextExpiresAt is! num ||
-          nextExpiresAt <= DateTime.now().millisecondsSinceEpoch) {
-        throw StateError('Relay 返回了无效的刷新凭证');
+          nextExpiresAtInt == null ||
+          nextExpiresAtInt <= now) {
+        throw const _ConnectTokenRefreshException(
+          code: 'INVALID_MESSAGE',
+          message: 'Relay 返回了无效的刷新凭证',
+          terminal: true,
+        );
       }
-      pairingToken.value = nextToken;
-      tokenExpiresAt.value = nextExpiresAt.toInt();
-      _forceTokenRefresh = false;
-      final nextGrantExpiresAt = data['grantExpiresAt'];
-      if (nextGrantExpiresAt is num) {
-        grantExpiresAt.value = nextGrantExpiresAt.toInt();
+      _validateRefreshContext(
+        data,
+        expectedSpaceId: expectedSpaceId,
+        expectedEndpointId: expectedEndpointId,
+        expectedEndpointType: expectedEndpointType,
+      );
+      final hasGrantExpiry = data.containsKey('grantExpiresAt');
+      final rawGrantExpiry = data['grantExpiresAt'];
+      final nextGrantExpiresAtInt = rawGrantExpiry == null
+          ? null
+          : _safeRefreshInteger(rawGrantExpiry);
+      if (hasGrantExpiry &&
+          (rawGrantExpiry == null ||
+              nextGrantExpiresAtInt == null ||
+              nextGrantExpiresAtInt <= now)) {
+        throw const _ConnectTokenRefreshException(
+          code: 'INVALID_MESSAGE',
+          message: 'Relay 返回了无效的授权凭证有效期',
+          terminal: true,
+        );
       }
-      await _storeConnectionHints();
+      return _ConnectTokenRefreshResult(
+        token: nextToken,
+        expiresAt: nextExpiresAtInt,
+        grantExpiresAt: nextGrantExpiresAtInt,
+      );
     } finally {
       client.close(force: true);
     }
@@ -5788,8 +7151,11 @@ class BridgeController extends GetxController {
       }
     }
     final uri = Uri.parse(next);
-    if (!uri.hasAuthority || uri.query.isNotEmpty || uri.fragment.isNotEmpty) {
-      throw FormatException('Relay 连接地址必须是无 query/hash 的 WebSocket 地址');
+    if (!uri.hasAuthority ||
+        uri.userInfo.isNotEmpty ||
+        uri.query.isNotEmpty ||
+        uri.fragment.isNotEmpty) {
+      throw FormatException('Relay 连接地址必须是无 query/hash/用户凭证的 WebSocket 地址');
     }
     final normalized = uri.path.isEmpty || uri.path == '/'
         ? uri.replace(path: '/v1/connect')
@@ -5802,6 +7168,141 @@ class BridgeController extends GetxController {
     }
     return normalized.toString();
   }
+}
+
+class _ConnectTokenRefreshResult {
+  const _ConnectTokenRefreshResult({
+    required this.token,
+    required this.expiresAt,
+    this.grantExpiresAt,
+  });
+
+  final String token;
+  final int expiresAt;
+  final int? grantExpiresAt;
+}
+
+class _ConnectTokenRefreshException implements Exception {
+  const _ConnectTokenRefreshException({
+    required this.code,
+    required this.message,
+    this.retryable = false,
+    this.retryAfter,
+    this.terminal = false,
+  });
+
+  final String code;
+  final String message;
+  final bool retryable;
+  final Duration? retryAfter;
+  final bool terminal;
+
+  @override
+  String toString() => '$code: $message';
+}
+
+const int _maxSafeRefreshInteger = 9007199254740991;
+const int _maxRefreshRetryAfterMilliseconds = 10 * 60 * 1000;
+
+int? _safeRefreshInteger(Object? value) {
+  if (value is! num || !value.isFinite || value != value.truncate()) {
+    return null;
+  }
+  final asDouble = value.toDouble();
+  if (asDouble <= 0 || asDouble > _maxSafeRefreshInteger) return null;
+  final integer = value.toInt();
+  return integer > 0 && integer <= _maxSafeRefreshInteger ? integer : null;
+}
+
+bool _isRetryableHttpStatus(int status) {
+  return status == 408 ||
+      status == 425 ||
+      status == 429 ||
+      status >= 500 && status <= 599;
+}
+
+bool _isRetryableEnvelopeCode(Object? value) {
+  final code = _safeRefreshInteger(value);
+  return code != null && _isRetryableHttpStatus(code);
+}
+
+Duration? _retryAfterDuration(String? value) {
+  final raw = value?.trim() ?? '';
+  if (raw.isEmpty) return null;
+  if (RegExp(r'^\d+$').hasMatch(raw)) {
+    final seconds = int.tryParse(raw);
+    if (seconds == null) {
+      return const Duration(milliseconds: _maxRefreshRetryAfterMilliseconds);
+    }
+    final milliseconds = seconds > _maxRefreshRetryAfterMilliseconds ~/ 1000
+        ? _maxRefreshRetryAfterMilliseconds
+        : seconds * 1000;
+    return Duration(milliseconds: milliseconds);
+  }
+  DateTime? timestamp;
+  try {
+    timestamp = HttpDate.parse(raw).toUtc();
+  } catch (_) {
+    timestamp = DateTime.tryParse(raw)?.toUtc();
+  }
+  if (timestamp == null) return null;
+  final milliseconds = timestamp
+      .difference(DateTime.now().toUtc())
+      .inMilliseconds
+      .clamp(0, _maxRefreshRetryAfterMilliseconds)
+      .toInt();
+  return Duration(milliseconds: milliseconds);
+}
+
+void _validateRefreshContext(
+  Map<String, dynamic> data, {
+  required String expectedSpaceId,
+  required String expectedEndpointId,
+  required String expectedEndpointType,
+}) {
+  final expected = <String, String>{
+    'spaceId': expectedSpaceId,
+    'endpointId': expectedEndpointId,
+    'endpointType': expectedEndpointType,
+  };
+  for (final entry in expected.entries) {
+    if (!data.containsKey(entry.key)) continue;
+    final value = data[entry.key];
+    if (value is! String || value.isEmpty || value != entry.value) {
+      throw _ConnectTokenRefreshException(
+        code: 'AUTH_CONTEXT_CHANGED',
+        message: 'Relay 刷新响应的 ${entry.key} 与当前配置不一致',
+        terminal: true,
+      );
+    }
+  }
+}
+
+bool _isTerminalRefreshCode(String code) {
+  return {
+    'auth.grant_expired',
+    'auth.grant_revoked',
+    'auth.invalid_grant',
+    'auth.grant_required',
+    'auth.account_unavailable',
+    'auth.space_unavailable',
+    'auth.endpoint_type_mismatch',
+    'auth.refresh_invalid',
+    'auth.refresh_rejected',
+    'auth.proof_required',
+    'auth.proof_mismatch',
+    'auth.proof_invalid',
+    'auth.proof_expired',
+    'auth.replay',
+    'AUTH_CONTEXT_CHANGED',
+  }.contains(code);
+}
+
+class _ConnectionTestAttempt {
+  const _ConnectionTestAttempt({this.error, this.code});
+
+  final String? error;
+  final String? code;
 }
 
 class _SessionLifecycle {

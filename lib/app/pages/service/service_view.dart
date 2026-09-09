@@ -148,6 +148,9 @@ class ServicePage extends StatelessWidget {
             inputEndpointId: profile.deviceId,
             inputEndpointType: profile.endpointType,
             inputDeviceKey: profile.deviceKey,
+            inputEndpointGrant: profile.endpointGrant,
+            inputTokenExpiresAt: profile.tokenExpiresAt,
+            inputGrantExpiresAt: profile.grantExpiresAt,
           );
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(

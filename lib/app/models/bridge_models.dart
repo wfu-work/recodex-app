@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class WorkspaceInfo {
   const WorkspaceInfo({
     required this.name,
@@ -33,6 +35,14 @@ class WorkspaceInfo {
       roots: roots,
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'path': path,
+    if (position != null) 'position': position,
+    if (roots.isNotEmpty) 'roots': roots,
+  };
 }
 
 /// The endpoint identity material shown while creating a Relay pairing.
@@ -499,6 +509,20 @@ class SessionRecord {
     );
   }
 
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'workspace': workspace,
+    'prompt': prompt,
+    'status': status,
+    'createdAt': createdAt,
+    'updatedAt': updatedAt,
+    if (recencyAt.isNotEmpty) 'recencyAt': recencyAt,
+    if (projectId.isNotEmpty) 'projectId': projectId,
+    if (title.isNotEmpty) 'title': title,
+    if (isPinned) 'isPinned': true,
+    if (isArchived) 'isArchived': true,
+  };
+
   DateTime get updatedAtDate {
     return _sessionDate(updatedAt) ?? DateTime.fromMillisecondsSinceEpoch(0);
   }
@@ -692,6 +716,21 @@ class SessionEvent {
       isDelta: json['isDelta'] == true || json['is_delta'] == true,
     );
   }
+
+  Map<String, dynamic> toJson({bool cacheSafe = false}) => {
+    'kind': kind,
+    'text': text,
+    if (time != null) 'time': time!.toUtc().toIso8601String(),
+    if (durationMs != null) 'durationMs': durationMs,
+    if (usage != null) 'usage': usage!.toJson(),
+    if (attachments.isNotEmpty)
+      'attachments': attachments
+          .map((item) => item.toJson(cacheSafe: cacheSafe))
+          .toList(),
+    if (itemId != null && itemId!.trim().isNotEmpty) 'itemId': itemId,
+    if (turnId != null && turnId!.trim().isNotEmpty) 'turnId': turnId,
+    if (isDelta) 'isDelta': true,
+  };
 }
 
 class EventAttachment {
@@ -713,6 +752,24 @@ class EventAttachment {
   final String thumbnailDataUrl;
   final String resourceUrl;
   final String? expiresAt;
+
+  EventAttachment copyWith({
+    String? type,
+    String? mime,
+    String? dataUrl,
+    String? thumbnailDataUrl,
+    String? resourceUrl,
+    String? expiresAt,
+  }) {
+    return EventAttachment(
+      type: type ?? this.type,
+      mime: mime ?? this.mime,
+      dataUrl: dataUrl ?? this.dataUrl,
+      thumbnailDataUrl: thumbnailDataUrl ?? this.thumbnailDataUrl,
+      resourceUrl: resourceUrl ?? this.resourceUrl,
+      expiresAt: expiresAt ?? this.expiresAt,
+    );
+  }
 
   bool get hasImageSource =>
       thumbnailDataUrl.trim().isNotEmpty ||
@@ -738,6 +795,24 @@ class EventAttachment {
           json['expiresAt']?.toString() ?? json['expires_at']?.toString(),
     );
   }
+
+  Map<String, dynamic> toJson({bool cacheSafe = false}) => {
+    'type': type,
+    'mime': mime,
+    if (dataUrl.isNotEmpty && _keepInlinePayload(dataUrl, cacheSafe))
+      'dataUrl': dataUrl,
+    if (thumbnailDataUrl.isNotEmpty &&
+        _keepInlinePayload(thumbnailDataUrl, cacheSafe))
+      'thumbnailDataUrl': thumbnailDataUrl,
+    if (resourceUrl.isNotEmpty) 'resourceUrl': resourceUrl,
+    if (expiresAt != null && expiresAt!.trim().isNotEmpty)
+      'expiresAt': expiresAt,
+  };
+
+  static bool _keepInlinePayload(String value, bool cacheSafe) {
+    if (!cacheSafe || !value.startsWith('data:')) return true;
+    return utf8.encode(value).length <= 64 * 1024;
+  }
 }
 
 class TokenUsage {
@@ -758,6 +833,12 @@ class TokenUsage {
       totalTokens: _jsonInt(json['totalTokens'] ?? json['total_tokens']),
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'inputTokens': inputTokens,
+    'outputTokens': outputTokens,
+    'totalTokens': totalTokens,
+  };
 }
 
 class GitSnapshot {
