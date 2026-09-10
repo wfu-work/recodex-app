@@ -10,6 +10,7 @@ import '../pages/settings/theme_controller.dart';
 import '../services/answer_metadata.dart';
 import '../theme/recodex_theme.dart';
 import 'answer_footer.dart';
+import 'context_window_indicator.dart';
 import 'live_activity.dart';
 import 'recodex_dropdown.dart';
 
@@ -950,14 +951,15 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
                 ),
                 if (hasReasoning && _reasoningExpanded) ...[
                   const SizedBox(height: 16),
-                  AnimatedSize(
-                    duration: reduceAnimations
-                        ? Duration.zero
-                        : const Duration(milliseconds: 180),
-                    curve: Curves.easeOutCubic,
-                    alignment: Alignment.topCenter,
-                    child: _ReasoningContent(steps: reasoningSteps),
-                  ),
+                  if (reduceAnimations)
+                    _ReasoningContent(steps: reasoningSteps)
+                  else
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOutCubic,
+                      alignment: Alignment.topCenter,
+                      child: _ReasoningContent(steps: reasoningSteps),
+                    ),
                 ],
                 if (answerChildren.isNotEmpty) ...[
                   if (hasReasoning && _reasoningExpanded)
@@ -2348,6 +2350,7 @@ class ComposerBar extends StatelessWidget {
     this.onStop,
     this.listening = false,
     this.focusNode,
+    this.contextWindowUsage,
     super.key,
   });
 
@@ -2366,6 +2369,7 @@ class ComposerBar extends StatelessWidget {
   final VoidCallback onVoicePressed;
   final bool listening;
   final FocusNode? focusNode;
+  final ContextWindowUsage? contextWindowUsage;
 
   @override
   Widget build(BuildContext context) {
@@ -2423,21 +2427,30 @@ class ComposerBar extends StatelessWidget {
                   ),
                   if (running) ...[
                     const SizedBox(width: 6),
-                    _PermissionModePill(
-                      icon: RecodexIcons.shield,
-                      value: permissionMode,
-                      values: permissionModes,
-                      onChanged: onPermissionModeChanged,
+                    Expanded(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: _PermissionModePill(
+                          icon: RecodexIcons.shield,
+                          value: permissionMode,
+                          values: permissionModes,
+                          onChanged: onPermissionModeChanged,
+                        ),
+                      ),
                     ),
-                    const Spacer(),
-                    // Keep the running controls as one intrinsic trailing
-                    // group. A Flexible model label used to consume the row
-                    // width and visually leave the model/stop controls in
-                    // the middle of the composer instead of at its right
-                    // edge.
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 240),
-                      child: _RunningModelLabel(context: this.context),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      flex: 2,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          if (contextWindowUsage != null)
+                            ContextWindowIndicator(usage: contextWindowUsage!),
+                          Flexible(
+                            child: _RunningModelLabel(context: this.context),
+                          ),
+                        ],
+                      ),
                     ),
                   ] else ...[
                     const SizedBox(width: 6),
@@ -2470,6 +2483,8 @@ class ComposerBar extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
+                    if (contextWindowUsage != null)
+                      ContextWindowIndicator(usage: contextWindowUsage!),
                     _ComposerIconButton(
                       icon: RecodexIcons.mic,
                       active: listening,
@@ -2676,18 +2691,42 @@ class _PermissionModePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final selected = values.contains(value) ? value : values.first;
-    return RecodexDropdown<String>(
-      value: selected,
-      options: values
-          .map(
-            (item) => RecodexDropdownOption<String>(value: item, label: item),
-          )
-          .toList(),
-      leadingIcon: icon,
-      warningWhen: (item) => item == '完全访问权限',
-      showBorder: false,
-      tooltip: '选择权限模式',
-      onChanged: onChanged,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Keep the context ring and stop action reachable on phone widths.
+        // The full permission labels remain available in the same menu.
+        if (constraints.maxWidth < 180) {
+          return RecodexPopupMenuButton<String>(
+            initialValue: selected,
+            tooltip: '权限：$selected',
+            onSelected: onChanged,
+            icon: Icon(
+              icon,
+              color: selected == '完全访问权限'
+                  ? context.recodexColors.warning
+                  : context.recodexColors.textMuted,
+            ),
+            itemBuilder: (context) => [
+              for (final item in values)
+                PopupMenuItem(value: item, child: Text(item)),
+            ],
+          );
+        }
+        return RecodexDropdown<String>(
+          value: selected,
+          options: values
+              .map(
+                (item) =>
+                    RecodexDropdownOption<String>(value: item, label: item),
+              )
+              .toList(),
+          leadingIcon: icon,
+          warningWhen: (item) => item == '完全访问权限',
+          showBorder: false,
+          tooltip: '选择权限模式',
+          onChanged: onChanged,
+        );
+      },
     );
   }
 }

@@ -3,6 +3,31 @@ import 'package:recodex/app/models/bridge_models.dart';
 import 'package:recodex/app/services/answer_metadata.dart';
 
 void main() {
+  test('abbreviates consumption without losing unit boundaries', () {
+    final cases = {
+      0: '0',
+      999: '999',
+      1000: '1K',
+      1234: '1.23K',
+      10000: '10K',
+      21935: '21.94K',
+      999994: '999.99K',
+      999999: '1M',
+      1000000: '1M',
+      2391870: '2.39M',
+      999999999: '1B',
+      123456789012: '123.46B',
+      1000000000000: '1T',
+    };
+    for (final entry in cases.entries) {
+      expect(
+        formatCompactTokenCount(entry.key),
+        entry.value,
+        reason: '${entry.key}',
+      );
+    }
+    expect(formatTokenCount(2391870), '2,391,870');
+  });
   test(
     'reads Relay turn usage before cumulative counters and caches its breakdown',
     () {
@@ -45,7 +70,7 @@ void main() {
     }, scope: TokenUsageScope.turn);
     expect(thread?.scope, TokenUsageScope.thread);
     expect(thread?.totalTokens, 10000);
-    expect(tokenUsageLabel(thread), '会话累计 Token 10,000');
+    expect(tokenUsageLabel(thread), '会话累计消耗 · 总 10K');
     final turn = readTokenUsage({
       'usage': {'input_tokens': 120, 'output_tokens': 30},
     }, scope: TokenUsageScope.turn);

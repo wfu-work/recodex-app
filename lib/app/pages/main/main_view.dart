@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
@@ -56,6 +57,10 @@ class _MainPageState extends State<MainPage> {
   bool _userDetachedFromLatest = false;
   bool? _lastAutoScrollEnabled;
   String _lastAutoScrollSignature = '';
+  bool _scrollUiUpdateScheduled = false;
+  double? _pendingHeaderProgress;
+  bool? _pendingScrollToLatest;
+  bool? _pendingComposerVisible;
 
   @override
   void initState() {
@@ -512,6 +517,8 @@ class _MainPageState extends State<MainPage> {
                                 focusNode: _composerFocusNode,
                                 enabled: controller.canUseWorkspace,
                                 context: controller.composerContext.value,
+                                contextWindowUsage:
+                                    controller.contextWindowUsage,
                                 permissionMode: controller.permissionMode.value,
                                 onSend: _sendPrompt,
                                 // Derive the composer state from the same
@@ -663,20 +670,26 @@ class _MainPageState extends State<MainPage> {
   }
 
   void _updateHeaderBackground() {
+    if (!_scrollController.hasClients || !_scrollController.position.hasPixels) {
+      return;
+    }
     final next = (_scrollController.offset / 72).clamp(0.0, 1.0);
-    if ((next - _headerBackgroundProgress).abs() < 0.02) return;
-    setState(() => _headerBackgroundProgress = next);
+    _pendingHeaderProgress = next;
+    _scheduleScrollUiUpdate();
   }
 
   void _updateScrollToLatestVisibility() {
-    if (!_scrollController.hasClients) return;
+    if (!_scrollController.hasClients ||
+        !_scrollController.position.hasContentDimensions) {
+      return;
+    }
     final distance =
         _scrollController.position.maxScrollExtent -
         _scrollController.position.pixels;
     final shouldShow =
         _userDetachedFromLatest && distance > _scrollToLatestThreshold;
-    if (!mounted || shouldShow == _showScrollToLatest) return;
-    setState(() => _showScrollToLatest = shouldShow);
+    _pendingScrollToLatest = shouldShow;
+    _scheduleScrollUiUpdate();
   }
 
   bool _handleScrollNotification(ScrollNotification notification) {
@@ -707,8 +720,46 @@ class _MainPageState extends State<MainPage> {
   }
 
   void _setComposerVisible(bool visible) {
-    if (visible == _composerVisible || !mounted) return;
-    setState(() => _composerVisible = visible);
+    _pendingComposerVisible = visible;
+    _scheduleScrollUiUpdate();
+  }
+
+  void _scheduleScrollUiUpdate() {
+    if (!mounted) return;
+    // Resizing can start/end a ballistic scroll inside applyContentDimensions.
+    // Rebuilding here interrupts ScrollPosition before it saves its metrics.
+    // Coalesce notifications and apply the latest values after layout.
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      if (_scrollUiUpdateScheduled) return;
+      _scrollUiUpdateScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _applyScrollUiUpdate(),
+      );
+    } else {
+      _applyScrollUiUpdate();
+    }
+  }
+
+  void _applyScrollUiUpdate() {
+    _scrollUiUpdateScheduled = false;
+    if (!mounted) return;
+    final header = _pendingHeaderProgress ?? _headerBackgroundProgress;
+    final showLatest = _pendingScrollToLatest ?? _showScrollToLatest;
+    final composer = _pendingComposerVisible ?? _composerVisible;
+    _pendingHeaderProgress = null;
+    _pendingScrollToLatest = null;
+    _pendingComposerVisible = null;
+    if ((header - _headerBackgroundProgress).abs() < 0.02 &&
+        showLatest == _showScrollToLatest &&
+        composer == _composerVisible) {
+      return;
+    }
+    setState(() {
+      _headerBackgroundProgress = header;
+      _showScrollToLatest = showLatest;
+      _composerVisible = composer;
+    });
   }
 
   void _scheduleScrollToLatest(String signature) {
@@ -738,12 +789,17 @@ class _MainPageState extends State<MainPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scrollController.hasClients) return;
       if (_userDetachedFromLatest && !force) return;
+      if (!_scrollController.position.hasContentDimensions) return;
+      final target = _scrollController.position.maxScrollExtent;
+      if (_reduceMotionEnabled) {
+        _scrollController.jumpTo(target);
+        _updateScrollToLatestVisibility();
+        return;
+      }
       _scrollController
           .animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: _reduceMotionEnabled
-                ? Duration.zero
-                : const Duration(milliseconds: 220),
+            target,
+            duration: const Duration(milliseconds: 220),
             curve: Curves.easeOutCubic,
           )
           .whenComplete(() {
@@ -969,6 +1025,7 @@ class _TimelineIndex extends StatefulWidget {
 class _TimelineIndexState extends State<_TimelineIndex> {
   int _activeIndex = 0;
   int? _hoveredIndex;
+  bool _activeIndexUpdateScheduled = false;
 
   List<_TimelineIndexMarker> get _markers {
     final markers = <_TimelineIndexMarker>[];
@@ -1044,11 +1101,25 @@ class _TimelineIndexState extends State<_TimelineIndex> {
   }
 
   void _updateActiveIndex() {
+    if (!mounted) return;
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      if (!_activeIndexUpdateScheduled) {
+        _activeIndexUpdateScheduled = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _activeIndexUpdateScheduled = false;
+          _updateActiveIndex();
+        });
+      }
+      return;
+    }
     final markers = _markers;
-    if (!mounted || markers.isEmpty) return;
+    if (markers.isEmpty) return;
     final scroll = widget.scrollController;
     var next = 0;
-    if (scroll.hasClients && scroll.position.maxScrollExtent > 0) {
+    if (scroll.hasClients &&
+        scroll.position.hasContentDimensions &&
+        scroll.position.maxScrollExtent > 0) {
       final progress =
           (scroll.position.pixels / scroll.position.maxScrollExtent).clamp(
             0.0,
@@ -1081,14 +1152,20 @@ class _TimelineIndexState extends State<_TimelineIndex> {
       return;
     }
     final scroll = widget.scrollController;
-    if (!scroll.hasClients || markers.length < 2) return;
+    if (!scroll.hasClients ||
+        !scroll.position.hasContentDimensions ||
+        markers.length < 2) {
+      return;
+    }
     final target =
         scroll.position.maxScrollExtent * (index / (markers.length - 1));
+    if (MediaQuery.of(context).disableAnimations) {
+      scroll.jumpTo(target);
+      return;
+    }
     await scroll.animateTo(
       target,
-      duration: MediaQuery.of(context).disableAnimations
-          ? Duration.zero
-          : const Duration(milliseconds: 260),
+      duration: const Duration(milliseconds: 260),
       curve: Curves.easeOutCubic,
     );
   }

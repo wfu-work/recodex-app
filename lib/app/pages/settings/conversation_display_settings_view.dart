@@ -109,7 +109,7 @@ class ConversationDisplaySettingsPage extends StatelessWidget {
                     SettingsToggleRow(
                       icon: RecodexIcons.calendar,
                       title: '显示回答统计信息',
-                      subtitle: '显示 Token 用量、耗时和完成时间',
+                      subtitle: '显示消耗总量、输入、输出、缓存、耗时和完成时间',
                       value: preferences.showUsageMetrics.value,
                       onChanged: preferences.setShowUsageMetrics,
                     ),

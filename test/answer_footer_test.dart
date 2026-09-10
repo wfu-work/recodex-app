@@ -115,10 +115,13 @@ void main() {
           ),
         ),
       );
-      expect(find.text('Token 1,234'), findsOneWidget);
+      expect(find.text('消耗 · 总 1.23K'), findsOneWidget);
+      expect(find.text('输入 1.22K'), findsOneWidget);
+      expect(find.text('输出 10'), findsOneWidget);
+      expect(find.text('缓存 未提供'), findsOneWidget);
       expect(find.text('耗时 1分钟 5秒'), findsOneWidget);
       expect(find.text('完成 2026/09/10 17:20:30'), findsOneWidget);
-      await tester.tap(find.text('Token 1,234'));
+      await tester.tap(find.text('消耗 · 总 1.23K'));
       await tester.pumpAndSettle();
       expect(find.textContaining('输入 1,224 · 输出 10'), findsOneWidget);
     },
@@ -135,7 +138,7 @@ void main() {
           ),
         ),
       );
-      expect(find.text('Token 未提供'), findsOneWidget);
+      expect(find.text('消耗 未提供'), findsOneWidget);
       expect(find.text('耗时 未记录'), findsOneWidget);
       expect(find.text('完成时间未记录'), findsOneWidget);
       expect(find.byTooltip('复制回答'), findsOneWidget);
@@ -161,11 +164,15 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.text('Token 280,571'));
+      expect(find.text('消耗 · 总 280.57K'), findsOneWidget);
+      expect(find.text('输入 276.67K'), findsOneWidget);
+      expect(find.text('输出 3.9K'), findsOneWidget);
+      expect(find.text('缓存 175.23K'), findsOneWidget);
+      await tester.tap(find.text('消耗 · 总 280.57K'));
       await tester.pumpAndSettle();
       expect(find.textContaining('输入中含缓存 175,232'), findsOneWidget);
       expect(find.textContaining('输出中含推理 2,129'), findsOneWidget);
-      expect(find.textContaining('总计 280,571 Token'), findsOneWidget);
+      expect(find.textContaining('总消耗 280,571'), findsOneWidget);
     },
   );
 
@@ -185,7 +192,7 @@ void main() {
         ),
       ),
     );
-    expect(find.text('Token 1,234,567'), findsOneWidget);
+    expect(find.text('消耗 · 总 1.23M'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
   });
@@ -201,7 +208,7 @@ void main() {
       ),
     );
     expect(find.byTooltip('复制回答'), findsOneWidget);
-    expect(find.text('Token 1,234'), findsNothing);
+    expect(find.text('消耗 · 总 1.23K'), findsNothing);
     expect(find.textContaining('17:20:30'), findsNothing);
     expect(find.textContaining('耗时'), findsNothing);
   });
@@ -248,7 +255,7 @@ void main() {
       ),
     );
     expect(tester.takeException(), isNull);
-    expect(find.text('Token 123,456,789,012'), findsOneWidget);
+    expect(find.text('消耗 · 总 123.46B'), findsOneWidget);
     expect(find.text('完成 2026/09/10 17:20:30'), findsOneWidget);
   });
 

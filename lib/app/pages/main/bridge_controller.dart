@@ -9,6 +9,7 @@ import 'package:get_storage/get_storage.dart';
 
 import '../../models/bridge_models.dart';
 import '../../services/answer_metadata.dart';
+import '../../services/context_window_usage.dart';
 import '../../services/relay_protocol.dart';
 import '../../services/turn_file_changes.dart';
 import '../../services/session_cache.dart';
@@ -85,6 +86,7 @@ class BridgeController extends GetxController {
   final selectedSessionId = RxnString();
   final gitSnapshot = Rxn<GitSnapshot>();
   final composerContext = ComposerContext.fallback.obs;
+  ContextWindowUsage? get contextWindowUsage => latestContextWindowUsage(events);
   final permissionMode = '默认权限'.obs;
   final currentSessionId = RxnString();
 
@@ -4019,6 +4021,7 @@ class BridgeController extends GetxController {
       // Preserve per-turn metadata even when history has no token usage on
       // individual items. The identity matches live terminal notifications.
       final turnUsage = readTokenUsage(turnMap, scope: TokenUsageScope.turn);
+      final contextUsage = readContextWindowUsage(turnMap);
       final hasExplicitTerminal =
           turnStatus.isTerminal ||
           (turnStatus == TimelineTaskStatus.unknown &&
@@ -4038,15 +4041,18 @@ class BridgeController extends GetxController {
             completedAt: resolvedEnd,
             durationMs: resolvedDuration,
             usage: turnUsage,
+            contextWindowUsage: contextUsage,
             turnId: snapshotTurnId,
             itemId: snapshotTurnId == null ? null : 'turn-end:$snapshotTurnId',
           ),
         );
-      } else if (turnUsage != null && snapshotTurnId != null) {
+      } else if ((turnUsage != null || contextUsage != null) &&
+          snapshotTurnId != null) {
         loaded.add(SessionEvent(
           kind: 'token_usage', text: '', usage: turnUsage,
+          contextWindowUsage: contextUsage,
           turnId: snapshotTurnId,
-          itemId: 'turn-usage:$snapshotTurnId:${turnUsage.scope.name}',
+          itemId: 'turn-usage:$snapshotTurnId:${turnUsage?.scope.name ?? 'context'}',
         ));
       }
     }
@@ -4364,6 +4370,8 @@ class BridgeController extends GetxController {
     final eventUsage = (nestedTurn == null ? null :
         readTokenUsage(nestedTurn, scope: TokenUsageScope.turn)) ??
         _extractTokenUsage(data);
+    final eventContextUsage = (nestedTurn == null ? null :
+        readContextWindowUsage(nestedTurn)) ?? readContextWindowUsage(data);
     final explicitThreadId =
         _readString(message['threadId']) ??
         _readString(message['thread_id']) ??
@@ -4591,12 +4599,14 @@ class BridgeController extends GetxController {
         );
       case 'usage.updated':
         final usageTurnId = eventTurnId ?? _currentTurnId;
-        if (eventUsage != null && usageTurnId != null) {
+        if ((eventUsage != null || eventContextUsage != null) &&
+            usageTurnId != null) {
           _appendSessionEvent(
             SessionEvent(
               kind: 'token_usage', text: '', usage: eventUsage,
+              contextWindowUsage: eventContextUsage,
               turnId: usageTurnId,
-              itemId: 'turn-usage:$usageTurnId:${eventUsage.scope.name}',
+              itemId: 'turn-usage:$usageTurnId:${eventUsage?.scope.name ?? 'context'}',
             ),
           );
         }
@@ -4689,6 +4699,7 @@ class BridgeController extends GetxController {
               itemId: terminalItemId,
               durationMs: completedDurationMs,
               usage: eventUsage,
+              contextWindowUsage: eventContextUsage,
             ),
           );
           _finishCurrentSession(
@@ -4707,6 +4718,7 @@ class BridgeController extends GetxController {
               itemId: terminalItemId,
               durationMs: completedDurationMs,
               usage: eventUsage,
+              contextWindowUsage: eventContextUsage,
             ),
           );
           _finishCurrentSession(
@@ -4724,6 +4736,7 @@ class BridgeController extends GetxController {
               itemId: terminalItemId,
               durationMs: completedDurationMs,
               usage: eventUsage,
+              contextWindowUsage: eventContextUsage,
             ),
           );
           _finishCurrentSession(
@@ -5819,6 +5832,7 @@ class BridgeController extends GetxController {
     if (event.text.isEmpty &&
         event.attachments.isEmpty &&
         event.usage == null &&
+        event.contextWindowUsage == null &&
         event.kind != 'running' &&
         event.kind != 'done' &&
         event.kind != 'interrupted' &&
@@ -6038,6 +6052,9 @@ class BridgeController extends GetxController {
       durationMs: delta.durationMs ?? existing.durationMs,
       completedAt: delta.completedAt ?? existing.completedAt,
       usage: delta.usage ?? existing.usage,
+      contextWindowUsage: newerContextWindowUsage(
+        existing.contextWindowUsage, delta.contextWindowUsage,
+      ),
       attachments: _mergeEventAttachments(
         existing.attachments,
         delta.attachments,
@@ -6060,6 +6077,9 @@ class BridgeController extends GetxController {
       durationMs: snapshot.durationMs ?? existing.durationMs,
       completedAt: snapshot.completedAt ?? existing.completedAt,
       usage: snapshot.usage ?? existing.usage,
+      contextWindowUsage: newerContextWindowUsage(
+        existing.contextWindowUsage, snapshot.contextWindowUsage,
+      ),
       attachments: _mergeEventAttachments(
         existing.attachments,
         snapshot.attachments,
@@ -6110,6 +6130,7 @@ class BridgeController extends GetxController {
         a.isDelta != b.isDelta ||
         jsonEncode(a.fileDiffs) != jsonEncode(b.fileDiffs) ||
         !_sameTokenUsage(a.usage, b.usage) ||
+        a.contextWindowUsage != b.contextWindowUsage ||
         a.attachments.length != b.attachments.length) {
       return false;
     }

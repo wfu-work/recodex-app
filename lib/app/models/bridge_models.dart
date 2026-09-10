@@ -649,6 +649,7 @@ class SessionEvent {
     this.durationMs,
     this.completedAt,
     this.usage,
+    this.contextWindowUsage,
     this.attachments = const [],
     this.itemId,
     this.turnId,
@@ -669,6 +670,7 @@ class SessionEvent {
   /// Turn completion time, distinct from an item's creation/receipt time.
   final DateTime? completedAt;
   final TokenUsage? usage;
+  final ContextWindowUsage? contextWindowUsage;
   final List<EventAttachment> attachments;
 
   /// Stable Codex identities allow streamed deltas to update the same
@@ -691,6 +693,7 @@ class SessionEvent {
     int? durationMs,
     DateTime? completedAt,
     TokenUsage? usage,
+    ContextWindowUsage? contextWindowUsage,
     List<EventAttachment>? attachments,
     String? itemId,
     String? turnId,
@@ -704,6 +707,7 @@ class SessionEvent {
       durationMs: durationMs ?? this.durationMs,
       completedAt: completedAt ?? this.completedAt,
       usage: usage ?? this.usage,
+      contextWindowUsage: contextWindowUsage ?? this.contextWindowUsage,
       attachments: attachments ?? this.attachments,
       itemId: itemId ?? this.itemId,
       turnId: turnId ?? this.turnId,
@@ -722,6 +726,7 @@ class SessionEvent {
       usage: json['usage'] is Map
           ? TokenUsage.fromJson((json['usage'] as Map).cast<String, dynamic>())
           : null,
+      contextWindowUsage: ContextWindowUsage.tryParse(json['contextWindowUsage']),
       attachments: ((json['attachments'] as List?) ?? const [])
           .whereType<Map>()
           .map((item) => EventAttachment.fromJson(item.cast<String, dynamic>()))
@@ -740,6 +745,8 @@ class SessionEvent {
     if (durationMs != null) 'durationMs': durationMs,
     if (completedAt != null) 'completedAt': completedAt!.toUtc().toIso8601String(),
     if (usage != null) 'usage': usage!.toJson(),
+    if (contextWindowUsage != null)
+      'contextWindowUsage': contextWindowUsage!.toJson(),
     if (attachments.isNotEmpty)
       'attachments': attachments
           .map((item) => item.toJson(cacheSafe: cacheSafe))
@@ -834,6 +841,51 @@ class EventAttachment {
 }
 
 enum TokenUsageScope { turn, thread, lastCall, unknown }
+
+/// The most recent model context, separate from cumulative token consumption.
+class ContextWindowUsage {
+  const ContextWindowUsage({
+    required this.usedTokens,
+    required this.maxTokens,
+    this.updatedAt,
+  }) : assert(usedTokens >= 0),
+       assert(maxTokens > 0);
+
+  final int usedTokens;
+  final int maxTokens;
+  final DateTime? updatedAt;
+
+  double get fraction => (usedTokens / maxTokens).clamp(0.0, 1.0);
+  int get percent => (fraction * 100).round();
+
+  static ContextWindowUsage? tryParse(Object? value) {
+    if (value is! Map) return null;
+    final used = value['usedTokens'];
+    final limit = value['maxTokens'];
+    if (used is! int || used < 0 || limit is! int || limit <= 0) return null;
+    return ContextWindowUsage(
+      usedTokens: used,
+      maxTokens: limit,
+      updatedAt: DateTime.tryParse(value['updatedAt']?.toString() ?? ''),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'usedTokens': usedTokens,
+    'maxTokens': maxTokens,
+    if (updatedAt != null) 'updatedAt': updatedAt!.toUtc().toIso8601String(),
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      other is ContextWindowUsage &&
+      usedTokens == other.usedTokens &&
+      maxTokens == other.maxTokens &&
+      updatedAt == other.updatedAt;
+
+  @override
+  int get hashCode => Object.hash(usedTokens, maxTokens, updatedAt);
+}
 
 class TokenUsage {
   const TokenUsage({

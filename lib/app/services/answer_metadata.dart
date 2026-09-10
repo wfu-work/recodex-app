@@ -113,13 +113,33 @@ DateTime? answerCompletedAt(List<SessionEvent> events) {
 }
 
 String tokenUsageLabel(TokenUsage? usage) {
-  if (usage == null) return 'Token 未提供';
+  if (usage == null) return '消耗 未提供';
   final prefix = switch (usage.scope) {
-    TokenUsageScope.thread => '会话累计 Token',
-    TokenUsageScope.lastCall => '最近调用 Token',
-    _ => 'Token',
+    TokenUsageScope.thread => '会话累计消耗',
+    TokenUsageScope.lastCall => '最近调用消耗',
+    _ => '消耗',
   };
-  return '$prefix ${formatTokenCount(usage.totalTokens)}';
+  return '$prefix · 总 ${formatCompactTokenCount(usage.totalTokens)}';
+}
+
+/// Use at most two decimals in the transcript; tooltips retain exact counts.
+String formatCompactTokenCount(int value) {
+  if (value.abs() < 1000) return value.toString();
+  const units = ['', 'K', 'M', 'B', 'T'];
+  var scaled = value.abs().toDouble();
+  var unit = 0;
+  while (scaled >= 1000 && unit < units.length - 1) {
+    scaled /= 1000;
+    unit++;
+  }
+  // Rounding a value such as 999,999 should produce 1M, not 1000K.
+  scaled = (scaled * 100).round() / 100;
+  if (scaled >= 1000 && unit < units.length - 1) {
+    scaled /= 1000;
+    unit++;
+  }
+  final number = scaled.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
+  return '${value < 0 ? '-' : ''}$number${units[unit]}';
 }
 
 String formatTokenCount(int value) => value.toString().replaceAllMapped(
