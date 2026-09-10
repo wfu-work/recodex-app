@@ -395,23 +395,6 @@ class _MainPageState extends State<MainPage> {
                                 },
                               ),
                             ),
-                            if (_gitChangeSummary != null)
-                              SliverPadding(
-                                padding: EdgeInsets.fromLTRB(
-                                  answerHorizontalPadding,
-                                  8,
-                                  answerHorizontalPadding,
-                                  0,
-                                ),
-                                sliver: SliverToBoxAdapter(
-                                  child: GitChangeCard(
-                                    summary: _gitChangeSummary!,
-                                    cardRadius: answerCardRadius,
-                                    onUndo: _confirmUndoChanges,
-                                    onFileTap: _openGitDiff,
-                                  ),
-                                ),
-                              ),
                             SliverToBoxAdapter(
                               child: SizedBox(
                                 key: _timelineBottomKey,
@@ -909,11 +892,14 @@ class _MainPageState extends State<MainPage> {
   }
 
   void _openGitDiff(GitFileChange file) {
+    final snapshot = GitSnapshot.fromEvents(controller.events);
     controller.gitStatus(includeDiff: true);
     Get.toNamed(
       Routes.gitDiff,
       arguments: GitDiffPageArgs(
-        snapshot: controller.gitSnapshot.value,
+        snapshot: snapshot.fileDiffs.isNotEmpty
+            ? snapshot
+            : controller.gitSnapshot.value,
         selectedPath: file.path,
       ),
     );

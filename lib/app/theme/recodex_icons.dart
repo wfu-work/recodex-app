@@ -24,6 +24,7 @@ abstract final class RecodexIcons {
   static const IconData code = LucideIcons.code300;
   static const IconData close = LucideIcons.x300;
   static const IconData copy = LucideIcons.copy300;
+  static const IconData wrapText = LucideIcons.wrapText300;
   static const IconData contrast = LucideIcons.contrast300;
   static const IconData cloudDone = LucideIcons.cloudCheck300;
   static const IconData cloudOff = LucideIcons.cloudOff300;

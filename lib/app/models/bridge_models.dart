@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../services/turn_file_changes.dart';
+
 class WorkspaceInfo {
   const WorkspaceInfo({
     required this.name,
@@ -645,11 +647,13 @@ class SessionEvent {
     required this.text,
     this.time,
     this.durationMs,
+    this.completedAt,
     this.usage,
     this.attachments = const [],
     this.itemId,
     this.turnId,
     this.isDelta = false,
+    this.fileDiffs = const {},
   });
 
   final String kind;
@@ -662,6 +666,8 @@ class SessionEvent {
   /// expose an authoritative turn duration even when individual items do not
   /// carry timestamps.
   final int? durationMs;
+  /// Turn completion time, distinct from an item's creation/receipt time.
+  final DateTime? completedAt;
   final TokenUsage? usage;
   final List<EventAttachment> attachments;
 
@@ -674,27 +680,35 @@ class SessionEvent {
   /// replace the accumulated text; deltas append to it.
   final bool isDelta;
 
+  /// File patches belonging to this item/turn, retained in the timeline cache.
+  /// An empty patch means that only the path is known (e.g. a binary file).
+  final Map<String, String> fileDiffs;
+
   SessionEvent copyWith({
     String? kind,
     String? text,
     DateTime? time,
     int? durationMs,
+    DateTime? completedAt,
     TokenUsage? usage,
     List<EventAttachment>? attachments,
     String? itemId,
     String? turnId,
     bool? isDelta,
+    Map<String, String>? fileDiffs,
   }) {
     return SessionEvent(
       kind: kind ?? this.kind,
       text: text ?? this.text,
       time: time ?? this.time,
       durationMs: durationMs ?? this.durationMs,
+      completedAt: completedAt ?? this.completedAt,
       usage: usage ?? this.usage,
       attachments: attachments ?? this.attachments,
       itemId: itemId ?? this.itemId,
       turnId: turnId ?? this.turnId,
       isDelta: isDelta ?? this.isDelta,
+      fileDiffs: fileDiffs ?? this.fileDiffs,
     );
   }
 
@@ -704,6 +718,7 @@ class SessionEvent {
       text: json['text'] as String? ?? json['raw'] as String? ?? '',
       time: DateTime.tryParse(json['time'] as String? ?? ''),
       durationMs: _jsonNullableInt(json['durationMs'] ?? json['duration_ms']),
+      completedAt: DateTime.tryParse(json['completedAt'] as String? ?? ''),
       usage: json['usage'] is Map
           ? TokenUsage.fromJson((json['usage'] as Map).cast<String, dynamic>())
           : null,
@@ -714,6 +729,7 @@ class SessionEvent {
       itemId: json['itemId'] as String? ?? json['item_id'] as String?,
       turnId: json['turnId'] as String? ?? json['turn_id'] as String?,
       isDelta: json['isDelta'] == true || json['is_delta'] == true,
+      fileDiffs: TurnFileChanges.fromJson(json['fileDiffs']),
     );
   }
 
@@ -722,6 +738,7 @@ class SessionEvent {
     'text': text,
     if (time != null) 'time': time!.toUtc().toIso8601String(),
     if (durationMs != null) 'durationMs': durationMs,
+    if (completedAt != null) 'completedAt': completedAt!.toUtc().toIso8601String(),
     if (usage != null) 'usage': usage!.toJson(),
     if (attachments.isNotEmpty)
       'attachments': attachments
@@ -730,6 +747,7 @@ class SessionEvent {
     if (itemId != null && itemId!.trim().isNotEmpty) 'itemId': itemId,
     if (turnId != null && turnId!.trim().isNotEmpty) 'turnId': turnId,
     if (isDelta) 'isDelta': true,
+    if (fileDiffs.isNotEmpty) 'fileDiffs': fileDiffs,
   };
 }
 
@@ -815,22 +833,39 @@ class EventAttachment {
   }
 }
 
+enum TokenUsageScope { turn, thread, lastCall, unknown }
+
 class TokenUsage {
   const TokenUsage({
     required this.inputTokens,
     required this.outputTokens,
     required this.totalTokens,
+    this.scope = TokenUsageScope.unknown,
+    this.hasBreakdown = true,
+    this.cachedInputTokens,
+    this.reasoningOutputTokens,
   });
 
   final int inputTokens;
   final int outputTokens;
   final int totalTokens;
+  final TokenUsageScope scope;
+  final bool hasBreakdown;
+  final int? cachedInputTokens;
+  final int? reasoningOutputTokens;
 
   factory TokenUsage.fromJson(Map<String, dynamic> json) {
     return TokenUsage(
       inputTokens: _jsonInt(json['inputTokens'] ?? json['input_tokens']),
       outputTokens: _jsonInt(json['outputTokens'] ?? json['output_tokens']),
       totalTokens: _jsonInt(json['totalTokens'] ?? json['total_tokens']),
+      scope: TokenUsageScope.values.firstWhere(
+        (value) => value.name == json['scope'],
+        orElse: () => TokenUsageScope.unknown,
+      ),
+      hasBreakdown: json['hasBreakdown'] as bool? ?? true,
+      cachedInputTokens: _jsonNullableInt(json['cachedInputTokens'] ?? json['cached_input_tokens']),
+      reasoningOutputTokens: _jsonNullableInt(json['reasoningOutputTokens'] ?? json['reasoning_output_tokens']),
     );
   }
 
@@ -838,6 +873,10 @@ class TokenUsage {
     'inputTokens': inputTokens,
     'outputTokens': outputTokens,
     'totalTokens': totalTokens,
+    'scope': scope.name,
+    'hasBreakdown': hasBreakdown,
+    if (cachedInputTokens != null) 'cachedInputTokens': cachedInputTokens,
+    if (reasoningOutputTokens != null) 'reasoningOutputTokens': reasoningOutputTokens,
   };
 }
 
@@ -849,6 +888,7 @@ class GitSnapshot {
     required this.numstat,
     required this.diff,
     required this.log,
+    this.fileDiffs = const {},
   });
 
   final String branch;
@@ -857,6 +897,7 @@ class GitSnapshot {
   final String numstat;
   final String diff;
   final String log;
+  final Map<String, String> fileDiffs;
 
   factory GitSnapshot.fromJson(Map<String, dynamic> json) {
     return GitSnapshot(
@@ -866,7 +907,81 @@ class GitSnapshot {
       numstat: json['numstat'] as String? ?? '',
       diff: json['diff'] as String? ?? '',
       log: json['log'] as String? ?? '',
+      fileDiffs: TurnFileChanges.fromJson(json['fileDiffs']),
     );
+  }
+
+  /// Capture patches from the answer that opened review. A turn-wide diff
+  /// supersedes that turn's item patches so edits are not counted twice.
+  factory GitSnapshot.fromEvents(Iterable<SessionEvent> events) {
+    final items = <String, Map<String, Map<String, String>>>{};
+    final turns = <String, Map<String, String>>{};
+    var index = 0;
+    for (final event in events) {
+      final turn = event.turnId ?? '';
+      if (event.itemId?.startsWith('turn-diff:') == true) {
+        turns[turn] = event.fileDiffs;
+      } else if (event.fileDiffs.isNotEmpty) {
+        (items[turn] ??= {})[event.itemId ?? 'item:${index++}'] =
+            event.fileDiffs;
+      }
+    }
+    final files = <String, String>{};
+    for (final turn in {...items.keys, ...turns.keys}) {
+      final patches = turns.containsKey(turn)
+          ? [turns[turn]!]
+          : items[turn]!.values;
+      for (final patch in patches) {
+        for (final entry in patch.entries) {
+          final old = files[entry.key];
+          files[entry.key] = old == null || old.isEmpty
+              ? entry.value
+              : entry.value.isEmpty
+              ? old
+              : '$old\n${entry.value}';
+        }
+      }
+    }
+    return GitSnapshot(
+      branch: '',
+      status: '',
+      stat: '',
+      log: '',
+      numstat: TurnFileChanges.numstat(files),
+      diff: files.values.join('\n'),
+      fileDiffs: Map.unmodifiable(files),
+    );
+  }
+
+  List<String> get _statPaths => numstat
+      .split('\n')
+      .map((line) => line.split('\t'))
+      .where((parts) => parts.length >= 3)
+      .map((parts) => parts.sublist(2).join('\t'))
+      .toList();
+
+  String resolveFilePath(String path) =>
+      TurnFileChanges.resolvePath([...fileDiffs.keys, ..._statPaths], path) ??
+      path;
+
+  String patchForFile(String path) {
+    if (fileDiffs.isNotEmpty) {
+      final key = TurnFileChanges.resolvePath(fileDiffs.keys, path);
+      // A path-only item must not fall back to another file's patch.
+      return key == null ? '' : fileDiffs[key]!;
+    }
+    final legacyFiles = TurnFileChanges.fromUnifiedDiff(diff);
+    if (legacyFiles.isNotEmpty) {
+      final key = TurnFileChanges.resolvePath(legacyFiles.keys, path);
+      return key == null ? '' : legacyFiles[key]!;
+    }
+    // Hunk-only legacy content is attributable only with one known file.
+    if (_statPaths.length == 1 &&
+        TurnFileChanges.resolvePath(_statPaths, path) != null &&
+        diff.contains(RegExp(r'^@@ ', multiLine: true))) {
+      return diff;
+    }
+    return '';
   }
 }
 

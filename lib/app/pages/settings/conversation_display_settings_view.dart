@@ -93,7 +93,7 @@ class ConversationDisplaySettingsPage extends StatelessWidget {
                 const SizedBox(height: 24),
                 const SettingsSectionTitle(
                   title: '回答详情',
-                  subtitle: '选择是否在思考区域显示工具调用和本次任务的统计信息。',
+                  subtitle: '选择是否显示工具调用详情和回答的统计信息。',
                 ),
                 const SizedBox(height: 10),
                 SettingsGroup(
@@ -108,8 +108,8 @@ class ConversationDisplaySettingsPage extends StatelessWidget {
                     const SettingsDivider(),
                     SettingsToggleRow(
                       icon: RecodexIcons.calendar,
-                      title: '显示耗时和 Token 使用量',
-                      subtitle: '在回答状态栏显示运行时长和可用的 Token 统计',
+                      title: '显示回答统计信息',
+                      subtitle: '显示 Token 用量、耗时和完成时间',
                       value: preferences.showUsageMetrics.value,
                       onChanged: preferences.setShowUsageMetrics,
                     ),

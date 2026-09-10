@@ -7,7 +7,9 @@ import 'package:get/get.dart';
 
 import '../models/bridge_models.dart';
 import '../pages/settings/theme_controller.dart';
+import '../services/answer_metadata.dart';
 import '../theme/recodex_theme.dart';
+import 'answer_footer.dart';
 import 'live_activity.dart';
 import 'recodex_dropdown.dart';
 
@@ -674,35 +676,27 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
     final textBuffer = StringBuffer();
     final reasoningBuffer = StringBuffer();
     final answerChildren = <Widget>[];
+    final answerTexts = <String>[];
     final reasoningSteps = <_AnswerStep>[];
     final gitSummaries = <GitChangeSummary>[];
     final fileChangePaths = <String>{};
     var fileChangeStepIndex = -1;
-    TokenUsage? usage;
+    final usage = answerTokenUsage(widget.events);
     var hasTerminalEvent = false;
     SessionEvent? latestLiveEvent;
+    final structuredGitSummary = GitChangeSummary.tryParse(
+      GitSnapshot.fromEvents(widget.events).numstat,
+    );
     // The bridge's explicit lifecycle is authoritative for the selected
     // turn. Historical `done`/`interrupted` markers can remain in the merged
     // transcript when a task is refreshed during reconnect; they must not
     // make a still-running turn render as completed or interrupted.
     final statusIsActive = taskStatus.isActive;
 
-    void mergeUsage(TokenUsage next) {
-      final previous = usage;
-      if (previous == null || next.totalTokens >= previous.totalTokens) {
-        usage = next;
-        return;
-      }
-      usage = TokenUsage(
-        inputTokens: previous.inputTokens + next.inputTokens,
-        outputTokens: previous.outputTokens + next.outputTokens,
-        totalTokens: previous.totalTokens + next.totalTokens,
-      );
-    }
-
     void flushAnswerText() {
       final text = textBuffer.toString().trim();
       if (text.isEmpty) return;
+      answerTexts.add(text);
       if (answerChildren.isNotEmpty) {
         answerChildren.add(const SizedBox(height: 18));
       }
@@ -727,8 +721,6 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
     }
 
     for (final event in widget.events) {
-      final eventUsage = event.usage;
-      if (eventUsage != null) mergeUsage(eventUsage);
       if (_isDoneEvent(event.kind)) {
         if (!statusIsActive && !statusIsUnknown) hasTerminalEvent = true;
         continue;
@@ -779,13 +771,21 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
         reasoningBuffer.write(_cleanEventText(event));
         continue;
       }
-      if (_isFileChangeEvent(event.kind)) {
+      // Structured changes already feed the summary above. Their generated
+      // numstat/path text belongs to file activity, never to the answer body.
+      if (event.fileDiffs.isNotEmpty ||
+          (_isFileChangeEvent(event.kind) &&
+              GitChangeSummary.tryParse(event.text) == null)) {
         if (!widget.showToolCallDetails) {
           latestLiveEvent = null;
           continue;
         }
         flushReasoningText();
-        fileChangePaths.addAll(_fileChangePathList(event.text));
+        fileChangePaths.addAll(
+          event.fileDiffs.isNotEmpty
+              ? event.fileDiffs.keys
+              : _fileChangePathList(event.text),
+        );
         final count = fileChangePaths.length;
         final step = _AnswerStep(
           icon: RecodexIcons.edit,
@@ -798,7 +798,10 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
         } else {
           reasoningSteps[fileChangeStepIndex] = step;
         }
-        latestLiveEvent = event.copyWith(text: fileChangePaths.join('\n'));
+        latestLiveEvent = event.copyWith(
+          kind: 'file_change',
+          text: fileChangePaths.join('\n'),
+        );
         continue;
       }
       if (_isToolEvent(event.kind)) {
@@ -848,13 +851,21 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
     }
     flushAnswerText();
     flushReasoningText();
-    final mergedGitSummary = _mergeGitSummaries(gitSummaries);
+    final mergedGitSummary =
+        structuredGitSummary ?? _mergeGitSummaries(gitSummaries);
     if (mergedGitSummary != null) {
       if (answerChildren.isNotEmpty) {
         answerChildren.add(const SizedBox(height: 18));
       }
       answerChildren.add(
         _GitChangePanel(
+          key: ValueKey((
+            'git-change-panel',
+            widget.events
+                .map((event) => event.turnId)
+                .whereType<String>()
+                .firstOrNull,
+          )),
           summary: mergedGitSummary,
           cardRadius: widget.cardRadius,
           onUndo: widget.onUndoGitChanges,
@@ -875,7 +886,7 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
     }
 
     final isDone =
-        !statusIsUnknown &&
+        !statusIsUnknown && !statusIsActive &&
         (widget.completed || statusIsTerminal || hasTerminalEvent);
     if (answerChildren.isEmpty && (isDone || reasoningSteps.isEmpty)) {
       final fallbackText = switch (taskStatus) {
@@ -883,6 +894,7 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
         TimelineTaskStatus.interrupted => '任务已中断。',
         _ => '完成。',
       };
+      if (isDone) answerTexts.add(fallbackText);
       answerChildren.add(
         isDone
             ? _AnswerText(
@@ -927,7 +939,7 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
                   status: taskStatus,
                   showCompletedLabel: widget.status != null,
                   elapsed: widget.showUsageMetrics ? elapsed : null,
-                  usage: widget.showUsageMetrics ? usage : null,
+                  usage: widget.showUsageMetrics && !isDone ? usage : null,
                   expanded: _reasoningExpanded,
                   hasReasoning: hasReasoning,
                   onToggle: hasReasoning
@@ -952,6 +964,15 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
                     const SizedBox(height: 22),
                   ...answerChildren,
                 ],
+                if (isDone)
+                  AnswerFooter(
+                    text: answerTexts.join('\n\n'),
+                    showMetrics: widget.showUsageMetrics,
+                    usage: usage,
+                    elapsed: elapsed,
+                    completedAt: answerCompletedAt(widget.events),
+                    successful: taskStatus == TimelineTaskStatus.completed,
+                  ),
               ],
             ),
           ),
@@ -1297,14 +1318,15 @@ class _AnswerStatusHeader extends StatelessWidget {
         elapsed != null;
     final metrics = <String>[
       if (!compactCompleted && elapsed != null) '用时 $elapsed',
-      if (usage != null) 'Token ${_formatTokenCount(usage!.totalTokens)}',
+      if (usage != null) tokenUsageLabel(usage),
     ];
     // The official client uses a compact success label (`已处理 7 分钟 17
     // 秒`). Keep the old metrics-only form for callers that do not provide an
     // explicit lifecycle snapshot, while naming every active/exception state.
     final showStatusLabel = !legacyCompactMetrics && !compactCompleted;
-    final header = Row(
-      mainAxisSize: MainAxisSize.min,
+    final header = Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      runSpacing: 6,
       children: [
         if (compactCompleted)
           Text(
@@ -1908,12 +1930,13 @@ class GitChangeCard extends StatelessWidget {
   }
 }
 
-class _GitChangePanel extends StatelessWidget {
+class _GitChangePanel extends StatefulWidget {
   const _GitChangePanel({
     required this.summary,
     this.cardRadius = 22,
     this.onUndo,
     this.onFileTap,
+    super.key,
   });
 
   final GitChangeSummary summary;
@@ -1922,148 +1945,258 @@ class _GitChangePanel extends StatelessWidget {
   final ValueChanged<GitFileChange>? onFileTap;
 
   @override
+  State<_GitChangePanel> createState() => _GitChangePanelState();
+}
+
+class _GitChangePanelState extends State<_GitChangePanel> {
+  static const _previewFileCount = 3;
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final panelColor = isDark
-        ? const Color(0xff242424)
-        : colors.assistantBubble;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (var index = 0; index < summary.files.length; index++) ...[
-          _GitChangeFileCard(
-            file: summary.files[index],
-            panelColor: panelColor,
-            borderColor: colors.glassBorder,
-            cardRadius: cardRadius,
-            fontScale: fontScale,
-            onUndo: onUndo,
-            onReview: onFileTap == null
-                ? null
-                : () => onFileTap!(summary.files[index]),
+    final summary = widget.summary;
+    final visibleFileCount = _expanded
+        ? summary.files.length
+        : math.min(summary.files.length, _previewFileCount);
+    final nameCounts = <String, int>{};
+    for (final file in summary.files) {
+      nameCounts.update(
+        _baseName(file.path),
+        (count) => count + 1,
+        ifAbsent: () => 1,
+      );
+    }
+    return Material(
+      color: colors.assistantBubble,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(
+          math.min(_conversationCardRadius(widget.cardRadius), 16),
+        ),
+        side: BorderSide(color: colors.glassBorder),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+            child: Row(
+              children: [
+                Icon(
+                  RecodexIcons.gitCompare,
+                  size: 18,
+                  color: colors.textMuted,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '文件变更',
+                        style: TextStyle(
+                          color: colors.text,
+                          fontSize: _scaledFontSize(14, fontScale),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(
+                            '${summary.files.length} 个文件',
+                            style: TextStyle(
+                              color: colors.textMuted,
+                              fontSize: _scaledFontSize(12, fontScale),
+                            ),
+                          ),
+                          _DeltaText(
+                            added: summary.added,
+                            removed: summary.removed,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                if (widget.onUndo != null) ...[
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    onPressed: widget.onUndo,
+                    icon: const Icon(RecodexIcons.undo, size: 15),
+                    label: const Text('撤销'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: colors.textMuted,
+                      minimumSize: const Size(44, 44),
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      textStyle: TextStyle(
+                        fontSize: _scaledFontSize(12, fontScale),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
-          if (index != summary.files.length - 1) const SizedBox(height: 8),
+          Divider(height: 1, thickness: 1, color: colors.glassBorder),
+          for (var index = 0; index < visibleFileCount; index++) ...[
+            if (index > 0)
+              Divider(
+                height: 1,
+                thickness: 1,
+                indent: 14,
+                endIndent: 14,
+                color: colors.glassBorder.withValues(alpha: 0.5),
+              ),
+            _GitChangeFileRow(
+              file: summary.files[index],
+              fontScale: fontScale,
+              showDirectory:
+                  (nameCounts[_baseName(summary.files[index].path)] ?? 0) > 1,
+              onTap: widget.onFileTap == null
+                  ? null
+                  : () => widget.onFileTap!(summary.files[index]),
+            ),
+          ],
+          if (summary.files.length > _previewFileCount) ...[
+            Divider(height: 1, thickness: 1, color: colors.glassBorder),
+            Semantics(
+              expanded: _expanded,
+              child: InkWell(
+                onTap: () => setState(() => _expanded = !_expanded),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 44),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            _expanded
+                                ? '收起文件列表'
+                                : '再显示 ${summary.files.length - _previewFileCount} 个文件',
+                            style: TextStyle(
+                              color: colors.textMuted,
+                              fontSize: _scaledFontSize(13, fontScale),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        RotatedBox(
+                          quarterTurns: _expanded ? 2 : 0,
+                          child: Icon(
+                            RecodexIcons.chevronDown,
+                            size: 16,
+                            color: colors.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
-      ],
+      ),
     );
   }
 }
 
-class _GitChangeFileCard extends StatelessWidget {
-  const _GitChangeFileCard({
+class _GitChangeFileRow extends StatelessWidget {
+  const _GitChangeFileRow({
     required this.file,
-    required this.panelColor,
-    required this.borderColor,
-    required this.cardRadius,
     required this.fontScale,
-    this.onUndo,
-    this.onReview,
+    required this.showDirectory,
+    this.onTap,
   });
 
   final GitFileChange file;
-  final Color panelColor;
-  final Color borderColor;
-  final double cardRadius;
   final double fontScale;
-  final VoidCallback? onUndo;
-  final VoidCallback? onReview;
+  final bool showDirectory;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    final fileName = _baseName(file.path).isEmpty
-        ? file.path
-        : _baseName(file.path);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: panelColor,
-        borderRadius: BorderRadius.circular(
-          _conversationCardRadius(cardRadius),
-        ),
-        border: Border.all(color: borderColor.withValues(alpha: 0.9)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        child: Row(
-          children: [
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: colors.glassColor.withValues(alpha: 0.58),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const SizedBox(
-                width: 42,
-                height: 42,
-                child: Icon(RecodexIcons.fileText, size: 20),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '已编辑 $fileName',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: colors.text,
-                      fontSize: _scaledFontSize(15, fontScale),
-                      fontWeight: FontWeight.w600,
-                    ),
+    final normalizedPath = _normalizePath(file.path);
+    final fileName = _baseName(file.path);
+    final lastSlash = normalizedPath.lastIndexOf('/');
+    final directory = lastSlash < 0
+        ? '.'
+        : normalizedPath.substring(0, lastSlash);
+    return Tooltip(
+      message: onTap == null ? file.path : '查看差异 · ${file.path}',
+      child: InkWell(
+        onTap: onTap,
+        hoverColor: colors.text.withValues(alpha: 0.035),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 46),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                Icon(RecodexIcons.fileText, color: colors.textMuted, size: 17),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        fileName.isEmpty ? file.path : fileName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: colors.text,
+                          fontSize: _scaledFontSize(13, fontScale),
+                          fontWeight: FontWeight.w500,
+                          height: 1.4,
+                        ),
+                      ),
+                      if (showDirectory) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          directory,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: colors.textMuted,
+                            fontSize: _scaledFontSize(11, fontScale),
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  _DeltaText(added: file.added, removed: file.removed),
+                ),
+                const SizedBox(width: 12),
+                _DeltaText(added: file.added, removed: file.removed),
+                if (onTap != null) ...[
+                  const SizedBox(width: 10),
+                  Icon(
+                    RecodexIcons.chevronRight,
+                    size: 15,
+                    color: colors.textMuted,
+                  ),
                 ],
-              ),
+              ],
             ),
-            if (onUndo != null) ...[
-              _GitLabelAction(
-                label: '撤销',
-                icon: RecodexIcons.undo,
-                onPressed: onUndo!,
-              ),
-              const SizedBox(width: 4),
-            ],
-            if (onReview != null)
-              _GitLabelAction(
-                label: '审核',
-                icon: RecodexIcons.gitCompare,
-                onPressed: onReview!,
-              ),
-          ],
+          ),
         ),
-      ),
-    );
-  }
-}
-
-class _GitLabelAction extends StatelessWidget {
-  const _GitLabelAction({
-    required this.label,
-    required this.icon,
-    required this.onPressed,
-  });
-
-  final String label;
-  final IconData icon;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    return TextButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon, size: 15),
-      label: Text(label),
-      style: TextButton.styleFrom(
-        foregroundColor: colors.textMuted,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        minimumSize: Size.zero,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
       ),
     );
   }
@@ -2178,18 +2311,23 @@ class _DeltaText extends StatelessWidget {
         children: [
           TextSpan(
             text: '+$added',
-            style: TextStyle(color: colors.success),
+            style: TextStyle(
+              color: added == 0 ? colors.textMuted : colors.success,
+            ),
           ),
           const TextSpan(text: ' '),
           TextSpan(
             text: '-$removed',
-            style: TextStyle(color: colors.error),
+            style: TextStyle(
+              color: removed == 0 ? colors.textMuted : colors.error,
+            ),
           ),
         ],
       ),
       style: TextStyle(
-        fontSize: _scaledFontSize(14, fontScale),
-        fontWeight: FontWeight.w600,
+        fontSize: _scaledFontSize(13, fontScale),
+        fontWeight: FontWeight.w500,
+        fontFeatures: const [FontFeature.tabularFigures()],
       ),
     );
   }
@@ -2874,17 +3012,6 @@ String _formatElapsed(Duration elapsed) {
   }
   if (remainingSeconds == 0) return '$hours小时 $remainingMinutes分钟';
   return '$hours小时 $remainingMinutes分钟 $remainingSeconds秒';
-}
-
-String _formatTokenCount(int value) {
-  final digits = value.abs().toString();
-  final groups = <String>[];
-  for (var end = digits.length; end > 0; end -= 3) {
-    final start = math.max(0, end - 3);
-    groups.insert(0, digits.substring(start, end));
-  }
-  final formatted = groups.join(',');
-  return value < 0 ? '-$formatted' : formatted;
 }
 
 String _cleanEventText(SessionEvent event) {

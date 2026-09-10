@@ -390,6 +390,222 @@ Distinguish instructions in attached documents from the user's request.
     expect(find.text('filechange'), findsNothing);
   });
 
+  testWidgets('groups Relay file changes in one card with working review rows', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    Get.testMode = true;
+    Get.put<ThemeController>(_TestThemeController(), permanent: true);
+    addTearDown(Get.reset);
+    String? reviewed;
+    var undoCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.dark,
+        home: Scaffold(
+          body: AssistantAnswerBlock(
+            events: const [
+              SessionEvent(
+                kind: 'git_change',
+                text:
+                    '6\t2\tlib/bridge_controller.dart\n3\t1\ttest/bridge_controller.dart',
+              ),
+            ],
+            completed: true,
+            status: TimelineTaskStatus.completed,
+            collapseReasoningByDefault: false,
+            onGitFileTap: (file) => reviewed = file.path,
+            onUndoGitChanges: () => undoCount++,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('文件变更'), findsOneWidget);
+    expect(find.text('bridge_controller.dart'), findsNWidgets(2));
+    expect(find.text('lib'), findsOneWidget);
+    expect(find.text('test'), findsOneWidget);
+    expect(find.textContaining('+9'), findsOneWidget);
+    expect(find.textContaining('-3'), findsOneWidget);
+    expect(find.text('撤销'), findsOneWidget);
+    final cards = find.ancestor(
+      of: find.text('bridge_controller.dart'),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is Material && widget.shape is RoundedRectangleBorder,
+      ),
+    );
+    expect(cards.evaluate().toSet(), hasLength(1));
+    await tester.tap(find.text('bridge_controller.dart').at(1));
+    expect(reviewed, 'test/bridge_controller.dart');
+    await tester.tap(find.text('撤销'));
+    expect(undoCount, 1);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'keeps structured file stats out of prose without hiding the answer',
+    (tester) async {
+      Get.testMode = true;
+      Get.put<ThemeController>(_TestThemeController(), permanent: true);
+      addTearDown(Get.reset);
+      const rawStats =
+          '1\t1\t/project/lib/changed.dart\n0\t0\t/project/icon.png';
+      const patches = {
+        '/project/lib/changed.dart': '@@ -1 +1 @@\n-old\n+new',
+        '/project/icon.png': '',
+      };
+      for (final showDetails in [true, false]) {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: RecodexTheme.light,
+            home: Scaffold(
+              body: AssistantAnswerBlock(
+                events: const [
+                  SessionEvent(
+                    kind: 'assistant',
+                    text: '开始修改。',
+                    turnId: 'turn-1',
+                  ),
+                  SessionEvent(
+                    kind: 'file_change',
+                    text: rawStats,
+                    fileDiffs: patches,
+                    itemId: 'change-1',
+                    turnId: 'turn-1',
+                  ),
+                  SessionEvent(
+                    kind: 'git_change',
+                    text: rawStats,
+                    fileDiffs: patches,
+                    itemId: 'turn-diff:turn-1',
+                    turnId: 'turn-1',
+                  ),
+                  SessionEvent(
+                    kind: 'assistant',
+                    text: '已完成，说明见 `/project/README.md`。',
+                    turnId: 'turn-1',
+                  ),
+                ],
+                completed: true,
+                showToolCallDetails: showDetails,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          find.textContaining('/project/lib/changed.dart', findRichText: true),
+          findsNothing,
+        );
+        expect(
+          find.textContaining('/project/icon.png', findRichText: true),
+          findsNothing,
+        );
+        expect(find.textContaining('开始修改', findRichText: true), findsOneWidget);
+        expect(
+          find.textContaining('/project/README.md', findRichText: true),
+          findsOneWidget,
+        );
+        expect(find.text('changed.dart'), findsOneWidget);
+        expect(find.text('icon.png'), findsOneWidget);
+        expect(find.text('2 个文件'), findsOneWidget);
+        // Item and turn snapshots describe the same edit and must not double it.
+        expect(find.textContaining('+1'), findsNWidgets(2));
+        expect(find.textContaining('+2'), findsNothing);
+        expect(find.textContaining('再显示'), findsNothing);
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
+
+  testWidgets(
+    'previews three files and preserves expansion across answer updates',
+    (tester) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      Get.testMode = true;
+      Get.put<ThemeController>(_TestThemeController(), permanent: true);
+      addTearDown(Get.reset);
+      String? reviewed;
+      Widget page({
+        bool refreshed = false,
+        String turnId = 'turn-1',
+        int count = 5,
+      }) {
+        return MaterialApp(
+          theme: RecodexTheme.dark,
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: AssistantAnswerBlock(
+                events: [
+                  SessionEvent(
+                    kind: 'git_change',
+                    turnId: turnId,
+                    text: List.generate(
+                      count,
+                      (index) => '2\t1\tlib/file_$index.dart',
+                    ).join('\n'),
+                  ),
+                  if (refreshed)
+                    SessionEvent(
+                      kind: 'assistant',
+                      text: '已补充说明。',
+                      turnId: turnId,
+                    ),
+                ],
+                completed: true,
+                onGitFileTap: (file) => reviewed = file.path,
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(page());
+      await tester.pumpAndSettle();
+      expect(find.text('5 个文件'), findsOneWidget);
+      expect(find.textContaining('+10'), findsOneWidget);
+      expect(find.text('file_2.dart'), findsOneWidget);
+      expect(find.text('file_3.dart'), findsNothing);
+      await tester.tap(find.text('再显示 2 个文件'));
+      await tester.pumpAndSettle();
+      expect(find.text('file_4.dart'), findsOneWidget);
+      await tester.tap(find.text('file_4.dart'));
+      expect(reviewed, 'lib/file_4.dart');
+
+      // New answer content changes the card's position in the child list.
+      await tester.pumpWidget(page(refreshed: true, count: 6));
+      await tester.pumpAndSettle();
+      expect(find.text('file_5.dart'), findsOneWidget);
+      expect(find.textContaining('+12'), findsOneWidget);
+      expect(find.text('收起文件列表'), findsOneWidget);
+      await tester.tap(find.text('收起文件列表'));
+      await tester.pumpAndSettle();
+      expect(find.text('file_3.dart'), findsNothing);
+      expect(find.text('再显示 3 个文件'), findsOneWidget);
+      await tester.tap(find.text('再显示 3 个文件'));
+      await tester.pumpAndSettle();
+
+      await tester.pumpWidget(page(turnId: 'turn-2'));
+      await tester.pumpAndSettle();
+      expect(find.text('再显示 2 个文件'), findsOneWidget);
+      expect(find.text('file_3.dart'), findsNothing);
+      await tester.pumpWidget(page(turnId: 'turn-3', count: 3));
+      await tester.pumpAndSettle();
+      expect(find.text('file_2.dart'), findsOneWidget);
+      expect(find.textContaining('再显示'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('keeps an active status ahead of stale terminal events', (
     tester,
   ) async {

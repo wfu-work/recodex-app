@@ -8,7 +8,9 @@ import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 
 import '../../models/bridge_models.dart';
+import '../../services/answer_metadata.dart';
 import '../../services/relay_protocol.dart';
+import '../../services/turn_file_changes.dart';
 import '../../services/session_cache.dart';
 import '../../services/task_notification_controller.dart';
 import '../settings/settings_preferences_controller.dart';
@@ -1248,6 +1250,7 @@ class BridgeController extends GetxController {
       gitStatus(includeDiff: true);
     }
 
+    gitSnapshot.value = null;
     selectedSessionId.value = session.id;
     currentSessionId.value = session.id;
     // A selected task may have a different latest turn than the task that was
@@ -1543,9 +1546,10 @@ class BridgeController extends GetxController {
   }
 
   void gitStatus({required bool includeDiff}) {
-    // Git is not part of Codex Relay Protocol v1. It is intentionally not
-    // sent as an unknown product command to the plugin.
-    gitSnapshot.value = null;
+    // Protocol v1 exposes turn patches through thread.read, not a workspace
+    // git-status command. Reconcile the selected timeline without clearing it.
+    final threadId = selectedSessionId.value;
+    if (threadId != null) _requestTimelineRead(threadId, force: true);
   }
 
   void gitCommit(String message, {required bool confirm}) {
@@ -3993,6 +3997,7 @@ class BridgeController extends GetxController {
             text: promptEvent.text,
             time: event.time ?? turnStartedAt ?? promptEvent.time,
             usage: event.usage ?? promptEvent.usage,
+            turnId: snapshotTurnId,
             attachments: _mergeEventAttachments(
               promptEvent.attachments,
               event.attachments,
@@ -4011,31 +4016,38 @@ class BridgeController extends GetxController {
       );
       loaded.addAll(timedTurnEvents);
 
-      // A newly-created or user-only turn may have no answer item to carry
-      // its timing metadata. Keep an invisible terminal marker so the
-      // completed answer header can still show the measured duration.
-      final hasAnswerEvent = timedTurnEvents.any(
-        (event) => event.kind != 'user',
-      );
+      // Preserve per-turn metadata even when history has no token usage on
+      // individual items. The identity matches live terminal notifications.
+      final turnUsage = readTokenUsage(turnMap, scope: TokenUsageScope.turn);
       final hasExplicitTerminal =
           turnStatus.isTerminal ||
           (turnStatus == TimelineTaskStatus.unknown &&
               (turnDurationMs != null || turnCompletedAt != null));
-      if (!hasAnswerEvent &&
-          hasExplicitTerminal &&
-          (turnDurationMs != null ||
-              turnStartedAt != null ||
-              turnCompletedAt != null)) {
+      if (hasExplicitTerminal) {
         final resolvedDuration =
             turnDurationMs ?? _durationBetween(turnStartedAt, turnCompletedAt);
+        final resolvedEnd = turnCompletedAt ??
+            (turnStartedAt != null && resolvedDuration != null
+                ? turnStartedAt.add(Duration(milliseconds: resolvedDuration))
+                : null);
         loaded.add(
           SessionEvent(
             kind: 'done',
             text: '',
-            time: turnCompletedAt ?? turnStartedAt,
+            time: resolvedEnd,
+            completedAt: resolvedEnd,
             durationMs: resolvedDuration,
+            usage: turnUsage,
+            turnId: snapshotTurnId,
+            itemId: snapshotTurnId == null ? null : 'turn-end:$snapshotTurnId',
           ),
         );
+      } else if (turnUsage != null && snapshotTurnId != null) {
+        loaded.add(SessionEvent(
+          kind: 'token_usage', text: '', usage: turnUsage,
+          turnId: snapshotTurnId,
+          itemId: 'turn-usage:$snapshotTurnId:${turnUsage.scope.name}',
+        ));
       }
     }
     if (snapshotStatus.isActive &&
@@ -4052,6 +4064,8 @@ class BridgeController extends GetxController {
         ),
       );
     }
+    _refreshGitSnapshotFromEvents(loaded);
+
     // An empty thread is a valid response (for example, a newly-created
     // task that has not produced output yet). It must still end the loading
     // state so the user gets an actionable empty state instead of a spinner
@@ -4066,6 +4080,7 @@ class BridgeController extends GetxController {
       events.assignAll(_boundedInMemoryEvents(merged));
       _bumpTimelineRevision();
     }
+    _refreshGitSnapshotFromEvents(events);
     _rememberTimelineMemory(_timelineCacheKey(requestedSessionId), events);
     _queueTimelineCacheReplace(requestedSessionId);
   }
@@ -4145,8 +4160,13 @@ class BridgeController extends GetxController {
         type == 'file_change' ||
         type == 'filechanged' ||
         type == 'file_changed';
-    if (isFileChange && text.isEmpty) {
-      text = _extractFileChangePaths(item).join('\n');
+    final fileDiffs = isFileChange
+        ? TurnFileChanges.fromItem(item)
+        : const <String, String>{};
+    if (isFileChange) {
+      text = fileDiffs.isNotEmpty
+          ? TurnFileChanges.numstat(fileDiffs)
+          : _extractFileChangePaths(item).join('\n');
     }
     if (text.isEmpty && type.isEmpty && attachments.isEmpty && usage == null) {
       return null;
@@ -4199,6 +4219,7 @@ class BridgeController extends GetxController {
       attachments: attachments,
       itemId: _eventItemId(item),
       turnId: turnId,
+      fileDiffs: fileDiffs,
     );
   }
 
@@ -4340,7 +4361,9 @@ class BridgeController extends GetxController {
         _turnIdFromTurn(nestedTurn ?? const <String, dynamic>{}) ??
         _readString(_asMap(data['item'])?['turnId']) ??
         _readString(_asMap(data['item'])?['turn_id']);
-    final eventUsage = _extractTokenUsage(data);
+    final eventUsage = (nestedTurn == null ? null :
+        readTokenUsage(nestedTurn, scope: TokenUsageScope.turn)) ??
+        _extractTokenUsage(data);
     final explicitThreadId =
         _readString(message['threadId']) ??
         _readString(message['thread_id']) ??
@@ -4567,21 +4590,56 @@ class BridgeController extends GetxController {
           ),
         );
       case 'usage.updated':
-        if (eventUsage != null) {
+        final usageTurnId = eventTurnId ?? _currentTurnId;
+        if (eventUsage != null && usageTurnId != null) {
           _appendSessionEvent(
-            SessionEvent(kind: 'token_usage', text: '', usage: eventUsage),
+            SessionEvent(
+              kind: 'token_usage', text: '', usage: eventUsage,
+              turnId: usageTurnId,
+              itemId: 'turn-usage:$usageTurnId:${eventUsage.scope.name}',
+            ),
           );
         }
       case 'diff.updated':
-        _appendSessionEvent(
-          SessionEvent(
-            kind: 'git_change',
-            text: _extractText(data),
-            itemId: _eventItemId(data) ?? _eventItemId(event),
-            turnId: eventTurnId,
-            isDelta: true,
-          ),
-        );
+        final diff = _readString(data['diff']);
+        final diffTurnId = eventTurnId ?? _currentTurnId;
+        if (diff != null && diffTurnId != null) {
+          final fileDiffs = TurnFileChanges.fromUnifiedDiff(diff);
+          final numstat = TurnFileChanges.numstat(fileDiffs);
+          gitSnapshot.value = GitSnapshot(
+            branch: '',
+            status: '',
+            stat: '',
+            numstat: numstat,
+            diff: diff,
+            log: '',
+            fileDiffs: fileDiffs,
+          );
+          _appendSessionEvent(
+            SessionEvent(
+              kind: 'git_change',
+              text: numstat.isEmpty ? diff : numstat,
+              fileDiffs: fileDiffs,
+              itemId: 'turn-diff:$diffTurnId',
+              turnId: diffTurnId,
+            ),
+          );
+        } else {
+          final item = _asMap(data['item']) ?? data;
+          final fileDiffs = TurnFileChanges.fromItem(item);
+          if (fileDiffs.isNotEmpty) {
+            _appendSessionEvent(
+              SessionEvent(
+                kind: 'file_change',
+                text: TurnFileChanges.numstat(fileDiffs),
+                fileDiffs: fileDiffs,
+                itemId: _eventItemId(data) ?? _eventItemId(event),
+                turnId: eventTurnId,
+                isDelta: true,
+              ),
+            );
+          }
+        }
       case 'item.started':
       case 'item.updated':
       case 'item.completed':
@@ -4589,7 +4647,10 @@ class BridgeController extends GetxController {
           _asMap(data['item']) ?? data,
           turnId: eventTurnId,
         );
-        if (snapshot != null) _appendSessionEvent(snapshot);
+        if (snapshot != null) {
+          _appendSessionEvent(snapshot);
+          _refreshGitSnapshotFromEvents(events);
+        }
       case 'turn.completed':
         // Codex reports every terminal outcome through `turn/completed`; the
         // nested turn status distinguishes a normal completion from a
@@ -4614,6 +4675,8 @@ class BridgeController extends GetxController {
         final completedDurationMs =
             _turnDurationMs(turnData) ??
             _durationBetween(completedTurnStartedAt, completedTurnAt);
+        final completedTurnId = eventTurnId ?? _currentTurnId;
+        final terminalItemId = completedTurnId == null ? null : 'turn-end:$completedTurnId';
         if (completionStatus == TimelineTaskStatus.failed) {
           final message = text.isEmpty ? 'Codex 任务失败' : text;
           _appendSessionEvent(
@@ -4621,6 +4684,9 @@ class BridgeController extends GetxController {
               kind: 'error',
               text: message,
               time: completedTurnAt,
+              completedAt: completedTurnAt,
+              turnId: completedTurnId,
+              itemId: terminalItemId,
               durationMs: completedDurationMs,
               usage: eventUsage,
             ),
@@ -4636,6 +4702,9 @@ class BridgeController extends GetxController {
               kind: 'interrupted',
               text: text.isEmpty ? '已被用户中断。' : text,
               time: completedTurnAt,
+              completedAt: completedTurnAt,
+              turnId: completedTurnId,
+              itemId: terminalItemId,
               durationMs: completedDurationMs,
               usage: eventUsage,
             ),
@@ -4650,6 +4719,9 @@ class BridgeController extends GetxController {
               kind: 'done',
               text: text.isEmpty ? 'Codex 任务已完成' : text,
               time: completedTurnAt,
+              completedAt: completedTurnAt,
+              turnId: completedTurnId,
+              itemId: terminalItemId,
               durationMs: completedDurationMs,
               usage: eventUsage,
             ),
@@ -5073,7 +5145,9 @@ class BridgeController extends GetxController {
     }
     if (resolvedEnd != null) {
       final lastIndex = timed.length - 1;
-      timed[lastIndex] = timed[lastIndex].copyWith(time: resolvedEnd);
+      timed[lastIndex] = timed[lastIndex].copyWith(
+        time: resolvedEnd, completedAt: resolvedEnd,
+      );
     }
     if (resolvedDuration != null) {
       final lastIndex = timed.length - 1;
@@ -5126,50 +5200,7 @@ class BridgeController extends GetxController {
   }
 
   TokenUsage? _extractTokenUsage(Map<String, dynamic> map) {
-    final nestedTokenUsage =
-        _asMap(map['tokenUsage']) ?? _asMap(map['token_usage']);
-    final candidates = <Object?>[
-      map['usage'],
-      map['tokenUsage'],
-      map['token_usage'],
-      nestedTokenUsage?['total'],
-      nestedTokenUsage?['last'],
-      map['tokens'],
-      map,
-    ];
-    for (final candidate in candidates) {
-      final usage = _tokenUsageFromValue(candidate);
-      if (usage != null) return usage;
-    }
-    return null;
-  }
-
-  TokenUsage? _tokenUsageFromValue(Object? value) {
-    final map = _asMap(value);
-    if (map == null) return null;
-    final input = _readIntValue(
-      map['inputTokens'] ??
-          map['input_tokens'] ??
-          map['promptTokens'] ??
-          map['prompt_tokens'],
-    );
-    final output = _readIntValue(
-      map['outputTokens'] ??
-          map['output_tokens'] ??
-          map['completionTokens'] ??
-          map['completion_tokens'],
-    );
-    final total = _readIntValue(
-      map['totalTokens'] ?? map['total_tokens'] ?? map['total'],
-    );
-    if (input == null && output == null && total == null) return null;
-    final resolvedInput = input ?? 0;
-    final resolvedOutput = output ?? 0;
-    return TokenUsage(
-      inputTokens: resolvedInput,
-      outputTokens: resolvedOutput,
-      totalTokens: total ?? resolvedInput + resolvedOutput,
-    );
+    return readTokenUsage(map);
   }
 
   int? _readIntValue(Object? value) {
@@ -5751,22 +5782,29 @@ class BridgeController extends GetxController {
     }).toList();
   }
 
+  void _refreshGitSnapshotFromEvents(Iterable<SessionEvent> source) {
+    final fileDiffs = <String, String>{};
+    for (final event in source) {
+      fileDiffs.addAll(event.fileDiffs);
+    }
+    if (fileDiffs.isEmpty) return;
+    gitSnapshot.value = GitSnapshot(
+      branch: '',
+      status: '',
+      stat: '',
+      numstat: TurnFileChanges.numstat(fileDiffs),
+      diff: fileDiffs.values.where((value) => value.isNotEmpty).join('\n'),
+      log: '',
+      fileDiffs: fileDiffs,
+    );
+  }
+
   void _appendSessionEvent(SessionEvent event) {
     // Relay frames do not always include a timestamp. Stamp live events at
     // the controller boundary so the answer header can show the elapsed
     // duration just like the desktop client.
     if (event.time == null) {
-      event = SessionEvent(
-        kind: event.kind,
-        text: event.text,
-        time: DateTime.now(),
-        durationMs: event.durationMs,
-        usage: event.usage,
-        attachments: event.attachments,
-        itemId: event.itemId,
-        turnId: event.turnId,
-        isDelta: event.isDelta,
-      );
+      event = event.copyWith(time: DateTime.now());
     }
     // A single tool/output item can be much larger than the timeline window.
     // Cap the retained Dart string while the complete payload remains in the
@@ -5783,7 +5821,9 @@ class BridgeController extends GetxController {
         event.usage == null &&
         event.kind != 'running' &&
         event.kind != 'done' &&
-        event.kind != 'interrupted') {
+        event.kind != 'interrupted' &&
+        event.kind != 'git_change' &&
+        event.fileDiffs.isEmpty) {
       return;
     }
     // Live stream events are valid content as well. If they arrive before a
@@ -5839,7 +5879,18 @@ class BridgeController extends GetxController {
         return;
       }
     }
-    events.add(event);
+    if (_isAnswerMetadata(event) && event.turnId != null) {
+      final hasTurn = events.any((item) => item.turnId == event.turnId);
+      if (hasTurn) {
+        insertAnswerMetadata(events, event);
+      } else if (event.turnId == _currentTurnId) {
+        events.add(event);
+      } else {
+        return;
+      }
+    } else {
+      events.add(event);
+    }
     _trimVisibleTimeline();
     _bumpTimelineRevision();
     _queueTimelineCacheWrite(selectedSessionId.value ?? currentSessionId.value);
@@ -5921,6 +5972,17 @@ class BridgeController extends GetxController {
     if (events.isEmpty) return loadedEvents;
     final merged = List<SessionEvent>.of(loadedEvents);
     for (final event in events) {
+      if (_isAnswerMetadata(event)) {
+        final index = _eventIdentityIndex(merged, event);
+        if (index >= 0) {
+          // Prefer authoritative history, retaining locally observed fields
+          // only when that history omits them.
+          merged[index] = _mergeSnapshotEvent(event, merged[index]);
+        } else {
+          insertAnswerMetadata(merged, event);
+        }
+        continue;
+      }
       if (!_isLiveStatusEvent(event)) {
         continue;
       }
@@ -5974,6 +6036,7 @@ class BridgeController extends GetxController {
       text: nextText,
       time: existing.time ?? delta.time,
       durationMs: delta.durationMs ?? existing.durationMs,
+      completedAt: delta.completedAt ?? existing.completedAt,
       usage: delta.usage ?? existing.usage,
       attachments: _mergeEventAttachments(
         existing.attachments,
@@ -5989,11 +6052,13 @@ class BridgeController extends GetxController {
     SessionEvent existing,
     SessionEvent snapshot,
   ) {
+    if (snapshot.kind == 'git_change') return snapshot;
     final nextText = _preferSnapshotText(existing.text, snapshot.text);
     return existing.copyWith(
       text: nextText,
       time: existing.time ?? snapshot.time,
       durationMs: snapshot.durationMs ?? existing.durationMs,
+      completedAt: snapshot.completedAt ?? existing.completedAt,
       usage: snapshot.usage ?? existing.usage,
       attachments: _mergeEventAttachments(
         existing.attachments,
@@ -6002,6 +6067,9 @@ class BridgeController extends GetxController {
       itemId: existing.itemId ?? snapshot.itemId,
       turnId: existing.turnId ?? snapshot.turnId,
       isDelta: existing.isDelta || snapshot.isDelta,
+      fileDiffs: snapshot.fileDiffs.isNotEmpty
+          ? snapshot.fileDiffs
+          : existing.fileDiffs,
     );
   }
 
@@ -6036,9 +6104,11 @@ class BridgeController extends GetxController {
         a.text != b.text ||
         a.time?.toUtc() != b.time?.toUtc() ||
         a.durationMs != b.durationMs ||
+        a.completedAt?.toUtc() != b.completedAt?.toUtc() ||
         a.itemId != b.itemId ||
         a.turnId != b.turnId ||
         a.isDelta != b.isDelta ||
+        jsonEncode(a.fileDiffs) != jsonEncode(b.fileDiffs) ||
         !_sameTokenUsage(a.usage, b.usage) ||
         a.attachments.length != b.attachments.length) {
       return false;
@@ -6063,8 +6133,15 @@ class BridgeController extends GetxController {
     if (left == null || right == null) return false;
     return left.inputTokens == right.inputTokens &&
         left.outputTokens == right.outputTokens &&
-        left.totalTokens == right.totalTokens;
+        left.totalTokens == right.totalTokens && left.scope == right.scope &&
+        left.hasBreakdown == right.hasBreakdown &&
+        left.cachedInputTokens == right.cachedInputTokens &&
+        left.reasoningOutputTokens == right.reasoningOutputTokens;
   }
+
+  bool _isAnswerMetadata(SessionEvent event) =>
+      event.kind == 'token_usage' || event.kind == 'done' ||
+      event.completedAt != null && event.itemId?.startsWith('turn-end:') == true;
 
   bool _isLiveStatusEvent(SessionEvent event) {
     return event.kind == 'running' ||

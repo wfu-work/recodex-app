@@ -1,0 +1,195 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:get/get.dart';
+
+import '../models/bridge_models.dart';
+import '../pages/settings/theme_controller.dart';
+import '../services/answer_metadata.dart';
+import '../theme/recodex_theme.dart';
+
+class AnswerFooter extends StatefulWidget {
+  const AnswerFooter({
+    required this.text,
+    required this.showMetrics,
+    this.usage,
+    this.elapsed,
+    this.completedAt,
+    this.successful = true,
+    super.key,
+  });
+
+  final String text;
+  final bool showMetrics;
+  final TokenUsage? usage;
+  final String? elapsed;
+  final DateTime? completedAt;
+  final bool successful;
+
+  @override
+  State<AnswerFooter> createState() => _AnswerFooterState();
+}
+
+class _AnswerFooterState extends State<AnswerFooter> {
+  Timer? _resetTimer;
+  bool _copied = false;
+  bool _copying = false;
+
+  @override
+  void didUpdateWidget(covariant AnswerFooter oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text) {
+      _resetTimer?.cancel();
+      _copied = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _resetTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _copy() async {
+    if (_copying) return;
+    _copying = true;
+    final text = widget.text;
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+      if (!mounted || widget.text != text) return;
+      _resetTimer?.cancel();
+      setState(() => _copied = true);
+      _resetTimer = Timer(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _copied = false);
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(const SnackBar(content: Text('复制失败，请重试')));
+    } finally {
+      _copying = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final scale = Get.find<ThemeController>().fontScale.value;
+    final style = TextStyle(
+      fontSize: 12 * scale,
+      height: 1.5,
+      leadingDistribution: TextLeadingDistribution.even,
+      color: colors.textMuted,
+      fontWeight: FontWeight.w400,
+    );
+    // Share a line height with the copy control, including scaled text. Keep
+    // it aligned with the first line when the metrics wrap onto more rows.
+    final lineHeight = math.max(
+      40.0,
+      MediaQuery.textScalerOf(context).scale(style.fontSize!) * style.height! +
+          12,
+    );
+    final usage = widget.usage;
+    final usageScope = switch (usage?.scope) {
+      TokenUsageScope.turn => '本轮回答用量',
+      TokenUsageScope.thread => '截至本次记录的会话累计用量，非本轮用量',
+      TokenUsageScope.lastCall => '最近一次模型调用用量，非本轮总用量',
+      _ => '主机报告的用量，未注明统计范围',
+    };
+    final tokenDetail = usage == null
+        ? '此回答的记录未提供 Token 用量'
+        : [
+            usageScope,
+            if (usage.hasBreakdown)
+              '输入 ${formatTokenCount(usage.inputTokens)} · 输出 ${formatTokenCount(usage.outputTokens)}'
+            else
+              '输入 / 输出明细未提供',
+            if (usage.cachedInputTokens != null)
+              '输入中含缓存 ${formatTokenCount(usage.cachedInputTokens!)}',
+            if (usage.reasoningOutputTokens != null)
+              '输出中含推理 ${formatTokenCount(usage.reasoningOutputTokens!)}',
+            '总计 ${formatTokenCount(usage.totalTokens)} Token',
+          ].join('\n');
+    final endedLabel = widget.successful ? '完成' : '结束';
+    final completedAt = widget.completedAt?.toLocal();
+
+    Widget metric(String text, {String? tooltip}) {
+      final label = ConstrainedBox(
+        constraints: BoxConstraints(minHeight: lineHeight),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            widthFactor: 1,
+            heightFactor: 1,
+            child: Text(text, style: style),
+          ),
+        ),
+      );
+      return tooltip == null
+          ? label
+          : Tooltip(
+              message: tooltip,
+              triggerMode: TooltipTriggerMode.tap,
+              child: label,
+            );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 40,
+            height: lineHeight,
+            child: IconButton(
+              key: const ValueKey('copy-answer'),
+              tooltip: _copied ? '已复制' : '复制回答',
+              onPressed: widget.text.isEmpty ? null : _copy,
+              icon: Icon(
+                _copied ? RecodexIcons.check : RecodexIcons.copy,
+                size: 16,
+              ),
+              color: colors.textMuted,
+              padding: EdgeInsets.zero,
+              style: IconButton.styleFrom(
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+          ),
+          if (widget.showMetrics) ...[
+            const SizedBox(width: 4),
+            Expanded(
+              child: Wrap(
+                spacing: 16,
+                runSpacing: 0,
+                children: [
+                  metric(tokenUsageLabel(usage), tooltip: tokenDetail),
+                  metric('耗时 ${widget.elapsed ?? '未记录'}'),
+                  metric(
+                    completedAt == null
+                        ? '$endedLabel时间未记录'
+                        : '$endedLabel ${_formatDateTime(completedAt)}',
+                    tooltip: completedAt == null
+                        ? null
+                        : '本地时间 · ${completedAt.timeZoneName}',
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+String _formatDateTime(DateTime time) {
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${time.year}/${two(time.month)}/${two(time.day)} '
+      '${two(time.hour)}:${two(time.minute)}:${two(time.second)}';
+}

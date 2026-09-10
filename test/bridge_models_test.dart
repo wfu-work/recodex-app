@@ -1,8 +1,47 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:recodex/app/models/bridge_models.dart';
+import 'package:recodex/app/services/turn_file_changes.dart';
 
 void main() {
+  test('normalizes FileChange patches into desktop-style numstat', () {
+    final files = TurnFileChanges.fromItem({
+      'type': 'fileChange',
+      'changes': {
+        'lib/example.dart': {
+          'unified_diff':
+              'diff --git a/lib/example.dart b/lib/example.dart\n'
+              '@@ -1,2 +1,3 @@\n'
+              ' keep\n-old\n+new\n+added\n',
+        },
+      },
+    });
+
+    expect(files.keys, contains('lib/example.dart'));
+    expect(TurnFileChanges.numstat(files), '2\t1\tlib/example.dart');
+  });
+
+  test('GitSnapshot resolves an absolute file and returns its patch', () {
+    const patch =
+        'diff --git a/libs/monitor.go b/libs/monitor.go\n'
+        '@@ -1,1 +1,1 @@\n-old\n+new';
+    const snapshot = GitSnapshot(
+      branch: '',
+      status: '',
+      stat: '',
+      numstat: '1\t1\t/Users/wfu/project/libs/monitor.go',
+      diff: patch,
+      log: '',
+      fileDiffs: {'/Users/wfu/project/libs/monitor.go': patch},
+    );
+
+    expect(
+      snapshot.resolveFilePath('monitor.go'),
+      '/Users/wfu/project/libs/monitor.go',
+    );
+    expect(snapshot.patchForFile('monitor.go'), contains('+new'));
+  });
+
   test('PairingProfile round-trips all connection credentials', () {
     const profile = PairingProfile(
       id: 'pairing-one',
