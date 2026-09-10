@@ -20,6 +20,7 @@ import 'bridge_controller.dart';
 import 'git_diff_view.dart';
 import 'widget/home_header.dart';
 import 'widget/inline_error.dart';
+import 'widget/pending_interaction_card.dart';
 import 'widget/main_helpers.dart';
 import 'widget/task_output_dialog.dart';
 import 'widget/scroll_to_latest_button.dart';
@@ -52,6 +53,21 @@ class _MainPageState extends State<MainPage> {
   final List<GlobalKey> _timelineEntryKeys = <GlobalKey>[];
   double _headerBackgroundProgress = 0;
   bool _composerVisible = true;
+  final _drafts = <String, String>{};
+  late Worker _draftTaskWorker;
+  late Worker _draftHostWorker;
+  String _draftKey = '';
+  bool _sendingSupplement = false;
+
+  String get _currentDraftKey => '${controller.activePairingId.value}:${controller.selectedSessionId.value ?? 'new'}';
+
+  void _switchDraft() {
+    final next = _currentDraftKey;
+    if (next == _draftKey) return;
+    _drafts[_draftKey] = _promptController.text;
+    _draftKey = next;
+    _promptController.text = _drafts[next] ?? '';
+  }
   bool _drawerOpen = false;
   bool _showScrollToLatest = false;
   bool _userDetachedFromLatest = false;
@@ -67,6 +83,9 @@ class _MainPageState extends State<MainPage> {
     super.initState();
     _scrollController.addListener(_updateHeaderBackground);
     _scrollController.addListener(_updateScrollToLatestVisibility);
+    _draftKey = _currentDraftKey;
+    _draftTaskWorker = ever(controller.selectedSessionId, (_) => _switchDraft());
+    _draftHostWorker = ever(controller.activePairingId, (_) => _switchDraft());
     controller.startLiveTimelineRefresh();
   }
 
@@ -77,6 +96,8 @@ class _MainPageState extends State<MainPage> {
       ..removeListener(_updateScrollToLatestVisibility)
       ..dispose();
     controller.stopLiveTimelineRefresh();
+    _draftTaskWorker.dispose();
+    _draftHostWorker.dispose();
     _promptController.dispose();
     _composerFocusNode.dispose();
     super.dispose();
@@ -400,6 +421,25 @@ class _MainPageState extends State<MainPage> {
                                 },
                               ),
                             ),
+                            SliverPadding(
+                              padding: EdgeInsets.symmetric(horizontal: answerHorizontalPadding),
+                              sliver: SliverToBoxAdapter(child: Column(children: [
+                                if (controller.interactionNotice.value.isNotEmpty)
+                                  Padding(padding: const EdgeInsets.all(12), child: Text(controller.interactionNotice.value)),
+                                if (controller.selectedInteractions.isEmpty &&
+                                    (controller.timelineStatus.value == TimelineTaskStatus.waitingApproval ||
+                                     controller.timelineStatus.value == TimelineTaskStatus.waitingUserInput))
+                                  const Padding(padding: EdgeInsets.all(12),
+                                    child: Text('Codex 正在等待处理，请在桌面端完成或刷新任务。')),
+                                for (final item in controller.selectedInteractions)
+                                  PendingInteractionCard(
+                                    key: ValueKey(item.id), item: item,
+                                    enabled: controller.connected.value && controller.backendReady.value,
+                                    submitted: controller.submittedInteractions.contains(item.id),
+                                    onRespond: (response) => controller.respondToInteraction(item, response),
+                                  ),
+                              ])),
+                            ),
                             SliverToBoxAdapter(
                               child: SizedBox(
                                 key: _timelineBottomKey,
@@ -521,6 +561,7 @@ class _MainPageState extends State<MainPage> {
                                     controller.contextWindowUsage,
                                 permissionMode: controller.permissionMode.value,
                                 onSend: _sendPrompt,
+                                onSteer: _sendingSupplement ? null : _sendSupplement,
                                 // Derive the composer state from the same
                                 // canonical lifecycle used by the answer
                                 // header.  The legacy boolean can otherwise
@@ -821,6 +862,20 @@ class _MainPageState extends State<MainPage> {
         ? Get.find<SettingsPreferencesController>()
         : null;
     return preferences?.reduceAnimations.value ?? false;
+  }
+
+  Future<void> _sendSupplement() async {
+    final draft = _promptController.text;
+    final key = _draftKey;
+    if (draft.trim().isEmpty || _sendingSupplement) return;
+    setState(() => _sendingSupplement = true);
+    final accepted = await controller.steerCurrentTurn(draft.trim());
+    if (!mounted) return;
+    setState(() => _sendingSupplement = false);
+    if (accepted) {
+      if (_draftKey == key && _promptController.text == draft) _promptController.clear();
+      if (_drafts[key] == draft) _drafts.remove(key);
+    }
   }
 
   void _sendPrompt() {

@@ -8,6 +8,8 @@ import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 
 import '../../models/bridge_models.dart';
+import '../../models/pending_interaction.dart';
+import '../../services/event_recovery.dart';
 import '../../services/answer_metadata.dart';
 import '../../services/context_window_usage.dart';
 import '../../services/relay_protocol.dart';
@@ -66,6 +68,14 @@ class BridgeController extends GetxController {
   final relaySessionId = ''.obs;
   final connectionLabel = 'offline'.obs;
   final lastError = ''.obs;
+  final pendingInteractions = <String, PendingInteraction>{}.obs;
+  final submittedInteractions = <String>{}.obs;
+  final interactionNotice = ''.obs;
+  final backendReady = true.obs;
+  int _interactionRevision = 0;
+  final _eventRecovery = EventRecovery();
+  List<PendingInteraction> get selectedInteractions => pendingInteractions.values
+      .where((item) => item.threadId == selectedSessionId.value).toList();
   final connected = false.obs;
   final busy = false.obs;
 
@@ -418,6 +428,11 @@ class BridgeController extends GetxController {
   }
 
   void _resetHostState() {
+    _eventRecovery.reset();
+    pendingInteractions.clear();
+    submittedInteractions.clear();
+    interactionNotice.value = '';
+    backendReady.value = true;
     _finishTimelineRefresh();
     _clearTimelineLoadState();
     lastError.value = '';
@@ -1204,6 +1219,7 @@ class BridgeController extends GetxController {
   }
 
   void selectWorkspace(WorkspaceInfo? workspace) {
+    if (backendReady.value) interactionNotice.value = '';
     _clearTimelineLoadState();
     selectedWorkspace.value = workspace;
     unawaited(_storeSelectedWorkspace(workspace));
@@ -1234,6 +1250,7 @@ class BridgeController extends GetxController {
   /// explicit read below hydrates the main conversation for the selected
   /// thread.
   void selectSession(SessionRecord session) {
+    if (backendReady.value) interactionNotice.value = '';
     if (session.id.trim().isEmpty) return;
 
     final previousSessionId = selectedSessionId.value?.trim();
@@ -1351,6 +1368,7 @@ class BridgeController extends GetxController {
   /// The last persisted task is intentionally kept in [_storedSessionId];
   /// that value is used to restore the previous task after a Relay reconnect.
   void startNewConversation() {
+    if (backendReady.value) interactionNotice.value = '';
     _rememberVisibleTimeline();
     _clearTimelineLoadState();
     currentSessionId.value = null;
@@ -1530,7 +1548,10 @@ class BridgeController extends GetxController {
       _interruptRequested = true;
       return;
     }
-    _sendCommand('turn.interrupt', {}, threadId: sessionId, turnId: turnId);
+    if (_pendingCommands.values.any((p) => p.kind == 'turn.interrupt' && p.threadId == sessionId && p.turnId == turnId)) return;
+    if (_sendCommand('turn.interrupt', {}, threadId: sessionId, turnId: turnId)) {
+      interactionNotice.value = '正在请求停止当前轮次…';
+    }
   }
 
   void _sendRequestedInterrupt() {
@@ -1544,7 +1565,10 @@ class BridgeController extends GetxController {
       return;
     }
     _interruptRequested = false;
-    _sendCommand('turn.interrupt', {}, threadId: sessionId, turnId: turnId);
+    if (_pendingCommands.values.any((p) => p.kind == 'turn.interrupt' && p.threadId == sessionId && p.turnId == turnId)) return;
+    if (_sendCommand('turn.interrupt', {}, threadId: sessionId, turnId: turnId)) {
+      interactionNotice.value = '正在请求停止当前轮次…';
+    }
   }
 
   void gitStatus({required bool includeDiff}) {
@@ -1613,9 +1637,7 @@ class BridgeController extends GetxController {
       return;
     }
     if (recoverEvents) {
-      _sendCommand('sync.request', {
-        if (_lastIncomingSequence > 0) 'lastSequence': _lastIncomingSequence,
-      });
+      _requestEventRecovery();
     }
     final sent = _sendCommand(
       'thread.list',
@@ -2143,47 +2165,20 @@ class BridgeController extends GetxController {
       if (type != 'stream.message') return;
       final messageId = _readString(decoded['messageId']);
       if (messageId != null && !_rememberIncomingMessage(messageId)) return;
-      final sequence = decoded['sequence'];
-      if (sequence is num && sequence.isFinite) {
-        final incoming = sequence.toInt();
-        // Do not consume an out-of-order frame. syncAfter(lastSequence) can
-        // replay the missing range from the Connector event journal (or fall
-        // back to an authoritative snapshot after a restart).
-        if (incoming > _lastIncomingSequence + 1) {
-          if (!_syncRecoveryInFlight) {
-            _syncRecoveryInFlight = true;
-            if (!_sendCommand('sync.request', {
-              if (_lastIncomingSequence > 0)
-                'lastSequence': _lastIncomingSequence,
-            }, force: true)) {
-              _syncRecoveryInFlight = false;
-            }
-          }
-          return;
-        }
-        if (incoming > 0 && incoming <= _lastIncomingSequence) return;
-        if (incoming > _lastIncomingSequence) {
-          _lastIncomingSequence = incoming;
-          final from = decoded['from'] as String? ?? targetDeviceId.value;
-          if (from.isNotEmpty) {
-            _sendRaw(
-              RelayProtocol.ack(
-                stream:
-                    decoded['streamId'] as String? ?? RelayProtocol.streamId,
-                sequence: _lastIncomingSequence,
-                targetDeviceId: from,
-              ),
-            );
-          }
-        }
-      }
       final productMessage = RelayProtocol.unwrapProductMessage(decoded);
       if (productMessage == null) return;
       final productType = productMessage['type'] as String? ?? '';
       if (productType == 'codex.command.result') {
         _handleCommandResult(productMessage);
       } else if (productType == 'codex.event') {
-        _handleCodexEvent(productMessage);
+        _consumeEvent(productMessage);
+        final from = decoded['from'] as String? ?? targetDeviceId.value;
+        if (from.isNotEmpty && _eventRecovery.sequence > 0) {
+          _lastIncomingSequence = _eventRecovery.sequence;
+          _sendRaw(RelayProtocol.ack(
+            stream: decoded['streamId'] as String? ?? RelayProtocol.streamId,
+            sequence: _lastIncomingSequence, targetDeviceId: from));
+        }
       } else if (productType == 'host.snapshot') {
         _applyHostStatus(productMessage['status']);
       }
@@ -2248,6 +2243,7 @@ class BridgeController extends GetxController {
       _sessionRestoreAttempted = false;
     }
     _clearRemoteModels();
+    _markUnconfirmedWrites();
     _pendingCommands.clear();
     _syncRecoveryInFlight = false;
     _scheduleTokenRefresh();
@@ -2366,55 +2362,81 @@ class BridgeController extends GetxController {
   void _handleCommandResult(Map<String, dynamic> message) {
     final requestId = message['requestId'] as String? ?? '';
     final pending = _pendingCommands.remove(requestId);
+    if (pending == null) return;
     final success = message['success'] == true;
+    if (pending.completion?.isCompleted == false) pending.completion!.complete(success);
     if (!success) {
-      if (pending?.kind == 'sync.request') _syncRecoveryInFlight = false;
+      if (pending.kind == 'sync.request') _syncRecoveryInFlight = false;
       final error = message['error'];
       final errorMap = error is Map
           ? Map<String, dynamic>.from(error)
           : const <String, dynamic>{};
       final text = errorMap['message'] as String? ?? '远程命令执行失败';
-      if (pending?.kind == 'project.list') {
+      if (pending.kind == 'project.list') {
         // Older App Servers do not expose project/list. Keep the task-derived
         // workspace fallback without surfacing an auxiliary capability error.
         return;
       }
-      final isRefreshFailure = pending?.refreshToken != null;
+      if (pending.interactionId != null) {
+        submittedInteractions.remove(pending.interactionId);
+        _reconcileSelectedTask();
+      }
+      if (errorMap['code'] == 'COMMAND_OUTCOME_UNKNOWN') {
+        lastError.value = '命令结果尚未确认，正在核对任务；请勿重复发送。';
+        if (pending.kind == 'thread.create') {
+          _pendingSessionStart = false;
+          _pendingPrompt = null;
+        }
+        _reconcileSelectedTask();
+        _sendCommand('thread.list', {'limit': 100}, force: true);
+        return;
+      }
+      if (pending.kind == 'turn.interrupt') interactionNotice.value = '';
+      final isRefreshFailure = pending.refreshToken != null;
       if (isRefreshFailure) {
         _finishTimelineRefresh(
           error: '刷新失败：$text',
-          token: pending!.refreshToken,
+          token: pending.refreshToken,
         );
       }
-      if (pending?.kind == 'thread.read') {
+      if (pending.kind == 'thread.read') {
         _failTimelineLoad('任务对话加载失败：$text');
       } else if (!isRefreshFailure) {
         lastError.value = '${errorMap['code'] ?? 'remote.error'}：$text';
       }
       final failedTurnStartBelongsToCurrent =
-          pending?.kind == 'turn.start' &&
-          pending?.threadId?.trim() == currentSessionId.value?.trim();
-      if (pending?.kind == 'thread.create' || failedTurnStartBelongsToCurrent) {
+          pending.kind == 'turn.start' &&
+          pending.threadId?.trim() == currentSessionId.value?.trim();
+      if (failedTurnStartBelongsToCurrent) {
+        // A rejected send does not mean the task itself failed. The desktop
+        // may already be executing a competing turn; reconcile its real state.
+        if (_currentTurnId == null) {
+          _timelineSnapshotGuard.reset();
+          _sessionLifecycles[pending.threadId]?.visibleRunning = false;
+          _setTimelineStatus(TimelineTaskStatus.unknown);
+        }
+        _reconcileSelectedTask();
+      } else if (pending.kind == 'thread.create') {
         _finishCurrentSession(
           status: TaskNotificationStatus.failed,
-          sessionId: pending?.threadId,
+          sessionId: pending.threadId,
           message: text,
         );
       }
       return;
     }
-    if (pending?.refreshToken != null) {
+    if (pending.refreshToken != null) {
       // The list and read requests are issued together. Either authoritative
       // response is enough to confirm that the manual refresh reached the
       // host; the normal timeline/event flow continues independently.
-      _finishTimelineRefresh(token: pending!.refreshToken);
+      _finishTimelineRefresh(token: pending.refreshToken);
     }
-    if ((pending?.kind == 'thread.list' || pending?.kind == 'thread.read') &&
+    if ((pending.kind == 'thread.list' || pending.kind == 'thread.read') &&
         _isTransientSyncError(lastError.value)) {
       lastError.value = '';
     }
     final result = message['result'];
-    switch (pending?.kind) {
+    switch (pending.kind) {
       case 'sync.request':
         _applySyncResult(result);
       case 'thread.list':
@@ -2426,14 +2448,16 @@ class BridgeController extends GetxController {
       case 'thread.create':
         _handleThreadCreated(result);
       case 'thread.read':
+        _restoreInteractions(result, pending);
         _handleThreadReadResult(
           result,
-          readGeneration: pending?.timelineReadGeneration,
+          readGeneration: pending.timelineReadGeneration,
         );
       case 'thread.status':
-        _handleThreadStatusResult(result, threadId: pending?.threadId);
+        _restoreInteractions(result, pending);
+        _handleThreadStatusResult(result, threadId: pending.threadId);
       case 'turn.start':
-        final startThreadId = pending?.threadId?.trim();
+        final startThreadId = pending.threadId?.trim();
         if (startThreadId != null &&
             startThreadId.isNotEmpty &&
             startThreadId != currentSessionId.value?.trim()) {
@@ -2449,12 +2473,11 @@ class BridgeController extends GetxController {
         }
         _sendRequestedInterrupt();
       case 'turn.interrupt':
-        final interruptThreadId = pending?.threadId?.trim();
-        final interruptTurnId = pending?.turnId?.trim();
+        final interruptThreadId = pending.threadId?.trim();
+        final interruptTurnId = pending.turnId?.trim();
         final currentThreadId = currentSessionId.value?.trim();
         final activeTurnId = _currentTurnId?.trim();
-        if (pending == null ||
-            interruptThreadId == null ||
+        if (interruptThreadId == null ||
             interruptThreadId.isEmpty ||
             currentThreadId == null ||
             currentThreadId != interruptThreadId ||
@@ -2468,11 +2491,11 @@ class BridgeController extends GetxController {
           // timeline state.
           break;
         }
-        _finishCurrentSession(
-          status: TaskNotificationStatus.interrupted,
-          sessionId: interruptThreadId,
-          message: '已中断当前 Codex 任务。',
-        );
+        interactionNotice.value = '停止请求已提交，等待任务确认结束…';
+        _reconcileSelectedTask();
+      case 'approval.respond':
+      case 'userInput.respond':
+        _reconcileSelectedTask();
       case 'host.get_status':
         _applyHostStatus(result);
       default:
@@ -2480,39 +2503,148 @@ class BridgeController extends GetxController {
     }
   }
 
+  void _requestEventRecovery() {
+    if (_syncRecoveryInFlight) return;
+    _syncRecoveryInFlight = true;
+    if (!_sendCommand('sync.request', _eventRecovery.request, force: true)) {
+      _syncRecoveryInFlight = false;
+    }
+  }
+
+  bool _adoptEventStream(Object? rawId, {bool recover = true}) {
+    final id = _readString(rawId);
+    if (_eventRecovery.isRetired(id)) return false;
+    if (_eventRecovery.adopt(id)) {
+      _lastIncomingSequence = 0;
+      _timelineSnapshotGuard.resetRevision();
+      _timelineSnapshotHash = null;
+      _timelineReadGeneration++;
+      _interactionRevision++;
+      pendingInteractions.clear();
+      submittedInteractions.clear();
+      _pendingCommands.removeWhere((_, pending) =>
+          pending.kind == 'thread.read' || pending.kind == 'thread.status' ||
+          pending.kind == 'sync.request');
+      _syncRecoveryInFlight = false;
+      cacheStale.value = true;
+      if (recover) _requestEventRecovery();
+    }
+    return true;
+  }
+
+  void _consumeEvent(Map<String, dynamic> frame) {
+    if (!_adoptEventStream(frame['eventStreamId'])) return;
+    final value = frame['sequence'];
+    if (value is num && value.isFinite) {
+      final next = value.toInt();
+      if (next <= _eventRecovery.sequence) return;
+      if (!_eventRecovery.accept(next)) {
+        _requestEventRecovery();
+        return;
+      }
+    }
+    _handleCodexEvent(frame);
+  }
+
   void _applySyncResult(Object? value) {
     _syncRecoveryInFlight = false;
     final map = _asMap(value);
-    if (map == null) return;
+    if (map == null || !_adoptEventStream(map['eventStreamId'], recover: false)) return;
     final mode = _readString(map['mode']);
     if (mode == 'events') {
       for (final item in _asList(map['events'])) {
         final frame = _asMap(item);
-        if (frame != null) {
-          _acceptIncomingSequence(frame['sequence']);
-          _handleCodexEvent(frame);
-        }
+        if (frame != null) _consumeEvent(frame);
       }
-      _acceptIncomingSequence(map['latestSequence']);
+      // Never advance past events we did not consume.
+      final latest = map['latestSequence'];
+      if (latest is num && latest > _eventRecovery.sequence) _requestEventRecovery();
       if (sessions.isEmpty || workspaces.isEmpty) {
         _sendCommand('thread.list', {'limit': 100});
         _sendCommand('project.list', {'limit': 100});
       }
-      _queueCatalogCacheWrite(syncedAt: DateTime.now().toUtc());
     } else {
-      // A snapshot starts a new journal baseline, including after the Agent
-      // restarts at sequence zero. Keeping the old cursor would discard all
-      // new lifecycle/content events until the new process caught up to it.
+      if (map['eventStreamId'] == null) _eventRecovery.reset();
       final sequence = map['latestSequence'];
       if (sequence is num && sequence.isFinite && sequence >= 0) {
-        _lastIncomingSequence = sequence.toInt();
-        _seenIncomingMessageIds.clear();
+        _eventRecovery.snapshot(sequence.toInt());
       }
       _applyThreadListResult(map['threads']);
       if (map['projects'] != null) _applyProjectListResult(map['projects']);
       _applyHostStatus(map['status']);
-      _queueCatalogCacheWrite(syncedAt: DateTime.now().toUtc());
+      _reconcileSelectedTask();
+      // Snapshot watermark was captured before its asynchronous reads. Replay
+      // anything produced meanwhile, including the frame that exposed the gap.
+      // Legacy hosts return snapshot again for an empty journal; do not loop.
+      if (map['eventStreamId'] != null) _requestEventRecovery();
     }
+    _lastIncomingSequence = _eventRecovery.sequence;
+    _queueCatalogCacheWrite(syncedAt: DateTime.now().toUtc());
+  }
+
+  void _reconcileSelectedTask() {
+    final id = selectedSessionId.value;
+    if (id != null && id.isNotEmpty) _requestTimelineRead(id, force: true);
+  }
+
+  void _restoreInteractions(Object? value, _PendingCommand? pending) {
+    final map = _asMap(value);
+    if (map == null || !map.containsKey('pendingInteractions') ||
+        pending?.interactionRevision != _interactionRevision) {
+      return;
+    }
+    final thread = _asMap(map['thread']);
+    final id = _readString(thread?['id']) ?? _readString(map['threadId']) ?? pending?.threadId;
+    if (id == null) return;
+    pendingInteractions.removeWhere((_, item) => item.threadId == id);
+    for (final raw in _asList(map['pendingInteractions'])) {
+      final json = _asMap(raw);
+      if (json == null) continue;
+      final item = PendingInteraction.fromJson(json);
+      if (item.id.isNotEmpty && item.threadId == id) {
+        pendingInteractions[item.id] = item;
+      }
+    }
+    submittedInteractions.removeWhere((id) =>
+        !pendingInteractions.containsKey(id) ||
+        (!pendingInteractions[id]!.responding && !_pendingCommands.values.any((command) => command.interactionId == id)));
+  }
+
+  void respondToInteraction(PendingInteraction item, Map<String, dynamic> response) {
+    if (!backendReady.value || !item.canRespond || item.responding ||
+        submittedInteractions.contains(item.id) || !pendingInteractions.containsKey(item.id)) {
+      return;
+    }
+    final sent = _sendCommand(item.kind == 'userInput' ? 'userInput.respond' : 'approval.respond',
+      {'approvalId': item.id, ...response}, threadId: item.threadId, turnId: item.turnId,
+      interactionId: item.id);
+    if (sent) {
+      submittedInteractions.add(item.id);
+    } else {
+      lastError.value = '连接不可用，回答尚未发送。';
+    }
+  }
+
+  Future<bool> steerCurrentTurn(String text) async {
+    final threadId = selectedSessionId.value;
+    final turnId = _currentTurnId;
+    if (!backendReady.value || !timelineStatus.value.isActive || threadId == null ||
+        turnId == null || _pendingCommands.values.any((pending) => pending.kind == 'turn.steer' && pending.threadId == threadId)) {
+      lastError.value = '正在核对当前轮次，请稍后补充；草稿已保留。';
+      _reconcileSelectedTask();
+      return false;
+    }
+    final completion = Completer<bool>();
+    if (!_sendCommand('turn.steer', {'text': text}, threadId: threadId,
+        turnId: turnId, completion: completion)) {
+      lastError.value = '连接不可用，补充内容尚未发送。';
+      return false;
+    }
+    return completion.future.timeout(_commandTimeout, onTimeout: () {
+      lastError.value = '补充内容是否已送达尚未确认，请核对任务后再操作。';
+      _reconcileSelectedTask();
+      return false;
+    });
   }
 
   void _applyThreadListResult(Object? value) {
@@ -4273,6 +4405,7 @@ class BridgeController extends GetxController {
       'usage.updated' => 'usage.updated',
       'thread/tokenUsage/updated' => 'usage.updated',
       'approval.requested' => 'approval.requested',
+      'interaction.resolved' => 'interaction.resolved',
       'error' => 'error',
       _ => '',
     };
@@ -4745,14 +4878,22 @@ class BridgeController extends GetxController {
           );
         }
       case 'approval.requested':
-        _setTimelineStatus(
-          TimelineTaskStatus.waitingApproval,
-          activeFlags: const ['waitingOnApproval'],
-        );
-        _appendSessionEvent(
-          const SessionEvent(kind: 'running', text: '等待主机审批...'),
-        );
-        lastError.value = 'Codex 请求审批，请在主机端处理。';
+        final item = PendingInteraction.fromJson(event);
+        if (item.id.isEmpty || item.threadId != selectedId) break;
+        _interactionRevision++;
+        pendingInteractions[item.id] = item;
+        if (item.params['isBlocking'] != false) {
+          _setTimelineStatus(
+            item.kind == 'userInput' ? TimelineTaskStatus.waitingUserInput : TimelineTaskStatus.waitingApproval,
+            activeFlags: [item.kind == 'userInput' ? 'waitingOnUserInput' : 'waitingOnApproval'],
+          );
+        }
+      case 'interaction.resolved':
+        _interactionRevision++;
+        final id = _readString(event['approvalId']);
+        pendingInteractions.remove(id);
+        submittedInteractions.remove(id);
+        _reconcileSelectedTask();
       default:
         final text = _extractText(data);
         final attachments = _extractAttachments(data);
@@ -4770,6 +4911,10 @@ class BridgeController extends GetxController {
     String? message,
   }) {
     final id = sessionId ?? currentSessionId.value;
+    interactionNotice.value = '';
+    _interactionRevision++;
+    pendingInteractions.removeWhere((_, item) => item.threadId == id);
+    submittedInteractions.removeWhere((key) => !pendingInteractions.containsKey(key));
     if (message != null &&
         message.isNotEmpty &&
         status == TaskNotificationStatus.failed) {
@@ -4803,7 +4948,24 @@ class BridgeController extends GetxController {
   void _applyHostStatus(Object? value) {
     final map = _asMap(value);
     if (map == null) return;
+    if (!_adoptEventStream(map['eventStreamId'])) return;
     final appServer = _asMap(map['appServer']) ?? map;
+    final state = _readString(appServer['state']);
+    if (state != null) {
+      final latestSequence = _asMap(map['protocol'])?['latestSequence'];
+      if (state == 'ready' && latestSequence is num && latestSequence > _eventRecovery.sequence) {
+        _requestEventRecovery();
+      }
+      final wasReady = backendReady.value;
+      backendReady.value = state == 'ready';
+      if (!backendReady.value) {
+        interactionNotice.value = '执行后端正在恢复连接，任务状态待确认…';
+        cacheStale.value = true;
+      } else if (!wasReady) {
+        interactionNotice.value = '';
+        _reconcileSelectedTask();
+      }
+    }
     final version = _readString(appServer['version']) ?? '';
     if (version.isNotEmpty) {
       composerContext.value = composerContext.value.copyWith(
@@ -4901,6 +5063,8 @@ class BridgeController extends GetxController {
     String? turnId,
     bool force = false,
     int? refreshToken,
+    String? interactionId,
+    Completer<bool>? completion,
   }) {
     if (!connected.value ||
         targetDeviceId.value.isEmpty ||
@@ -4940,6 +5104,9 @@ class BridgeController extends GetxController {
       sentAt: DateTime.now(),
       refreshToken: refreshToken,
       timelineReadGeneration: readGeneration,
+      interactionRevision: _interactionRevision,
+      interactionId: interactionId,
+      completion: completion,
     );
     final sent = _sendRaw(
       RelayProtocol.command(
@@ -4986,6 +5153,21 @@ class BridgeController extends GetxController {
         message.contains('项目列表同步超时');
   }
 
+  void _markUnconfirmedWrites() {
+    for (final pending in _pendingCommands.values) {
+      if (!{'thread.create', 'turn.start', 'turn.steer', 'turn.interrupt',
+          'approval.respond', 'userInput.respond'}.contains(pending.kind)) {
+        continue;
+      }
+      if (pending.completion?.isCompleted == false) pending.completion!.complete(false);
+      lastError.value = '连接中断，命令结果尚未确认；恢复后请核对任务，勿重复发送。';
+      if (pending.kind == 'thread.create') {
+        _pendingSessionStart = false;
+        _pendingPrompt = null;
+      }
+    }
+  }
+
   void _expirePendingCommands() {
     final cutoff = DateTime.now().subtract(_commandTimeout);
     var catalogTimedOut = false;
@@ -4994,6 +5176,12 @@ class BridgeController extends GetxController {
       final expired = pending.sentAt.isBefore(cutoff);
       if (expired && pending.kind == 'sync.request') {
         _syncRecoveryInFlight = false;
+      }
+      if (expired && {'thread.create', 'turn.start', 'turn.steer', 'turn.interrupt', 'approval.respond', 'userInput.respond'}.contains(pending.kind)) {
+        if (pending.completion?.isCompleted == false) pending.completion!.complete(false);
+        lastError.value = '命令回执超时，执行结果尚未确认；请刷新任务核对，勿重复发送。';
+        if (pending.kind == 'thread.create') { _pendingSessionStart = false; _pendingPrompt = null; }
+        scheduleMicrotask(_reconcileSelectedTask);
       }
       if (expired && pending.kind == 'thread.list') catalogTimedOut = true;
       if (expired &&
@@ -5033,14 +5221,6 @@ class BridgeController extends GetxController {
       _seenIncomingMessageIds.remove(_seenIncomingMessageIds.first);
     }
     return added;
-  }
-
-  void _acceptIncomingSequence(Object? value) {
-    if (value is num &&
-        value.isFinite &&
-        value.toInt() > _lastIncomingSequence) {
-      _lastIncomingSequence = value.toInt();
-    }
   }
 
   void _startHeartbeat() {
@@ -5345,6 +5525,7 @@ class BridgeController extends GetxController {
       return;
     }
     final wasConnected = connected.value;
+    _markUnconfirmedWrites();
     final rotating = _tokenRotationInProgress;
     _markTokenRefreshNeededIfExpired();
     _finishTimelineRefresh(error: '任务刷新失败：Relay 连接已断开。');
@@ -5389,6 +5570,7 @@ class BridgeController extends GetxController {
       return;
     }
     final wasConnected = connected.value;
+    _markUnconfirmedWrites();
     final rotating = _tokenRotationInProgress;
     _markTokenRefreshNeededIfExpired();
     _finishTimelineRefresh(error: '任务刷新失败：Relay 连接异常，请重试。');
@@ -7477,6 +7659,9 @@ class _PendingCommand {
     this.turnId,
     this.refreshToken,
     this.timelineReadGeneration,
+    this.interactionRevision,
+    this.interactionId,
+    this.completion,
   });
 
   final String kind;
@@ -7485,6 +7670,9 @@ class _PendingCommand {
   final DateTime sentAt;
   final int? refreshToken;
   final int? timelineReadGeneration;
+  final int? interactionRevision;
+  final String? interactionId;
+  final Completer<bool>? completion;
 
   bool matches(String commandKind, {String? threadId}) {
     return kind == commandKind && this.threadId == threadId;

@@ -2348,6 +2348,7 @@ class ComposerBar extends StatelessWidget {
     required this.onVoicePressed,
     this.running = false,
     this.onStop,
+    this.onSteer,
     this.listening = false,
     this.focusNode,
     this.contextWindowUsage,
@@ -2363,6 +2364,7 @@ class ComposerBar extends StatelessWidget {
   final VoidCallback onSend;
   final bool running;
   final VoidCallback? onStop;
+  final VoidCallback? onSteer;
   final ValueChanged<String> onModelChanged;
   final ValueChanged<String> onReasoningChanged;
   final ValueChanged<String> onPermissionModeChanged;
@@ -2388,15 +2390,9 @@ class ComposerBar extends StatelessWidget {
               TextField(
                 controller: controller,
                 focusNode: focusNode,
-                // Keep the normal composer decoration while a turn is
-                // running. `enabled: false` makes Flutter apply the global
-                // disabled opacity/colors to the hint and padding, which
-                // causes the input surface to jump when the stop state
-                // appears. A read-only field preserves the layout and still
-                // prevents edits until the turn finishes.
                 enabled: enabled,
-                readOnly: running,
-                showCursor: enabled && !running,
+                readOnly: false,
+                showCursor: enabled,
                 minLines: 1,
                 maxLines: 4,
                 style: TextStyle(
@@ -2405,7 +2401,7 @@ class ComposerBar extends StatelessWidget {
                   fontWeight: FontWeight.w400,
                 ),
                 decoration: InputDecoration(
-                  hintText: 'Ask anything... @files, \$skills, /commands',
+                  hintText: running ? '编辑草稿，或补充到当前任务…' : 'Ask anything... @files, \$skills, /commands',
                   hintStyle: TextStyle(
                     color: colors.textMuted.withValues(alpha: 0.72),
                     fontWeight: FontWeight.w400,
@@ -2492,6 +2488,14 @@ class ComposerBar extends StatelessWidget {
                     ),
                   ],
                   const SizedBox(width: 8),
+                  if (running) ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: controller,
+                    builder: (context, value, _) => IconButton(
+                      tooltip: '补充到当前任务',
+                      onPressed: enabled && value.text.trim().isNotEmpty ? onSteer : null,
+                      icon: const Icon(Icons.subdirectory_arrow_left, size: 20),
+                    ),
+                  ),
                   Tooltip(
                     message: running ? '停止任务' : '发送消息',
                     child: SizedBox.square(
