@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -30,6 +31,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final supportsDesktopShortcuts = _supportsDesktopShortcuts;
     return Obx(
       () => LiquidBackground(
         child: Scaffold(
@@ -138,25 +140,27 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ],
               ),
-              const SizedBox(height: 18),
-              _SettingsGroup(
-                title: '快捷键',
-                children: [
-                  _SettingsTile(
-                    icon: RecodexIcons.key,
-                    title: '桌面快捷键',
-                    subtitle: preferences.shortcutsEnabled.value
-                        ? '已启用 · 查看全部快捷操作'
-                        : '已停用桌面快捷键',
-                    trailing: CodexSwitch(
-                      value: preferences.shortcutsEnabled.value,
-                      onChanged: preferences.setShortcutsEnabled,
+              if (supportsDesktopShortcuts) ...[
+                const SizedBox(height: 18),
+                _SettingsGroup(
+                  title: '快捷键',
+                  children: [
+                    _SettingsTile(
+                      icon: RecodexIcons.key,
+                      title: '桌面快捷键',
+                      subtitle: preferences.shortcutsEnabled.value
+                          ? '已启用 · 查看全部快捷操作'
+                          : '已停用桌面快捷键',
+                      trailing: CodexSwitch(
+                        value: preferences.shortcutsEnabled.value,
+                        onChanged: preferences.setShortcutsEnabled,
+                      ),
+                      trailingIcon: RecodexIcons.chevronRight,
+                      onTap: () => _openPage(Routes.shortcuts),
                     ),
-                    trailingIcon: RecodexIcons.chevronRight,
-                    onTap: () => _openPage(Routes.shortcuts),
-                  ),
-                ],
-              ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 18),
               _SettingsGroup(
                 title: '通知',
@@ -278,6 +282,13 @@ class _SettingsPageState extends State<SettingsPage> {
     };
   }
 }
+
+bool get _supportsDesktopShortcuts => switch (defaultTargetPlatform) {
+  TargetPlatform.macOS ||
+  TargetPlatform.windows ||
+  TargetPlatform.linux => true,
+  _ => false,
+};
 
 class _SettingsGroup extends StatelessWidget {
   const _SettingsGroup({required this.title, required this.children});

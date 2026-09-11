@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 
@@ -21,7 +23,7 @@ import '../../services/usage_statistics.dart';
 import '../../services/task_notification_controller.dart';
 import '../settings/settings_preferences_controller.dart';
 
-class BridgeController extends GetxController {
+class BridgeController extends GetxController with WidgetsBindingObserver {
   BridgeController({SessionCache? sessionCache})
     : _sessionCache = sessionCache ?? SessionCache();
 
@@ -476,7 +478,10 @@ class BridgeController extends GetxController {
   Timer? _timelineLoadTimeoutTimer;
   Timer? _timelineStatusTimer;
   Timer? _timelineRefreshTimeoutTimer;
+  Timer? _usageReconcileTimer;
   Timer? _tokenRefreshTimer;
+  Timer? _disconnectNotificationTimer;
+  Timer? _reconnectedNotificationTimer;
   int _outgoingSequence = 0;
   int _lastIncomingSequence = 0;
   int _maxFrameSize = RelayProtocol.defaultMaxFrameSize;
@@ -499,6 +504,10 @@ class BridgeController extends GetxController {
   int _tokenRefreshRetryAttempt = 0;
   int _connectionAttempt = 0;
   int _reconnectAttemptCount = 0;
+  int _reconnectBackoffAttempt = 0;
+  bool _appInBackground = false;
+  bool _resumeReconnectPending = false;
+  bool _disconnectNotificationSent = false;
   String? _tokenRefreshContextKey;
   final _pendingCommands = <String, _PendingCommand>{};
   String? _timelineSnapshotHash;
@@ -751,6 +760,7 @@ class BridgeController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_loadStoredCredentials());
     unawaited(_applySavedTaskPreferences());
     // Credentials are loaded asynchronously; [_loadStoredCredentials] will
@@ -760,6 +770,11 @@ class BridgeController extends GetxController {
 
   @override
   void onClose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _disconnectNotificationTimer?.cancel();
+    _disconnectNotificationTimer = null;
+    _reconnectedNotificationTimer?.cancel();
+    _reconnectedNotificationTimer = null;
     stopLiveTimelineRefresh();
     _catalogRefreshTimer?.cancel();
     _catalogRefreshTimer = null;
@@ -767,6 +782,8 @@ class BridgeController extends GetxController {
     _cacheWriteTimer = null;
     _timelineStatusTimer?.cancel();
     _timelineStatusTimer = null;
+    _usageReconcileTimer?.cancel();
+    _usageReconcileTimer = null;
     _finishTimelineRefresh();
     _clearTimelineLoadState();
     unawaited(() async {
@@ -775,6 +792,86 @@ class BridgeController extends GetxController {
     }());
     unawaited(disconnect(silent: true));
     super.onClose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.hidden:
+        _enterBackground();
+      case AppLifecycleState.resumed:
+        _resumeFromBackground();
+    }
+  }
+
+  void _enterBackground() {
+    if (_appInBackground) return;
+    _appInBackground = true;
+    _disconnectNotificationTimer?.cancel();
+    _disconnectNotificationTimer = null;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+    final socket = _socket;
+    if (!connected.value ||
+        socket == null ||
+        socket.readyState != WebSocket.open) {
+      _resumeReconnectPending = true;
+    }
+  }
+
+  void _resumeFromBackground() {
+    if (!_appInBackground) return;
+    _appInBackground = false;
+    final reconnectPending = _resumeReconnectPending;
+    final socket = _socket;
+    final healthy =
+        !reconnectPending &&
+        connected.value &&
+        socket != null &&
+        socket.readyState == WebSocket.open;
+    if (healthy) {
+      _resumeReconnectPending = false;
+      unawaited(_verifyConnectionAfterResume());
+      return;
+    }
+    if (_manualDisconnect ||
+        (pairingToken.value.isEmpty && endpointGrant.value.isEmpty) ||
+        spaceId.value.isEmpty ||
+        targetDeviceId.value.isEmpty) {
+      _resumeReconnectPending = false;
+      return;
+    }
+    _resumeReconnectPending = false;
+    unawaited(_reconnectAfterResume());
+  }
+
+  Future<void> _verifyConnectionAfterResume() async {
+    final result = await checkCurrentConnection();
+    if (_appInBackground || _manualDisconnect) return;
+    final socket = _socket;
+    if (result == null &&
+        connected.value &&
+        socket != null &&
+        socket.readyState == WebSocket.open) {
+      _startHeartbeat();
+      return;
+    }
+    await _closeSocket();
+    if (_appInBackground || _manualDisconnect) return;
+    _scheduleReconnect(force: true, reason: '应用恢复后 Relay 未响应，正在重连。');
+  }
+
+  Future<void> _reconnectAfterResume() async {
+    // Drop a stale socket before the single post-resume reconnect. This also
+    // prevents a late onDone callback from scheduling a second timer.
+    await _closeSocket();
+    if (_appInBackground || _manualDisconnect) return;
+    _scheduleReconnect(force: true, reason: '应用恢复，正在检查 Relay 连接。');
   }
 
   Future<void> _applyPairing(PairingProfile profile) async {
@@ -1394,6 +1491,12 @@ class BridgeController extends GetxController {
   Future<void> disconnect({bool silent = false}) async {
     _connectionAttempt += 1;
     _manualDisconnect = true;
+    _resumeReconnectPending = false;
+    _disconnectNotificationTimer?.cancel();
+    _disconnectNotificationTimer = null;
+    _reconnectedNotificationTimer?.cancel();
+    _reconnectedNotificationTimer = null;
+    _disconnectNotificationSent = false;
     _finishTimelineRefresh();
     _clearTimelineLoadState();
     _requestedEventsSessionId = null;
@@ -1402,6 +1505,8 @@ class BridgeController extends GetxController {
     _reconnectTimer = null;
     _tokenRefreshTimer?.cancel();
     _tokenRefreshTimer = null;
+    _usageReconcileTimer?.cancel();
+    _usageReconcileTimer = null;
     _tokenRotationInProgress = false;
     _credentialRefreshBlocked = false;
     _handshakeTimer?.cancel();
@@ -2885,7 +2990,11 @@ class BridgeController extends GetxController {
         (message['connectionId'] as String? ?? '').isEmpty) {
       throw StateError('Relay welcome 与当前 Endpoint 配置不一致');
     }
-    final shouldNotifyReconnect = _hadOnlineConnection && !connected.value;
+    final shouldNotifyReconnect = _disconnectNotificationSent;
+    _disconnectNotificationTimer?.cancel();
+    _disconnectNotificationTimer = null;
+    _reconnectedNotificationTimer?.cancel();
+    _reconnectedNotificationTimer = null;
     _handshakeTimer?.cancel();
     _handshakeTimer = null;
     _startHeartbeat();
@@ -2901,16 +3010,12 @@ class BridgeController extends GetxController {
       _appendTransportTimelineEvent('连接已恢复');
     }
     _reconnectAttemptCount = 0;
+    _reconnectBackoffAttempt = 0;
     _hadOnlineConnection = true;
     _credentialRefreshBlocked = false;
     _tokenRefreshRetryAttempt = 0;
     lastError.value = '';
-    if (shouldNotifyReconnect &&
-        Get.isRegistered<TaskNotificationController>()) {
-      unawaited(
-        Get.find<TaskNotificationController>().notifyRelayReconnected(),
-      );
-    }
+    if (shouldNotifyReconnect) _scheduleReconnectedNotification();
     if (selectedSessionId.value == null) {
       _sessionRestoreAttempted = false;
     }
@@ -2960,13 +3065,9 @@ class BridgeController extends GetxController {
     cacheStale.value = true;
     final recoverableCredentialFailure =
         _isRefreshableRelayCode(code) && endpointGrant.value.isNotEmpty;
-    if (wasConnected &&
-        !recoverableCredentialFailure &&
-        !_manualDisconnect &&
-        Get.isRegistered<TaskNotificationController>()) {
-      unawaited(
-        Get.find<TaskNotificationController>().notifyRelayDisconnected(),
-      );
+    if (wasConnected && !recoverableCredentialFailure && !_manualDisconnect) {
+      if (_appInBackground) _resumeReconnectPending = true;
+      _scheduleDisconnectNotification();
     }
     if (recoverableCredentialFailure) {
       // Both codes are recoverable when the proof-bound Grant is still
@@ -3035,8 +3136,9 @@ class BridgeController extends GetxController {
     final requestId = message['requestId'] as String? ?? '';
     final pending = _pendingCommands.remove(requestId);
     if (pending == null) return;
-    if (pending.responseCompletion?.isCompleted == false)
+    if (pending.responseCompletion?.isCompleted == false) {
       pending.responseCompletion!.complete(message);
+    }
     if (pending.responseOnly) return;
     if (pending.kind == 'thread.settings.update' &&
         pending.settingsStreamId != _eventRecovery.streamId) {
@@ -5740,6 +5842,7 @@ class BridgeController extends GetxController {
     String? message,
   }) {
     final id = sessionId ?? currentSessionId.value;
+    _scheduleUsageReconciliation(id);
     interactionNotice.value = '';
     _interactionRevision++;
     pendingInteractions.removeWhere((_, item) => item.threadId == id);
@@ -5774,6 +5877,48 @@ class BridgeController extends GetxController {
     _pendingPrompt = null;
     _queueCatalogCacheWrite();
     _sendCommand('thread.list', {'limit': 100});
+  }
+
+  /// Token counters can be written to the Desktop rollout journal just after
+  /// the terminal event. Re-read the finished thread twice so a late usage
+  /// sample can enrich the existing answer without making the user refresh.
+  void _scheduleUsageReconciliation(String? sessionId) {
+    final id = sessionId?.trim() ?? '';
+    if (id.isEmpty) return;
+    _usageReconcileTimer?.cancel();
+    var attempt = 0;
+    void readAgain() {
+      if (!connected.value || attempt >= 2) return;
+      attempt += 1;
+      final pending = _pendingCommands.values.any(
+        (item) => item.matches('thread.read', threadId: id),
+      );
+      if (!pending) {
+        // A selected task can finish before its first timeline hydration
+        // (for example when it was started from another device). Keep the
+        // read response associated with this session so late usage is merged
+        // into the right answer without switching away from another task.
+        if (_requestedEventsSessionId != id &&
+            selectedSessionId.value?.trim() == id) {
+          _requestedEventsSessionId = id;
+          for (final session in sessions) {
+            if (session.id.trim() == id) {
+              _requestedEventsPrompt = session.prompt;
+              break;
+            }
+          }
+        }
+        _sendCommand('thread.read', {}, threadId: id, force: true);
+      }
+      if (attempt < 2) {
+        _usageReconcileTimer = Timer(
+          const Duration(milliseconds: 1400),
+          readAgain,
+        );
+      }
+    }
+
+    _usageReconcileTimer = Timer(const Duration(milliseconds: 700), readAgain);
   }
 
   void _applyHostStatus(Object? value) {
@@ -6002,11 +6147,12 @@ class BridgeController extends GetxController {
 
   void _markUnconfirmedWrites() {
     for (final pending in _pendingCommands.values) {
-      if (pending.responseCompletion?.isCompleted == false)
+      if (pending.responseCompletion?.isCompleted == false) {
         pending.responseCompletion!.complete({
           'success': false,
           'error': {'code': 'CONNECTION_LOST', 'message': '连接中断，等待重新连接后核对任务'},
         });
+      }
       if (!{
         'thread.create',
         'thread.settings.update',
@@ -6394,6 +6540,52 @@ class BridgeController extends GetxController {
     return '';
   }
 
+  void _scheduleDisconnectNotification() {
+    if (_appInBackground ||
+        _manualDisconnect ||
+        !_hadOnlineConnection ||
+        _disconnectNotificationSent ||
+        _disconnectNotificationTimer != null ||
+        !Get.isRegistered<TaskNotificationController>()) {
+      return;
+    }
+    _disconnectNotificationTimer = Timer(const Duration(seconds: 10), () {
+      _disconnectNotificationTimer = null;
+      if (_appInBackground ||
+          _manualDisconnect ||
+          connected.value ||
+          !_hadOnlineConnection ||
+          !Get.isRegistered<TaskNotificationController>()) {
+        return;
+      }
+      _disconnectNotificationSent = true;
+      unawaited(
+        Get.find<TaskNotificationController>().notifyRelayDisconnected(),
+      );
+    });
+  }
+
+  void _scheduleReconnectedNotification() {
+    if (!_disconnectNotificationSent ||
+        _reconnectedNotificationTimer != null ||
+        !Get.isRegistered<TaskNotificationController>()) {
+      return;
+    }
+    _reconnectedNotificationTimer = Timer(const Duration(seconds: 5), () {
+      _reconnectedNotificationTimer = null;
+      if (!connected.value ||
+          _appInBackground ||
+          _manualDisconnect ||
+          !Get.isRegistered<TaskNotificationController>()) {
+        return;
+      }
+      _disconnectNotificationSent = false;
+      unawaited(
+        Get.find<TaskNotificationController>().notifyRelayReconnected(),
+      );
+    });
+  }
+
   void _handleDone({WebSocket? socket, int? attempt}) {
     if (socket != null &&
         attempt != null &&
@@ -6419,13 +6611,9 @@ class BridgeController extends GetxController {
     if (timelineLoading.value) {
       _failTimelineLoad('Relay 连接已断开，任务对话未加载完成，请重试。');
     }
-    if (wasConnected &&
-        !rotating &&
-        !_manualDisconnect &&
-        Get.isRegistered<TaskNotificationController>()) {
-      unawaited(
-        Get.find<TaskNotificationController>().notifyRelayDisconnected(),
-      );
+    if (wasConnected && !rotating && !_manualDisconnect) {
+      if (_appInBackground) _resumeReconnectPending = true;
+      _scheduleDisconnectNotification();
     }
     _socket = null;
     _socketSubscription = null;
@@ -6465,13 +6653,9 @@ class BridgeController extends GetxController {
       _failTimelineLoad('Relay 连接异常，任务对话加载失败，请重试。');
     }
     _fail(_connectionTestError(error));
-    if (wasConnected &&
-        !rotating &&
-        !_manualDisconnect &&
-        Get.isRegistered<TaskNotificationController>()) {
-      unawaited(
-        Get.find<TaskNotificationController>().notifyRelayDisconnected(),
-      );
+    if (wasConnected && !rotating && !_manualDisconnect) {
+      if (_appInBackground) _resumeReconnectPending = true;
+      _scheduleDisconnectNotification();
     }
     if (rotating) {
       _tokenRotationInProgress = false;
@@ -7871,6 +8055,10 @@ class BridgeController extends GetxController {
   }
 
   void _scheduleReconnect({bool force = false, String? reason}) {
+    if (_appInBackground) {
+      _resumeReconnectPending = true;
+      return;
+    }
     final preferences = Get.isRegistered<SettingsPreferencesController>()
         ? Get.find<SettingsPreferencesController>()
         : null;
@@ -7884,12 +8072,26 @@ class BridgeController extends GetxController {
       return;
     }
     _reconnectAttemptCount += 1;
+    _reconnectBackoffAttempt += 1;
     connectionLabel.value = 'reconnecting';
     _appendTransportTimelineEvent(
-      '正在重新连接 $_reconnectAttemptCount/5${reason == null || reason.trim().isEmpty ? '' : '\n$reason'}',
+      '正在重新连接（第 $_reconnectAttemptCount 次）${reason == null || reason.trim().isEmpty ? '' : '\n$reason'}',
     );
-    _reconnectTimer = Timer(const Duration(seconds: 3), () {
+    const backoffSeconds = <int>[3, 6, 12, 24, 30];
+    final backoffIndex = (_reconnectBackoffAttempt - 1)
+        .clamp(0, backoffSeconds.length - 1)
+        .toInt();
+    final jitterMs = math.Random().nextInt(1000);
+    final delay = Duration(
+      seconds: backoffSeconds[backoffIndex],
+      milliseconds: jitterMs,
+    );
+    _reconnectTimer = Timer(delay, () {
       _reconnectTimer = null;
+      if (_appInBackground) {
+        _resumeReconnectPending = true;
+        return;
+      }
       final currentPreferences =
           Get.isRegistered<SettingsPreferencesController>()
           ? Get.find<SettingsPreferencesController>()

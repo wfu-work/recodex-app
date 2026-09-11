@@ -81,6 +81,8 @@ abstract final class RecodexIcons {
   static const IconData verified = LucideIcons.badgeCheck300;
   static const IconData visibility = LucideIcons.eye300;
   static const IconData visibilityOff = LucideIcons.eyeOff300;
+  static const IconData vibrate = LucideIcons.vibrate300;
+  static const IconData vibrateOff = LucideIcons.vibrateOff300;
   static const IconData warning = LucideIcons.triangleAlert300;
   static const IconData workspaces = LucideIcons.layoutDashboard300;
   static const IconData palette = LucideIcons.palette300;

@@ -34,6 +34,7 @@ dependencies:
   get_storage: ^2.1.1
   get: ^4.7.3
   flutter_local_notifications: ^21.0.0
+  vibration: ^3.1.6
   cryptography: ^2.7.0
   lucide_icons_flutter: ^3.1.15
   path: ^1.9.1

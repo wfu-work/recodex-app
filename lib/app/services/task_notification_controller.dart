@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
+import 'package:vibration/vibration.dart';
 
 import '../routes/app_pages.dart';
 
@@ -44,6 +46,15 @@ class TaskNotificationController extends GetxController
   final backgroundEnabled = true.obs;
   final lockScreenEnabled = true.obs;
   final soundEnabled = true.obs;
+
+  /// Whether mobile notifications should ask the system to vibrate.
+  final vibrationEnabled = true.obs;
+
+  /// A small user-facing range that maps to platform-appropriate durations.
+  /// Android applies this to the notification channel; iOS follows its
+  /// system haptics settings because notification vibration has no public
+  /// intensity API.
+  final vibrationStrength = 2.obs;
   int _notificationId = 1000;
   Future<void>? _initialization;
   AppLifecycleState _lifecycle = AppLifecycleState.resumed;
@@ -179,6 +190,16 @@ class TaskNotificationController extends GetxController
     await _persistPreferences();
   }
 
+  Future<void> setVibrationEnabled(bool value) async {
+    vibrationEnabled.value = value;
+    await _persistPreferences();
+  }
+
+  Future<void> setVibrationStrength(int value) async {
+    vibrationStrength.value = value.clamp(1, 3).toInt();
+    await _persistPreferences();
+  }
+
   Future<bool> requestPermissions() async {
     await initialize();
     if (!ready.value) return false;
@@ -267,6 +288,13 @@ class TaskNotificationController extends GetxController
     }
 
     try {
+      if (vibrationEnabled.value &&
+          defaultTargetPlatform == TargetPlatform.iOS) {
+        // iOS notification details expose no vibration intensity. Trigger a
+        // matching haptic while the app process is active; background delivery
+        // continues to follow the system notification haptics settings.
+        unawaited(_vibrateOnIos());
+      }
       await _plugin.show(
         id: _notificationId++,
         title: title,
@@ -280,7 +308,12 @@ class TaskNotificationController extends GetxController
   }
 
   NotificationDetails _notificationDetails() {
-    final channelId = soundEnabled.value ? _channelId : _silentChannelId;
+    // Android notification channels keep their sound/vibration configuration
+    // after creation. Include the selected strength in the id so changing it
+    // takes effect for the next notification instead of reusing stale data.
+    final channelBase = soundEnabled.value ? _channelId : _silentChannelId;
+    final channelId =
+        '$channelBase-vibration-${vibrationEnabled.value ? vibrationStrength.value : 0}';
     final channelName = soundEnabled.value ? _channelName : _silentChannelName;
     return NotificationDetails(
       android: AndroidNotificationDetails(
@@ -291,6 +324,10 @@ class TaskNotificationController extends GetxController
         priority: Priority.high,
         category: AndroidNotificationCategory.status,
         playSound: soundEnabled.value,
+        enableVibration: vibrationEnabled.value,
+        vibrationPattern: vibrationEnabled.value
+            ? _vibrationPattern(vibrationStrength.value)
+            : null,
         visibility: lockScreenEnabled.value
             ? NotificationVisibility.public
             : NotificationVisibility.secret,
@@ -334,6 +371,11 @@ class TaskNotificationController extends GetxController
           backgroundEnabled.value = values['background'] != false;
           lockScreenEnabled.value = values['lockScreen'] != false;
           soundEnabled.value = values['sound'] != false;
+          vibrationEnabled.value = values['vibration'] != false;
+          final strength = values['vibrationStrength'];
+          if (strength is num) {
+            vibrationStrength.value = strength.toInt().clamp(1, 3);
+          }
           return;
         }
       }
@@ -355,6 +397,8 @@ class TaskNotificationController extends GetxController
       'background': backgroundEnabled.value,
       'lockScreen': lockScreenEnabled.value,
       'sound': soundEnabled.value,
+      'vibration': vibrationEnabled.value,
+      'vibrationStrength': vibrationStrength.value,
     });
     try {
       await _storage.write(key: _preferencesStorageKey, value: preferences);
@@ -400,6 +444,34 @@ class TaskNotificationController extends GetxController
       return await _requestPermissions();
     } catch (_) {
       return false;
+    }
+  }
+
+  Int64List _vibrationPattern(int strength) {
+    return switch (strength.clamp(1, 3).toInt()) {
+      1 => Int64List.fromList([0, 80]),
+      2 => Int64List.fromList([0, 180]),
+      _ => Int64List.fromList([0, 280, 70, 180]),
+    };
+  }
+
+  Future<void> _vibrateOnIos() async {
+    try {
+      final normalized = vibrationStrength.value.clamp(1, 3).toInt();
+      await Vibration.vibrate(
+        duration: switch (normalized) {
+          1 => 90,
+          3 => 280,
+          _ => 180,
+        },
+        sharpness: switch (normalized) {
+          1 => 0.25,
+          3 => 0.85,
+          _ => 0.5,
+        },
+      );
+    } catch (_) {
+      // Haptics are best effort; the system notification still gets shown.
     }
   }
 

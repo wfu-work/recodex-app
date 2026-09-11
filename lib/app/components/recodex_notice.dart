@@ -18,12 +18,12 @@ abstract final class RecodexNotice {
     if (!context.mounted || message.trim().isEmpty) return;
     final host = context.findAncestorStateOfType<_RecodexNoticeHostState>();
     assert(host != null, 'Place RecodexNoticeHost in the app builder.');
-    host?._show(
-      message,
-      tone,
-      // Screen readers need time to reach the message and its close action.
-      MediaQuery.accessibleNavigationOf(context) ? null : duration,
-    );
+    final effectiveDuration = MediaQuery.accessibleNavigationOf(context)
+        ? (duration < const Duration(seconds: 5)
+              ? const Duration(seconds: 5)
+              : duration)
+        : duration;
+    host?._show(message, tone, effectiveDuration);
   }
 }
 
@@ -48,14 +48,14 @@ class _RecodexNoticeHostState extends State<RecodexNoticeHost> {
   RecodexNoticeTone _tone = RecodexNoticeTone.info;
   var _revision = 0;
 
-  void _show(String message, RecodexNoticeTone tone, Duration? duration) {
+  void _show(String message, RecodexNoticeTone tone, Duration duration) {
     _timer?.cancel();
     setState(() {
       _message = message;
       _tone = tone;
       _revision++;
     });
-    if (duration != null) _timer = Timer(duration, _dismiss);
+    _timer = Timer(duration, _dismiss);
   }
 
   void _dismiss() {

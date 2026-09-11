@@ -22,14 +22,14 @@ class AboutPage extends StatelessWidget {
               maxWidth: SettingsPageContent.maxWidth,
             ),
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(24, 22, 24, 30),
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
               children: [
                 const _AboutBrandHeader(),
-                const SizedBox(height: 26),
+                const SizedBox(height: 22),
                 const _AboutSectionLabel(label: '产品定位'),
                 const SizedBox(height: 10),
                 const _AboutPurposeCard(),
-                const SizedBox(height: 22),
+                const SizedBox(height: 20),
                 const _AboutSectionLabel(label: '应用信息'),
                 const SizedBox(height: 10),
                 _AboutInfoGroup(
@@ -61,7 +61,7 @@ class AboutPage extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 22),
+                const SizedBox(height: 20),
                 const _AboutSectionLabel(label: '连接与安全'),
                 const SizedBox(height: 10),
                 const _AboutInfoGroup(
@@ -79,7 +79,7 @@ class AboutPage extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 30),
+                const SizedBox(height: 24),
                 const _AboutFooter(),
               ],
             ),
@@ -97,56 +97,88 @@ class _AboutBrandHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     return SettingsCard(
-      radius: 20,
-      padding: const EdgeInsets.all(20),
-      child: Row(
+      radius: 18,
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 15),
+      child: Column(
         children: [
-          SizedBox.square(
-            dimension: 104,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(26),
-              child: Image.asset(
-                'assets/images/recodex_icon_1024.png',
-                fit: BoxFit.cover,
-                semanticLabel: 'Recodex Companion 图标',
+          Row(
+            children: [
+              SizedBox.square(
+                dimension: 86,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(22),
+                  child: Image.asset(
+                    'assets/images/recodex_icon_1024.png',
+                    fit: BoxFit.cover,
+                    semanticLabel: 'Recodex Companion 图标',
+                  ),
+                ),
               ),
-            ),
-          ),
-          const SizedBox(width: 18),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Recodex',
-                  style: TextStyle(
-                    color: colors.text,
-                    fontSize: 28,
-                    height: 1.08,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Companion',
-                  style: TextStyle(
-                    color: colors.textMuted,
-                    fontSize: 17,
-                    height: 1.1,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                const Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _AboutTag(label: 'v1.0.4', accent: true),
-                    _AboutTag(label: '移动端控制台'),
+                    Text(
+                      'Recodex',
+                      style: TextStyle(
+                        color: colors.text,
+                        fontSize: 27,
+                        height: 1.05,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.4,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      'Companion',
+                      style: TextStyle(
+                        color: colors.textMuted,
+                        fontSize: 16,
+                        height: 1.1,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Wrap(
+                      spacing: 7,
+                      runSpacing: 6,
+                      children: [
+                        _AboutTag(label: 'v1.0.4', accent: true),
+                        _AboutTag(label: '移动端控制台'),
+                      ],
+                    ),
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 15),
+          Divider(height: 1, color: colors.textMuted.withValues(alpha: 0.14)),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Icon(RecodexIcons.cloudDone, size: 17, color: colors.icon),
+              const SizedBox(width: 8),
+              Text(
+                '个人远程控制台',
+                style: TextStyle(
+                  color: colors.textMuted,
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              Expanded(
+                child: Text(
+                  '安全连接 Codex 主机',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(color: colors.textMuted, fontSize: 12),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -218,21 +250,45 @@ class _AboutPurposeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     return SettingsCard(
-      padding: const EdgeInsets.fromLTRB(18, 16, 20, 18),
+      radius: 16,
+      padding: const EdgeInsets.fromLTRB(16, 15, 18, 16),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(RecodexIcons.terminal, color: colors.icon, size: 28),
-          const SizedBox(width: 16),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: colors.icon.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(9),
+              child: Icon(RecodexIcons.network, color: colors.icon, size: 20),
+            ),
+          ),
+          const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              '通过 Relay 安全连接手机与 Codex 主机，快速选择工作区、发送任务并查看执行状态。',
-              style: TextStyle(
-                color: colors.text,
-                fontSize: 14,
-                height: 1.55,
-                fontWeight: FontWeight.w400,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '随时掌控 Codex',
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: 15.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  '通过 Relay 安全连接手机与 Codex 主机，选择工作区、发送任务并查看执行状态。',
+                  style: TextStyle(
+                    color: colors.textMuted,
+                    fontSize: 13.5,
+                    height: 1.45,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -290,7 +346,7 @@ class _AboutInfoRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          Flexible(
+          Expanded(
             child: Text(
               value,
               maxLines: 1,

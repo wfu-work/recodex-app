@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -133,6 +134,10 @@ class NotificationSettingsPage extends StatelessWidget {
                         value: controller.soundEnabled.value,
                         onChanged: controller.setSoundEnabled,
                       ),
+                      if (_isMobilePlatform) ...[
+                        const _NotificationDivider(),
+                        _NotificationVibrationControl(controller: controller),
+                      ],
                     ],
                   ),
                 ),
@@ -201,6 +206,10 @@ class NotificationSettingsPage extends StatelessWidget {
     );
   }
 }
+
+bool get _isMobilePlatform =>
+    defaultTargetPlatform == TargetPlatform.android ||
+    defaultTargetPlatform == TargetPlatform.iOS;
 
 class _NotificationHero extends StatelessWidget {
   const _NotificationHero({required this.controller});
@@ -436,4 +445,115 @@ class _NotificationDivider extends StatelessWidget {
       color: context.recodexColors.textMuted.withValues(alpha: 0.14),
     );
   }
+}
+
+class _NotificationVibrationControl extends StatelessWidget {
+  const _NotificationVibrationControl({required this.controller});
+
+  final TaskNotificationController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final strength = controller.vibrationStrength.value;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 12, 14, 13),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(
+                controller.vibrationEnabled.value
+                    ? RecodexIcons.vibrate
+                    : RecodexIcons.vibrateOff,
+                color: colors.icon,
+                size: 21,
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '手机震动',
+                      style: TextStyle(
+                        color: colors.text,
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '通知到达时使用震动提醒',
+                      style: TextStyle(
+                        color: colors.textMuted,
+                        fontSize: 13,
+                        height: 1.35,
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              CodexSwitch(
+                value: controller.vibrationEnabled.value,
+                onChanged: controller.setVibrationEnabled,
+              ),
+            ],
+          ),
+          if (controller.vibrationEnabled.value) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const SizedBox(width: 34),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 3,
+                      thumbShape: const RoundSliderThumbShape(
+                        enabledThumbRadius: 7,
+                      ),
+                      overlayShape: const RoundSliderOverlayShape(
+                        overlayRadius: 15,
+                      ),
+                    ),
+                    child: Slider(
+                      min: 1,
+                      max: 3,
+                      divisions: 2,
+                      value: strength.toDouble(),
+                      label: _vibrationStrengthLabel(strength),
+                      onChanged: (value) =>
+                          controller.setVibrationStrength(value.round()),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 42,
+                  child: Text(
+                    _vibrationStrengthLabel(strength),
+                    textAlign: TextAlign.end,
+                    style: TextStyle(
+                      color: colors.textMuted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+String _vibrationStrengthLabel(int strength) {
+  return switch (strength) {
+    1 => '轻柔',
+    3 => '强烈',
+    _ => '标准',
+  };
 }

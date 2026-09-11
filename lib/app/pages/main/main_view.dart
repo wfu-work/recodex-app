@@ -154,8 +154,15 @@ class _MainPageState extends State<MainPage> {
           : null;
       final compactTimeline =
           settingsPreferences?.compactTimeline.value ?? false;
+      final supportsDesktopShortcuts = switch (defaultTargetPlatform) {
+        TargetPlatform.macOS ||
+        TargetPlatform.windows ||
+        TargetPlatform.linux => true,
+        _ => false,
+      };
       final shortcutsEnabled =
-          settingsPreferences?.shortcutsEnabled.value ?? true;
+          supportsDesktopShortcuts &&
+          (settingsPreferences?.shortcutsEnabled.value ?? true);
       final showConversationIndex =
           settingsPreferences?.showConversationIndex.value ?? true;
       final autoScrollToLatest =
@@ -1046,8 +1053,9 @@ class _MainPageState extends State<MainPage> {
     if (!mounted) return;
     setState(() => _sendingSupplement = false);
     if (accepted) {
-      if (_draftKey == key && _promptController.text == draft)
+      if (_draftKey == key && _promptController.text == draft) {
         _promptController.clear();
+      }
       if (_drafts[key] == draft) _drafts.remove(key);
     }
   }
@@ -1212,51 +1220,202 @@ class _MainPageState extends State<MainPage> {
     final confirmed = await showDialog<List<SkillInfo>>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('选择 Skill'),
-          content: SizedBox(
-            width: 420,
-            height: 420,
-            child: ListView(
+        builder: (context, setDialogState) {
+          final colors = context.recodexColors;
+          final theme = Theme.of(context);
+          return AlertDialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 20,
+              vertical: 24,
+            ),
+            titlePadding: const EdgeInsets.fromLTRB(24, 22, 24, 4),
+            contentPadding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            backgroundColor: colors.glassColor.withValues(alpha: 0.98),
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(24),
+              side: BorderSide(
+                color: colors.glassBorder.withValues(alpha: 0.7),
+              ),
+            ),
+            title: Row(
               children: [
-                for (final skill in controller.skills)
-                  CheckboxListTile(
-                    dense: true,
-                    value: selected.contains(skill.name),
-                    onChanged: (_) => setDialogState(() {
-                      if (selected.contains(skill.name)) {
-                        selected.remove(skill.name);
-                      } else {
-                        selected.add(skill.name);
-                      }
-                    }),
-                    secondary: const Icon(RecodexIcons.fast),
-                    title: Text('\$${skill.name}'),
-                    subtitle: Text(
-                      skill.description,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(11),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(9),
+                    child: Icon(
+                      RecodexIcons.fast,
+                      size: 19,
+                      color: theme.colorScheme.primary,
                     ),
                   ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '选择 Skill',
+                        style: TextStyle(
+                          color: colors.text,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        selected.isEmpty
+                            ? '为下一条消息添加能力'
+                            : '已选择 ${selected.length} 项',
+                        style: TextStyle(color: colors.textMuted, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(
-                dialogContext,
-                controller.skills
-                    .where((skill) => selected.contains(skill.name))
-                    .toList(),
+            content: SizedBox(
+              width: 440,
+              height: 420,
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: controller.skills.length,
+                separatorBuilder: (context, index) => const SizedBox(height: 8),
+                itemBuilder: (context, index) {
+                  final skill = controller.skills[index];
+                  final isSelected = selected.contains(skill.name);
+                  return Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () => setDialogState(() {
+                        if (isSelected) {
+                          selected.remove(skill.name);
+                        } else {
+                          selected.add(skill.name);
+                        }
+                      }),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 160),
+                        padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? theme.colorScheme.primary.withValues(
+                                  alpha: 0.10,
+                                )
+                              : colors.surfaceOverlay.withValues(alpha: 0.46),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: isSelected
+                                ? theme.colorScheme.primary.withValues(
+                                    alpha: 0.42,
+                                  )
+                                : colors.glassBorder.withValues(alpha: 0.56),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? theme.colorScheme.primary.withValues(
+                                        alpha: 0.16,
+                                      )
+                                    : colors.glassColor.withValues(alpha: 0.72),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(9),
+                                child: Icon(
+                                  RecodexIcons.fast,
+                                  size: 18,
+                                  color: isSelected
+                                      ? theme.colorScheme.primary
+                                      : colors.textMuted,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '\$${skill.name}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: colors.text,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    skill.description.isEmpty
+                                        ? '暂无描述'
+                                        : skill.description,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: colors.textMuted,
+                                      fontSize: 12,
+                                      height: 1.35,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Checkbox(
+                              value: isSelected,
+                              onChanged: (_) => setDialogState(() {
+                                if (isSelected) {
+                                  selected.remove(skill.name);
+                                } else {
+                                  selected.add(skill.name);
+                                }
+                              }),
+                              visualDensity: VisualDensity.compact,
+                              activeColor: theme.colorScheme.primary,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
-              child: Text('添加 ${selected.length} 项'),
             ),
-          ],
-        ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('取消'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(
+                  dialogContext,
+                  controller.skills
+                      .where((skill) => selected.contains(skill.name))
+                      .toList(),
+                ),
+                icon: const Icon(RecodexIcons.check, size: 17),
+                label: Text(
+                  selected.isEmpty ? '不添加' : '添加 ${selected.length} 项',
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
     if (!mounted || confirmed == null) return;

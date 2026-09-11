@@ -46,24 +46,72 @@ class RecodexDatePicker extends StatelessWidget {
       initialDate: initial,
       firstDate: first,
       lastDate: last,
+      helpText: '选择日期',
+      cancelText: '取消',
+      confirmText: '确定',
       builder: (context, child) {
         final theme = Theme.of(context);
+        final accent = theme.colorScheme.primary;
         return Theme(
           data: theme.copyWith(
             datePickerTheme: theme.datePickerTheme.copyWith(
+              backgroundColor: colors.glassColor,
+              elevation: 0,
+              shadowColor: Colors.transparent,
+              surfaceTintColor: Colors.transparent,
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(24),
+                borderRadius: BorderRadius.circular(22),
               ),
               headerBackgroundColor: colors.surfaceOverlay,
               headerForegroundColor: colors.text,
+              headerHeadlineStyle: TextStyle(
+                color: colors.text,
+                fontSize: 34,
+                fontWeight: FontWeight.w500,
+                letterSpacing: -0.4,
+              ),
+              headerHelpStyle: TextStyle(
+                color: colors.textMuted,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+              weekdayStyle: TextStyle(
+                color: colors.textMuted,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+              dayStyle: TextStyle(
+                color: colors.text,
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
               dayForegroundColor: WidgetStateProperty.resolveWith(
                 (states) => states.contains(WidgetState.selected)
                     ? theme.colorScheme.onPrimary
                     : colors.text,
               ),
-              todayForegroundColor: WidgetStatePropertyAll(colors.text),
-              todayBorder: BorderSide(color: colors.glassBorder),
+              dayBackgroundColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.selected)
+                    ? accent
+                    : Colors.transparent,
+              ),
+              dayShape: WidgetStatePropertyAll(
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              todayForegroundColor: WidgetStatePropertyAll(accent),
+              todayBackgroundColor: WidgetStatePropertyAll(
+                accent.withValues(alpha: 0.12),
+              ),
+              todayBorder: BorderSide(color: accent.withValues(alpha: 0.55)),
               dividerColor: colors.glassBorder,
+              cancelButtonStyle: TextButton.styleFrom(
+                foregroundColor: colors.textMuted,
+                textStyle: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              confirmButtonStyle: TextButton.styleFrom(
+                foregroundColor: accent,
+                textStyle: const TextStyle(fontWeight: FontWeight.w700),
+              ),
             ),
           ),
           child: child!,

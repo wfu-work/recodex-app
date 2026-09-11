@@ -106,36 +106,35 @@ void main() {
   });
 
   for (final dark in [false, true]) {
-    testWidgets('long accessible notice remains readable (dark=$dark)', (
-      tester,
-    ) async {
-      await mount(
-        tester,
-        dark: dark,
-        accessibleNavigation: true,
-        reduceMotion: true,
-        textScale: 2,
-      );
-      final message = List.filled(12, '连接失败，请检查 Relay 地址和网络后重试。').join();
-      RecodexNotice.show(pageContext, message, tone: RecodexNoticeTone.error);
-      await tester.pump();
-      expect(find.text(message), findsOneWidget);
-      expect(tester.takeException(), isNull);
-      final fade = tester.widget<FadeTransition>(
-        find
-            .ancestor(
-              of: find.text(message),
-              matching: find.byType(FadeTransition),
-            )
-            .first,
-      );
-      expect(fade.opacity.value, 1);
-      await tester.pump(const Duration(seconds: 10));
-      expect(find.text(message), findsOneWidget);
-      await tester.tap(find.bySemanticsLabel('关闭提示'));
-      await tester.pumpAndSettle();
-      expect(find.text(message), findsNothing);
-    });
+    testWidgets(
+      'accessible notice remains readable and auto dismisses (dark=$dark)',
+      (tester) async {
+        await mount(
+          tester,
+          dark: dark,
+          accessibleNavigation: true,
+          reduceMotion: true,
+          textScale: 2,
+        );
+        final message = List.filled(12, '连接失败，请检查 Relay 地址和网络后重试。').join();
+        RecodexNotice.show(pageContext, message, tone: RecodexNoticeTone.error);
+        await tester.pump();
+        expect(find.text(message), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        final fade = tester.widget<FadeTransition>(
+          find
+              .ancestor(
+                of: find.text(message),
+                matching: find.byType(FadeTransition),
+              )
+              .first,
+        );
+        expect(fade.opacity.value, 1);
+        await tester.pump(const Duration(seconds: 5));
+        await tester.pumpAndSettle();
+        expect(find.text(message), findsNothing);
+      },
+    );
   }
 
   testWidgets(

@@ -1,28 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">Recodex</title>
-  <desc id="desc">A blue-violet command prompt bubble on a soft rounded tile</desc>
-  <defs>
-    <linearGradient id="paper" x1="210" y1="128" x2="814" y2="896" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#eef3ff"/>
-    </linearGradient>
-    <linearGradient id="bubble" x1="298" y1="289" x2="686" y2="733" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#b8b5ff"/>
-      <stop offset=".42" stop-color="#6fa7ff"/>
-      <stop offset="1" stop-color="#3448f4"/>
-    </linearGradient>
-    <radialGradient id="shine" cx="42%" cy="28%" r="58%">
-      <stop offset="0" stop-color="#ffffff" stop-opacity=".72"/>
-      <stop offset=".56" stop-color="#ffffff" stop-opacity=".16"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
+  <desc id="desc">A flat blue command prompt mark with a connection status dot</desc>
 
-  <rect width="1024" height="1024" rx="230" fill="url(#paper)"/>
-  <g transform="translate(512 512) scale(1.32) translate(-512 -512)">
-    <rect x="216" y="231" width="592" height="562" rx="188" fill="url(#bubble)"/>
-    <ellipse cx="512" cy="301" rx="226" ry="98" fill="url(#shine)"/>
-    <path d="M336 404 436 506 336 608" fill="none" stroke="#edf6ff" stroke-width="52" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M522 620h166" fill="none" stroke="#edf6ff" stroke-width="52" stroke-linecap="round"/>
-  </g>
+  <!-- A single solid field keeps the mark crisp at launcher sizes. -->
+  <rect width="1024" height="1024" rx="224" fill="#2563EB"/>
+  <rect x="88" y="88" width="848" height="848" rx="184" fill="none" stroke="#60A5FA" stroke-width="10" opacity="0.42"/>
+
+  <!-- Command prompt: the core Recodex connection to a Codex host. -->
+  <path d="M260 330 455 512 260 694" fill="none" stroke="#FFFFFF" stroke-width="78" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M535 694h230" fill="none" stroke="#FFFFFF" stroke-width="78" stroke-linecap="round"/>
+
+  <!-- Small status dot adds the remote, always-connected identity. -->
+  <circle cx="780" cy="260" r="36" fill="#34D399"/>
 </svg>
