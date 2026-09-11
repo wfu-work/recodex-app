@@ -653,6 +653,7 @@ class SessionEvent {
     this.attachments = const [],
     this.itemId,
     this.turnId,
+    this.phase,
     this.isDelta = false,
     this.fileDiffs = const {},
   });
@@ -678,6 +679,9 @@ class SessionEvent {
   final String? itemId;
   final String? turnId;
 
+  /// Agent message stage: commentary or final_answer. Older caches omit it.
+  final String? phase;
+
   /// True for a transport delta. Snapshot events with the same item id
   /// replace the accumulated text; deltas append to it.
   final bool isDelta;
@@ -697,6 +701,7 @@ class SessionEvent {
     List<EventAttachment>? attachments,
     String? itemId,
     String? turnId,
+    String? phase,
     bool? isDelta,
     Map<String, String>? fileDiffs,
   }) {
@@ -711,6 +716,7 @@ class SessionEvent {
       attachments: attachments ?? this.attachments,
       itemId: itemId ?? this.itemId,
       turnId: turnId ?? this.turnId,
+      phase: phase ?? this.phase,
       isDelta: isDelta ?? this.isDelta,
       fileDiffs: fileDiffs ?? this.fileDiffs,
     );
@@ -733,6 +739,7 @@ class SessionEvent {
           .toList(),
       itemId: json['itemId'] as String? ?? json['item_id'] as String?,
       turnId: json['turnId'] as String? ?? json['turn_id'] as String?,
+      phase: json['phase'] as String?,
       isDelta: json['isDelta'] == true || json['is_delta'] == true,
       fileDiffs: TurnFileChanges.fromJson(json['fileDiffs']),
     );
@@ -753,6 +760,7 @@ class SessionEvent {
           .toList(),
     if (itemId != null && itemId!.trim().isNotEmpty) 'itemId': itemId,
     if (turnId != null && turnId!.trim().isNotEmpty) 'turnId': turnId,
+    if (phase != null) 'phase': phase,
     if (isDelta) 'isDelta': true,
     if (fileDiffs.isNotEmpty) 'fileDiffs': fileDiffs,
   };

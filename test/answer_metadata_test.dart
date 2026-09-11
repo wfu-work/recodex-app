@@ -93,6 +93,7 @@ void main() {
         inputTokens: total - 10,
         outputTokens: 10,
         totalTokens: total,
+        scope: TokenUsageScope.turn,
       ),
     );
     expect(answerTokenUsage([usage(100), usage(100)])?.totalTokens, 100);
@@ -125,6 +126,145 @@ void main() {
     expect(usage?.totalTokens, 150);
     expect(usage?.scope, TokenUsageScope.turn);
   });
+
+  SessionEvent cumulative(
+    String turnId,
+    int input,
+    int output, {
+    int? cached,
+    int? reasoning,
+  }) => SessionEvent(
+    kind: 'token_usage',
+    text: '',
+    turnId: turnId,
+    usage: TokenUsage(
+      inputTokens: input,
+      outputTokens: output,
+      totalTokens: input + output,
+      cachedInputTokens: cached,
+      reasoningOutputTokens: reasoning,
+      scope: TokenUsageScope.thread,
+    ),
+  );
+  final previousAnswer = [
+    cumulative('a', 8000, 2000, cached: 6000, reasoning: 1000),
+    const SessionEvent(kind: 'done', text: '', turnId: 'a'),
+  ];
+
+  test('derives all calls in the answer without adding repeated snapshots', () {
+    final events = [
+      cumulative('b', 9000, 2100, cached: 6700, reasoning: 1050),
+      cumulative('b', 12000, 2500, cached: 9000, reasoning: 1200),
+      cumulative('b', 12000, 2500, cached: 9000, reasoning: 1200),
+    ];
+    final usage = answerTokenUsage(
+      events,
+      previousAnswerEvents: previousAnswer,
+    )!;
+    expect(usage.scope, TokenUsageScope.turn);
+    expect(usage.totalTokens, 4500);
+    expect(usage.inputTokens, 4000);
+    expect(usage.outputTokens, 500);
+    expect(usage.cachedInputTokens, 3000);
+    expect(usage.reasoningOutputTokens, 200);
+    expect(tokenUsageLabel(usage), '本次回答消耗 · 总 4.5K');
+    final restored = events
+        .map((event) => SessionEvent.fromJson(event.toJson(cacheSafe: true)))
+        .toList();
+    expect(
+      answerTokenUsage(
+        restored,
+        previousAnswerEvents: previousAnswer,
+      )?.totalTokens,
+      4500,
+    );
+  });
+
+  test('does not substitute cumulative, last-call or unscoped usage', () {
+    for (final scope in [
+      TokenUsageScope.thread,
+      TokenUsageScope.lastCall,
+      TokenUsageScope.unknown,
+    ]) {
+      final events = [
+        SessionEvent(
+          kind: 'done',
+          text: '',
+          turnId: 'b',
+          usage: TokenUsage(
+            inputTokens: 12000,
+            outputTokens: 2500,
+            totalTokens: 14500,
+            scope: scope,
+          ),
+        ),
+      ];
+      expect(answerTokenUsage(events), isNull);
+    }
+  });
+
+  test('rejects missing, unfinished, ambiguous and same-turn baselines', () {
+    final current = [cumulative('b', 12000, 2500)];
+    for (final previous in <List<SessionEvent>>[
+      [],
+      [cumulative('a', 8000, 2000)],
+      [const SessionEvent(kind: 'done', text: '', turnId: 'a')],
+      [
+        cumulative('b', 8000, 2000),
+        const SessionEvent(kind: 'done', text: '', turnId: 'b'),
+      ],
+      [...previousAnswer, cumulative('other', 8500, 2100)],
+      [
+        cumulative('a', 8000, 2000).copyWith(turnId: ''),
+        const SessionEvent(kind: 'done', text: ''),
+      ],
+    ]) {
+      expect(answerTokenUsage(current, previousAnswerEvents: previous), isNull);
+    }
+  });
+
+  test('counter resets invalidate a turn even after counters recover', () {
+    for (final samples in [
+      [cumulative('b', 100, 10)],
+      [cumulative('b', 9000, 1900)],
+      [
+        cumulative('b', 12000, 2500),
+        cumulative('b', 100, 10),
+        cumulative('b', 15000, 3000),
+      ],
+    ]) {
+      expect(
+        answerTokenUsage(samples, previousAnswerEvents: previousAnswer),
+        isNull,
+      );
+    }
+  });
+
+  test(
+    'missing optional breakdowns remain unavailable and zero stays valid',
+    () {
+      final usage = answerTokenUsage([
+        cumulative('b', 8000, 2000),
+      ], previousAnswerEvents: previousAnswer)!;
+      expect(usage.totalTokens, 0);
+      expect(usage.cachedInputTokens, isNull);
+      expect(usage.reasoningOutputTokens, isNull);
+      final totalOnly = answerTokenUsage([
+        SessionEvent(
+          kind: 'done',
+          text: '',
+          turnId: 'b',
+          usage: readTokenUsage({
+            'tokenUsage': {
+              'total': {'totalTokens': 14500},
+            },
+          }),
+        ),
+      ], previousAnswerEvents: previousAnswer)!;
+      expect(totalOnly.totalTokens, 4500);
+      expect(totalOnly.hasBreakdown, isFalse);
+    },
+  );
 
   test(
     'missing statistics and item timestamps do not fabricate completion',

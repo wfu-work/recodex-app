@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:recodex/app/pages/settings/theme_controller.dart';
@@ -64,7 +65,7 @@ void main() {
     expect(controller.accent.value, RecodexThemeAccent.azure);
   });
 
-  testWidgets('matches Codex switch dimensions and selected colors', (
+  testWidgets('shares Codex switch colors across light and dark themes', (
     tester,
   ) async {
     final themes = <(ThemeData, Color, Color)>[
@@ -93,10 +94,15 @@ void main() {
         theme.switchTheme.thumbColor?.resolve({WidgetState.selected}),
         thumbColor,
       );
+      expect(theme.switchTheme.thumbColor?.resolve({}), Colors.white);
+      expect(
+        theme.switchTheme.trackColor?.resolve({}),
+        theme.extension<RecodexThemeColors>()!.text.withValues(alpha: 0.1),
+      );
     }
   });
 
-  testWidgets('keeps the touch target with a controlled track radius', (
+  testWidgets('keeps a generous touch target around the compact Codex pill', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -109,7 +115,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(tester.getSize(find.byType(CodexSwitch)), const Size(52, 40));
+    expect(tester.getSize(find.byType(CodexSwitch)), const Size(44, 44));
     expect(find.byType(Switch), findsOneWidget);
 
     final track = tester.widget<AnimatedContainer>(
@@ -117,11 +123,78 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('codex-switch-track'))),
-      const Size(52, 28),
+      const Size(32, 20),
     );
     expect(
       (track.decoration! as BoxDecoration).borderRadius,
-      BorderRadius.circular(12),
+      BorderRadius.circular(10),
     );
+  });
+
+  testWidgets('switch supports touch, keyboard, and accessible toggle state', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    var value = false;
+    var enabled = true;
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.light,
+        home: Scaffold(
+          body: Center(
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return CodexSwitch(
+                  value: value,
+                  onChanged: enabled
+                      ? (next) => setState(() => value = next)
+                      : null,
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getSemantics(find.byType(Switch)),
+      matchesSemantics(
+        hasEnabledState: true,
+        isEnabled: true,
+        hasToggledState: true,
+        isFocusable: true,
+        hasTapAction: true,
+        hasFocusAction: true,
+      ),
+    );
+
+    // The space around the visible pill remains tappable.
+    await tester.tapAt(
+      tester.getTopLeft(find.byType(CodexSwitch)) + const Offset(3, 3),
+    );
+    await tester.pumpAndSettle();
+    expect(value, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+    await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pumpAndSettle();
+    expect(value, isFalse);
+
+    rebuild(() => enabled = false);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(CodexSwitch));
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pumpAndSettle();
+    expect(value, isFalse);
+    expect(
+      tester.getSemantics(find.byType(Switch)),
+      matchesSemantics(hasEnabledState: true, hasToggledState: true),
+    );
+    semantics.dispose();
   });
 }

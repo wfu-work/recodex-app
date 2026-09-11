@@ -13,10 +13,12 @@ import '../../theme/recodex_theme.dart';
 import 'bridge_controller.dart';
 
 class GitDiffPageArgs {
-  const GitDiffPageArgs({required this.snapshot, required this.selectedPath});
+  const GitDiffPageArgs({required this.snapshot, required this.selectedPath,
+    this.followWorkspace = true});
 
   final GitSnapshot? snapshot;
   final String selectedPath;
+  final bool followWorkspace;
 }
 
 class GitDiffPage extends StatelessWidget {
@@ -34,7 +36,7 @@ class GitDiffPage extends StatelessWidget {
     final controller = Get.isRegistered<BridgeController>()
         ? Get.find<BridgeController>()
         : null;
-    final body = controller == null
+    final body = controller == null || !pageArgs.followWorkspace
         ? _GitDiffBody(
             snapshot: pageArgs.snapshot,
             selectedPath: pageArgs.selectedPath,

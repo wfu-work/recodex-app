@@ -73,6 +73,100 @@ void main() {
     expect((decoration as BoxDecoration).border, isNull);
   });
 
+  testWidgets('trigger follows the selected label inside a wider parent', (
+    tester,
+  ) async {
+    var selected = 'short';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.light,
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 240,
+              child: StatefulBuilder(
+                builder: (context, setState) => RecodexDropdown<String>(
+                  value: selected,
+                  compact: true,
+                  maxWidth: 180,
+                  options: const [
+                    RecodexDropdownOption(value: 'short', label: '舒适'),
+                    RecodexDropdownOption(value: 'long', label: '特大 · 32'),
+                  ],
+                  onChanged: (next) => setState(() => selected = next),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    final trigger = find.byType(RecodexPopupMenuButton<String>);
+    final shortWidth = tester.getSize(trigger).width;
+    expect(shortWidth, lessThan(100));
+
+    await tester.tap(trigger);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('特大 · 32'));
+    await tester.pumpAndSettle();
+    expect(selected, 'long');
+    expect(tester.getSize(trigger).width, greaterThan(shortWidth));
+    expect(tester.getSize(trigger).width, lessThan(180));
+
+    await tester.tap(trigger);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('舒适'));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(trigger).width, shortWidth);
+  });
+
+  testWidgets('long labels and large text fit a constrained trigger', (
+    tester,
+  ) async {
+    const label = '工作区 / projects / a-very-long-project-name';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.light,
+        home: MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+          child: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 120,
+                child: RecodexDropdown<String>(
+                  value: 'long',
+                  leadingIcon: RecodexIcons.folderOpen,
+                  compact: true,
+                  options: const [
+                    RecodexDropdownOption(value: 'long', label: label),
+                  ],
+                  onChanged: (_) {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(tester.takeException(), isNull);
+    final trigger = find.byType(RecodexPopupMenuButton<String>);
+    final triggerRect = tester.getRect(trigger);
+    expect(triggerRect.width, 120);
+    expect(
+      tester.getRect(find.byIcon(RecodexIcons.chevronDown)).right,
+      lessThan(triggerRect.right),
+    );
+
+    await tester.tap(trigger);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(
+      tester.getSize(find.byType(PopupMenuItem<String>)).width,
+      greaterThan(triggerRect.width),
+    );
+    expect(find.text(label), findsNWidgets(2));
+  });
+
   testWidgets('RecodexPopupMenuButton uses the global rounded menu theme', (
     tester,
   ) async {

@@ -72,16 +72,99 @@ TokenUsage? readTokenUsage(
   return null;
 }
 
-TokenUsage? answerTokenUsage(List<SessionEvent> events) {
-  final latest = <TokenUsageScope, TokenUsage>{};
+/// Prefer the host's complete turn measurement. Legacy cumulative snapshots
+/// can only be differenced against the immediately preceding completed turn.
+TokenUsage? answerTokenUsage(
+  List<SessionEvent> events, {
+  List<SessionEvent> previousAnswerEvents = const [],
+}) {
+  TokenUsage? turnUsage;
   for (final event in events) {
     final usage = event.usage;
-    if (usage != null) latest[usage.scope] = usage;
+    if (usage?.scope == TokenUsageScope.turn) turnUsage = usage;
   }
-  return latest[TokenUsageScope.turn] ??
-      latest[TokenUsageScope.unknown] ??
-      latest[TokenUsageScope.thread] ??
-      latest[TokenUsageScope.lastCall];
+  if (turnUsage != null) return turnUsage;
+
+  String? singleTurnId(List<SessionEvent> source) {
+    final ids = source.map((event) => event.turnId).whereType<String>().toSet();
+    return ids.length == 1 && ids.single.isNotEmpty ? ids.single : null;
+  }
+
+  final turnId = singleTurnId(events);
+  final previousTurnId = singleTurnId(previousAnswerEvents);
+  if (turnId == null || previousTurnId == null || turnId == previousTurnId) {
+    return null;
+  }
+  if (!previousAnswerEvents.any(
+    (event) =>
+        event.turnId == previousTurnId &&
+        (event.completedAt != null ||
+            const [
+              'done',
+              'completed',
+              'interrupted',
+              'error',
+            ].contains(event.kind)),
+  )) {
+    return null;
+  }
+  final previousEnd = answerCompletedAt(previousAnswerEvents);
+  final currentEnd = answerCompletedAt(events);
+  if (previousEnd != null &&
+      currentEnd != null &&
+      currentEnd.isBefore(previousEnd)) {
+    return null;
+  }
+
+  final baseline = previousAnswerEvents
+      .where((event) => event.turnId == previousTurnId)
+      .map((event) => event.usage)
+      .whereType<TokenUsage>()
+      .where((usage) => usage.scope == TokenUsageScope.thread)
+      .lastOrNull;
+  if (baseline == null) return null;
+
+  TokenUsage? total;
+  var previous = baseline;
+  bool decreased(TokenUsage value, TokenUsage before) =>
+      value.totalTokens < before.totalTokens ||
+      (value.hasBreakdown &&
+          before.hasBreakdown &&
+          (value.inputTokens < before.inputTokens ||
+              value.outputTokens < before.outputTokens));
+  for (final event in events) {
+    final usage = event.usage;
+    if (event.turnId != turnId || usage?.scope != TokenUsageScope.thread) {
+      continue;
+    }
+    // A reset invalidates this turn even if later counters exceed its baseline.
+    if (decreased(usage!, previous) || decreased(usage, baseline)) {
+      return null;
+    }
+    total = usage;
+    previous = usage;
+  }
+  if (total == null) return null;
+  int? difference(int? value, int? before) =>
+      value != null && before != null && value >= before
+      ? value - before
+      : null;
+  final hasBreakdown = total.hasBreakdown && baseline.hasBreakdown;
+  return TokenUsage(
+    inputTokens: hasBreakdown ? total.inputTokens - baseline.inputTokens : 0,
+    outputTokens: hasBreakdown ? total.outputTokens - baseline.outputTokens : 0,
+    totalTokens: total.totalTokens - baseline.totalTokens,
+    scope: TokenUsageScope.turn,
+    hasBreakdown: hasBreakdown,
+    cachedInputTokens: difference(
+      total.cachedInputTokens,
+      baseline.cachedInputTokens,
+    ),
+    reasoningOutputTokens: difference(
+      total.reasoningOutputTokens,
+      baseline.reasoningOutputTokens,
+    ),
+  );
 }
 
 DateTime? answerCompletedAt(List<SessionEvent> events) {
@@ -113,8 +196,9 @@ DateTime? answerCompletedAt(List<SessionEvent> events) {
 }
 
 String tokenUsageLabel(TokenUsage? usage) {
-  if (usage == null) return '消耗 未提供';
+  if (usage == null) return '本次回答消耗 未提供';
   final prefix = switch (usage.scope) {
+    TokenUsageScope.turn => '本次回答消耗',
     TokenUsageScope.thread => '会话累计消耗',
     TokenUsageScope.lastCall => '最近调用消耗',
     _ => '消耗',

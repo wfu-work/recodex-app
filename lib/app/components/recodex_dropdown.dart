@@ -89,6 +89,9 @@ class RecodexDropdownOption<T> {
   final bool enabled;
 }
 
+/// A content-sized selector. The trigger hugs the selected label, even when
+/// its parent reserves more space, and ellipsizes within [maxWidth] or the
+/// available width. Popup sizing is independent of the trigger.
 class RecodexDropdown<T> extends StatelessWidget {
   const RecodexDropdown({
     required this.value,
@@ -98,7 +101,7 @@ class RecodexDropdown<T> extends StatelessWidget {
     this.tooltip,
     this.warningWhen,
     this.compact = false,
-    this.maxWidth = 168,
+    this.maxWidth = 240,
     this.enabled = true,
     this.showCheckmark = true,
     this.showBorder = true,
@@ -112,6 +115,8 @@ class RecodexDropdown<T> extends StatelessWidget {
   final String? tooltip;
   final bool Function(T value)? warningWhen;
   final bool compact;
+
+  /// Maximum width of the entire trigger, including icons and padding.
   final double maxWidth;
   final bool enabled;
   final bool showCheckmark;
@@ -136,95 +141,109 @@ class RecodexDropdown<T> extends StatelessWidget {
     final radius = BorderRadius.circular(compact ? 13 : 16);
     final verticalPadding = compact ? 7.0 : 9.0;
 
-    return RecodexPopupMenuButton<T>(
-      initialValue: selected.value,
-      enabled: enabled,
-      tooltip: tooltip ?? '选择${selected.label}',
-      constraints: BoxConstraints(minWidth: maxWidth),
-      borderRadius: radius,
-      onSelected: onChanged,
-      itemBuilder: (context) => [
-        for (final option in options)
-          PopupMenuItem<T>(
-            value: option.value,
-            enabled: option.enabled,
-            height: compact ? 44 : 48,
-            child: Row(
-              children: [
-                if (option.leading != null) ...[
-                  IconTheme.merge(
-                    data: IconThemeData(
-                      size: 18,
-                      color: context.recodexColors.textMuted,
-                    ),
-                    child: option.leading!,
-                  ),
-                  const SizedBox(width: 10),
-                ] else if (showCheckmark) ...[
-                  SizedBox(
-                    width: 18,
-                    child: option.value == selected.value
-                        ? Icon(RecodexIcons.check, size: 18, color: colors.icon)
-                        : null,
-                  ),
-                  const SizedBox(width: 10),
-                ],
-                Expanded(child: Text(option.label)),
-              ],
-            ),
-          ),
-      ],
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: isDark
-              ? colors.glassColor.withValues(alpha: 0.46)
-              : colors.surfaceOverlay.withValues(alpha: 0.72),
+    return Align(
+      alignment: AlignmentDirectional.centerEnd,
+      widthFactor: 1,
+      heightFactor: 1,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: RecodexPopupMenuButton<T>(
+          initialValue: selected.value,
+          enabled: enabled,
+          tooltip: tooltip ?? '选择${selected.label}',
           borderRadius: radius,
-          border: showBorder
-              ? Border.all(
-                  color: isWarning
-                      ? colors.warning.withValues(alpha: 0.42)
-                      : colors.glassBorder.withValues(
-                          alpha: isDark ? 0.84 : 0.92,
+          onSelected: onChanged,
+          itemBuilder: (context) => [
+            for (final option in options)
+              PopupMenuItem<T>(
+                value: option.value,
+                enabled: option.enabled,
+                height: compact ? 44 : 48,
+                child: Row(
+                  children: [
+                    if (option.leading != null) ...[
+                      IconTheme.merge(
+                        data: IconThemeData(
+                          size: 18,
+                          color: context.recodexColors.textMuted,
                         ),
-                )
-              : null,
-        ),
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 10 : 13,
-            vertical: verticalPadding,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (leadingIcon != null) ...[
-                Icon(leadingIcon, size: compact ? 17 : 18, color: foreground),
-                SizedBox(width: compact ? 5 : 7),
-              ],
-              ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: maxWidth),
-                child: Text(
-                  selected.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: foreground,
-                    fontSize: compact ? 13 : 14,
-                    // Codex uses a medium-weight label for compact composer
-                    // controls; heavier weights make the pills look denser
-                    // than the surrounding input text.
-                    fontWeight: compact ? FontWeight.w600 : FontWeight.w800,
-                  ),
+                        child: option.leading!,
+                      ),
+                      const SizedBox(width: 10),
+                    ] else if (showCheckmark) ...[
+                      SizedBox(
+                        width: 18,
+                        child: option.value == selected.value
+                            ? Icon(
+                                RecodexIcons.check,
+                                size: 18,
+                                color: colors.icon,
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                    Expanded(child: Text(option.label)),
+                  ],
                 ),
               ),
-              SizedBox(width: compact ? 2 : 4),
-              Icon(
-                RecodexIcons.chevronDown,
-                size: compact ? 17 : 18,
-                color: foreground,
+          ],
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: isDark
+                  ? colors.glassColor.withValues(alpha: 0.46)
+                  : colors.surfaceOverlay.withValues(alpha: 0.72),
+              borderRadius: radius,
+              border: showBorder
+                  ? Border.all(
+                      color: isWarning
+                          ? colors.warning.withValues(alpha: 0.42)
+                          : colors.glassBorder.withValues(
+                              alpha: isDark ? 0.84 : 0.92,
+                            ),
+                    )
+                  : null,
+            ),
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? 10 : 13,
+                vertical: verticalPadding,
               ),
-            ],
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (leadingIcon != null) ...[
+                    Icon(
+                      leadingIcon,
+                      size: compact ? 17 : 18,
+                      color: foreground,
+                    ),
+                    SizedBox(width: compact ? 5 : 7),
+                  ],
+                  Flexible(
+                    child: Text(
+                      selected.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: foreground,
+                        fontSize: compact ? 13 : 14,
+                        // Codex uses a medium-weight label for compact composer
+                        // controls; heavier weights make the pills look denser
+                        // than the surrounding input text.
+                        fontWeight: compact ? FontWeight.w600 : FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: compact ? 2 : 4),
+                  Icon(
+                    RecodexIcons.chevronDown,
+                    size: compact ? 17 : 18,
+                    color: foreground,
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../components/recodex_dropdown.dart';
 import '../../theme/recodex_theme.dart';
 
 class SettingsSectionTitle extends StatelessWidget {
@@ -132,6 +133,7 @@ class SettingsRow extends StatelessWidget {
     required this.title,
     required this.subtitle,
     this.trailing,
+    this.stackTrailing = false,
     this.onTap,
     this.showChevron = false,
     super.key,
@@ -141,6 +143,7 @@ class SettingsRow extends StatelessWidget {
   final String title;
   final String subtitle;
   final Widget? trailing;
+  final bool stackTrailing;
   final VoidCallback? onTap;
   final bool showChevron;
 
@@ -159,7 +162,7 @@ class SettingsRow extends StatelessWidget {
               children: [
                 Text(
                   title,
-                  maxLines: 1,
+                  maxLines: stackTrailing ? 2 : 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: colors.text,
@@ -170,7 +173,7 @@ class SettingsRow extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   subtitle,
-                  maxLines: 2,
+                  maxLines: stackTrailing ? 3 : 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: colors.textMuted,
@@ -179,10 +182,20 @@ class SettingsRow extends StatelessWidget {
                     fontWeight: FontWeight.w400,
                   ),
                 ),
+                if (stackTrailing && trailing != null) ...[
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: trailing!,
+                  ),
+                ],
               ],
             ),
           ),
-          if (trailing != null) ...[const SizedBox(width: 10), trailing!],
+          if (trailing != null && !stackTrailing) ...[
+            const SizedBox(width: 10),
+            trailing!,
+          ],
           if (showChevron)
             Icon(RecodexIcons.chevronRight, color: colors.textMuted),
         ],
@@ -192,6 +205,73 @@ class SettingsRow extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(onTap: onTap, child: content),
+    );
+  }
+}
+
+/// The shared selector row for settings pages. Short values stay compact;
+/// long values leave room for the title and remain readable in the popup.
+class SettingsDropdownRow<T> extends StatelessWidget {
+  const SettingsDropdownRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.value,
+    required this.options,
+    required this.onChanged,
+    this.emptyLabel,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final T value;
+  final List<RecodexDropdownOption<T>> options;
+  final ValueChanged<T> onChanged;
+  final String? emptyLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final textScale = MediaQuery.textScalerOf(context).scale(13) / 13;
+        final stackTrailing = constraints.maxWidth / textScale < 300;
+        final maxWidth =
+            (stackTrailing
+                    ? constraints.maxWidth - 65
+                    : constraints.maxWidth * 0.45)
+                .clamp(0.0, 220.0);
+        return SettingsRow(
+          icon: icon,
+          title: title,
+          subtitle: subtitle,
+          stackTrailing: stackTrailing,
+          trailing: options.isNotEmpty
+              ? RecodexDropdown<T>(
+                  value: value,
+                  options: options,
+                  onChanged: onChanged,
+                  maxWidth: maxWidth,
+                  compact: true,
+                  tooltip: '选择$title',
+                )
+              : emptyLabel == null
+              ? null
+              : ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: maxWidth),
+                  child: Text(
+                    emptyLabel!,
+                    textAlign: TextAlign.end,
+                    style: TextStyle(
+                      color: context.recodexColors.textMuted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+        );
+      },
     );
   }
 }
@@ -236,83 +316,110 @@ class SettingsToggleRow extends StatelessWidget {
   }
 }
 
-/// A compact switch treatment used by every settings row.
-///
-/// The native switch remains in the tree for platform semantics and input
-/// handling, while the visible layer uses Codex's quieter 12px track radius.
-/// Keeping the 52x40 canvas preserves the comfortable settings-row hit area.
-class CodexSwitch extends StatelessWidget {
+/// Codex's 32x20 pill and 16px white thumb, with a larger touch target.
+/// The framework switch handles semantics, keyboard input, and dragging.
+class CodexSwitch extends StatefulWidget {
   const CodexSwitch({required this.value, required this.onChanged, super.key});
-
-  static const _trackWidth = 52.0;
-  static const _trackHeight = 28.0;
-  static const _trackRadius = 12.0;
-  static const _thumbSize = 22.0;
-  static const _thumbInset = 4.0;
 
   final bool value;
   final ValueChanged<bool>? onChanged;
 
   @override
+  State<CodexSwitch> createState() => _CodexSwitchState();
+}
+
+class _CodexSwitchState extends State<CodexSwitch> {
+  static const _trackWidth = 32.0;
+  static const _trackHeight = 20.0;
+  static const _thumbSize = 16.0;
+  static const _thumbInset = 2.0;
+
+  bool _focused = false;
+
+  @override
   Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final enabled = onChanged != null;
-    final trackColor = value
-        ? RecodexTheme.codexBlue
-        : Theme.of(context).colorScheme.outline.withValues(alpha: 0.5);
-    final thumbColor = value ? const Color(0xffffffff) : colors.textMuted;
+    final switchTheme = Theme.of(context).switchTheme;
+    final enabled = widget.onChanged != null;
+    final states = <WidgetState>{if (widget.value) WidgetState.selected};
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 150);
 
     return SizedBox(
-      width: 52,
-      height: 40,
+      width: 44,
+      height: 44,
       child: Stack(
         alignment: Alignment.center,
         children: [
           IgnorePointer(
             child: AnimatedContainer(
-              key: const ValueKey('codex-switch-track'),
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOutCubic,
-              width: _trackWidth,
-              height: _trackHeight,
-              padding: const EdgeInsets.symmetric(horizontal: _thumbInset),
+              duration: duration,
+              width: _trackWidth + 6,
+              height: _trackHeight + 6,
+              alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: trackColor.withValues(alpha: enabled ? 1 : 0.5),
-                borderRadius: BorderRadius.circular(_trackRadius),
+                borderRadius: BorderRadius.circular((_trackHeight + 6) / 2),
+                border: Border.all(
+                  color: enabled && _focused
+                      ? RecodexTheme.codexBlue
+                      : Colors.transparent,
+                  width: 2,
+                ),
               ),
-              child: AnimatedAlign(
-                duration: const Duration(milliseconds: 180),
-                curve: Curves.easeOutCubic,
-                alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+              child: AnimatedOpacity(
+                opacity: enabled ? 1 : 0.6,
+                duration: duration,
                 child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  curve: Curves.easeOutCubic,
-                  width: _thumbSize,
-                  height: _thumbSize,
+                  key: const ValueKey('codex-switch-track'),
+                  duration: duration,
+                  curve: Curves.easeOut,
+                  width: _trackWidth,
+                  height: _trackHeight,
+                  padding: const EdgeInsets.symmetric(horizontal: _thumbInset),
                   decoration: BoxDecoration(
-                    color: thumbColor.withValues(alpha: enabled ? 1 : 0.5),
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(
-                          alpha: enabled ? 0.12 : 0.06,
-                        ),
-                        blurRadius: 2,
-                        offset: const Offset(0, 1),
+                    color: switchTheme.trackColor?.resolve(states),
+                    borderRadius: BorderRadius.circular(_trackHeight / 2),
+                  ),
+                  child: AnimatedAlign(
+                    duration: duration,
+                    curve: Curves.easeOut,
+                    alignment: widget.value
+                        ? AlignmentDirectional.centerEnd
+                        : AlignmentDirectional.centerStart,
+                    child: Container(
+                      width: _thumbSize,
+                      height: _thumbSize,
+                      decoration: BoxDecoration(
+                        color: switchTheme.thumbColor?.resolve(states),
+                        shape: BoxShape.circle,
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x14000000),
+                            blurRadius: 2,
+                            spreadRadius: -1,
+                            offset: Offset(0, 1),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-          // Keep the framework's semantics, keyboard behavior, and drag
-          // handling. Opacity hides only its painted layer; it still receives
-          // input above the custom visual.
           Positioned.fill(
             child: Opacity(
               opacity: 0,
-              child: Switch(value: value, onChanged: onChanged),
+              // A fully transparent switch must still expose its state and
+              // toggle action to assistive technologies.
+              alwaysIncludeSemantics: true,
+              child: Switch(
+                value: widget.value,
+                onChanged: widget.onChanged,
+                onFocusChange: (focused) {
+                  setState(() => _focused = focused);
+                },
+              ),
             ),
           ),
         ],

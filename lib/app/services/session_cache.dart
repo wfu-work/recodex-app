@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../models/bridge_models.dart';
 import 'session_cache_backend.dart';
+import 'usage_statistics.dart';
 
 /// A cache scope is intentionally derived from the authenticated pairing, not
 /// only from a thread id. The same thread id can exist on two Relay Spaces or
@@ -62,6 +63,87 @@ class SessionCache {
   final _timelineRows = <String, Map<String, SessionCacheTimelineItem>>{};
   final _timelineRowAccess = <String, int>{};
   int _timelineRowClock = 0;
+  Future<void> _usageWrites = Future.value();
+  final _usageBackfilled = <String>{};
+
+  /// Store compact per-turn statistics independently of the bounded transcript.
+  /// Serialized writes keep late metadata and history refreshes idempotent.
+  Future<void> rememberUsage(
+    SessionCacheScope scope,
+    String threadId,
+    List<SessionEvent> events, {
+    SessionRecord? session,
+  }) {
+    final records = collectAnswerUsage(threadId, events, session: session);
+    if (records.isEmpty) return _usageWrites;
+    _usageWrites = _usageWrites.then((_) async {
+      try {
+        await open();
+        final stored = {
+          for (final record in _decodeUsage(
+            await _backend.readUsage(scope.key, threadId: threadId),
+          ))
+            record.turnId: record,
+        };
+        final changed = <String, String>{};
+        for (final record in records) {
+          final previous = stored[record.turnId];
+          final merged = previous?.merge(record) ?? record;
+          final payload = jsonEncode(merged.toJson());
+          if (previous == null || payload != jsonEncode(previous.toJson())) {
+            changed[record.turnId] = payload;
+          }
+        }
+        await _backend.upsertUsage(scope.key, threadId, changed);
+      } catch (_) {
+        // Keep chat usable when local persistence is temporarily unavailable.
+      }
+    });
+    return _usageWrites;
+  }
+
+  Future<List<AnswerUsageRecord>> loadUsage(SessionCacheScope scope) async {
+    await open();
+    if (!_usageBackfilled.contains(scope.key)) {
+      final catalog = await _backend.readCatalog(scope.key);
+      final sessions = {
+        for (final session in _decodeSessions(catalog?.sessionsJson ?? '[]'))
+          session.id: session,
+      };
+      // Backfill older installations once, reading one timeline at a time.
+      for (final id in await _backend.timelineThreadIds(scope.key)) {
+        final rows = await _backend.readTimeline(scope.key, id);
+        await rememberUsage(
+          scope,
+          id,
+          rows
+              .map((row) => _decodeEvent(row.payload))
+              .whereType<SessionEvent>()
+              .toList(),
+          session: sessions[id],
+        );
+      }
+      _usageBackfilled.add(scope.key);
+    }
+    await _usageWrites;
+    return _decodeUsage(await _backend.readUsage(scope.key));
+  }
+
+  List<AnswerUsageRecord> _decodeUsage(List<String> rows) {
+    final result = <AnswerUsageRecord>[];
+    for (final row in rows) {
+      try {
+        result.add(
+          AnswerUsageRecord.fromJson(
+            Map<String, dynamic>.from(jsonDecode(row) as Map),
+          ),
+        );
+      } catch (_) {
+        // A damaged row must not hide the remaining measurements.
+      }
+    }
+    return result;
+  }
 
   Future<void> open() async {
     final pending = _opening;
@@ -180,10 +262,12 @@ class SessionCache {
   Future<void> saveTimeline(
     SessionCacheScope scope,
     String threadId,
-    List<SessionEvent> events,
-  ) async {
+    List<SessionEvent> events, {
+    SessionRecord? session,
+  }) async {
     final id = threadId.trim();
     if (id.isEmpty) return;
+    await rememberUsage(scope, id, events, session: session);
     try {
       await open();
       final bounded = _boundedEvents(events);
@@ -211,10 +295,12 @@ class SessionCache {
   Future<void> saveTimelineIncremental(
     SessionCacheScope scope,
     String threadId,
-    List<SessionEvent> events,
-  ) async {
+    List<SessionEvent> events, {
+    SessionRecord? session,
+  }) async {
     final id = threadId.trim();
     if (id.isEmpty) return;
+    await rememberUsage(scope, id, events, session: session);
     try {
       await open();
       final bounded = _boundedEvents(events);
@@ -291,6 +377,7 @@ class SessionCache {
   }
 
   Future<void> close() async {
+    await _usageWrites;
     try {
       await _backend.close();
     } catch (_) {}
@@ -298,6 +385,7 @@ class SessionCache {
     _timelineRows.clear();
     _timelineRowAccess.clear();
     _timelineRowClock = 0;
+    _usageBackfilled.clear();
   }
 
   Future<List<SessionEvent>> _readTimelineEvents(

@@ -11,8 +11,16 @@ import 'session_cache_backend_api.dart';
 /// SQLite backend for Android, iOS, macOS, Windows, and Linux. The class is
 /// kept behind a conditional import so Web builds never load a native plugin.
 class SqliteSessionCacheBackend implements SessionCacheBackend {
+  SqliteSessionCacheBackend({
+    sql.DatabaseFactory? factory,
+    String? databasePath,
+  }) : _factoryOverride = factory,
+       _pathOverride = databasePath;
+
+  final sql.DatabaseFactory? _factoryOverride;
+  final String? _pathOverride;
   static const _databaseName = 'recodex_session_cache.sqlite';
-  static const _schemaVersion = 1;
+  static const _schemaVersion = 2;
 
   sql.Database? _database;
   Future<void>? _opening;
@@ -32,16 +40,21 @@ class SqliteSessionCacheBackend implements SessionCacheBackend {
   }
 
   Future<void> _openInternal() async {
-    final factory = _databaseFactory();
-    if (!_usesFlutterSqlite) ffi_sql.sqfliteFfiInit();
-
-    final supportDirectory = await getApplicationSupportDirectory();
-    final cacheDirectory = Directory(
-      path.join(supportDirectory.path, 'recodex'),
-    );
-    await cacheDirectory.create(recursive: true);
+    final factory = _factoryOverride ?? _databaseFactory();
+    if (_factoryOverride == null && !_usesFlutterSqlite) {
+      ffi_sql.sqfliteFfiInit();
+    }
+    var databasePath = _pathOverride;
+    if (databasePath == null) {
+      final supportDirectory = await getApplicationSupportDirectory();
+      final cacheDirectory = Directory(
+        path.join(supportDirectory.path, 'recodex'),
+      );
+      await cacheDirectory.create(recursive: true);
+      databasePath = path.join(cacheDirectory.path, _databaseName);
+    }
     final database = await factory.openDatabase(
-      path.join(cacheDirectory.path, _databaseName),
+      databasePath,
       options: sql.OpenDatabaseOptions(
         version: _schemaVersion,
         onConfigure: (db) async {
@@ -61,6 +74,7 @@ class SqliteSessionCacheBackend implements SessionCacheBackend {
   }
 
   Future<void> _createSchema(sql.Database db) async {
+    await _createUsageSchema(db);
     await db.execute('''
       CREATE TABLE IF NOT EXISTS cache_catalog (
         scope TEXT PRIMARY KEY NOT NULL,
@@ -91,11 +105,66 @@ class SqliteSessionCacheBackend implements SessionCacheBackend {
     int oldVersion,
     int newVersion,
   ) async {
-    // Version 1 is the initial schema. Keep this callback explicit so future
-    // migrations can be added without deleting a user's cached conversations.
+    // Add the independent ledger without deleting cached conversations.
     if (oldVersion < 1 && newVersion >= 1) {
       await _createSchema(db);
     }
+    if (oldVersion < 2) await _createUsageSchema(db);
+  }
+
+  Future<void> _createUsageSchema(sql.Database db) => db.execute('''
+    CREATE TABLE IF NOT EXISTS usage_ledger (
+      scope TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      PRIMARY KEY (scope, thread_id, turn_id)
+    )
+  ''');
+
+  @override
+  Future<List<String>> timelineThreadIds(String scope) async {
+    await open();
+    final rows = await _database!.query(
+      'cache_timeline',
+      columns: ['thread_id'],
+      distinct: true,
+      where: 'scope = ?',
+      whereArgs: [scope],
+    );
+    return rows.map((row) => row['thread_id'] as String).toList();
+  }
+
+  @override
+  Future<List<String>> readUsage(String scope, {String? threadId}) async {
+    await open();
+    final rows = await _database!.query(
+      'usage_ledger',
+      columns: ['payload'],
+      where: threadId == null ? 'scope = ?' : 'scope = ? AND thread_id = ?',
+      whereArgs: [scope, ?threadId],
+    );
+    return rows.map((row) => row['payload'] as String).toList();
+  }
+
+  @override
+  Future<void> upsertUsage(
+    String scope,
+    String threadId,
+    Map<String, String> turns,
+  ) async {
+    if (turns.isEmpty) return;
+    await open();
+    final batch = _database!.batch();
+    for (final entry in turns.entries) {
+      batch.insert('usage_ledger', {
+        'scope': scope,
+        'thread_id': threadId,
+        'turn_id': entry.key,
+        'payload': entry.value,
+      }, conflictAlgorithm: sql.ConflictAlgorithm.replace);
+    }
+    await batch.commit(noResult: true);
   }
 
   sql.DatabaseFactory _databaseFactory() {

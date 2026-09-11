@@ -53,6 +53,14 @@ abstract class SessionCacheBackend {
   });
 
   Future<void> close();
+
+  Future<List<String>> timelineThreadIds(String scope);
+  Future<List<String>> readUsage(String scope, {String? threadId});
+  Future<void> upsertUsage(
+    String scope,
+    String threadId,
+    Map<String, String> turns,
+  );
 }
 
 /// A deterministic backend used by Web, tests, and native fallbacks when the
@@ -61,6 +69,29 @@ abstract class SessionCacheBackend {
 class MemorySessionCacheBackend implements SessionCacheBackend {
   final _catalog = <String, SessionCacheCatalogRow>{};
   final _timelines = <String, List<SessionCacheTimelineItem>>{};
+  final _usage = <String, Map<String, Map<String, String>>>{};
+
+  @override
+  Future<List<String>> timelineThreadIds(String scope) async => _timelines.keys
+      .where((key) => key.startsWith('$scope\u0000'))
+      .map((key) => key.substring(scope.length + 1))
+      .toList();
+
+  @override
+  Future<List<String>> readUsage(String scope, {String? threadId}) async {
+    final threads = _usage[scope] ?? {};
+    if (threadId != null) return threads[threadId]?.values.toList() ?? [];
+    return threads.values.expand((turns) => turns.values).toList();
+  }
+
+  @override
+  Future<void> upsertUsage(
+    String scope,
+    String threadId,
+    Map<String, String> turns,
+  ) async {
+    ((_usage[scope] ??= {})[threadId] ??= {}).addAll(turns);
+  }
 
   @override
   Future<void> open() async {}

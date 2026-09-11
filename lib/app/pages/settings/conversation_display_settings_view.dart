@@ -123,7 +123,7 @@ class ConversationDisplaySettingsPage extends StatelessWidget {
                 const SizedBox(height: 10),
                 SettingsGroup(
                   children: [
-                    _DisplaySelectorRow(
+                    SettingsDropdownRow<double>(
                       icon: RecodexIcons.scale,
                       title: '正文最大宽度',
                       subtitle: '限制回答正文在桌面窗口中的最大显示宽度',
@@ -132,7 +132,7 @@ class ConversationDisplaySettingsPage extends StatelessWidget {
                       onChanged: preferences.setAnswerMaxWidth,
                     ),
                     const SettingsDivider(),
-                    _DisplaySelectorRow(
+                    SettingsDropdownRow<double>(
                       icon: RecodexIcons.menu,
                       title: '回答区域左右边距',
                       subtitle: '设置回答正文与窗口边缘之间的水平留白',
@@ -145,47 +145,6 @@ class ConversationDisplaySettingsPage extends StatelessWidget {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DisplaySelectorRow extends StatelessWidget {
-  const _DisplaySelectorRow({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.value,
-    required this.options,
-    required this.onChanged,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final double value;
-  final List<RecodexDropdownOption<double>> options;
-  final ValueChanged<double> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final selected = options.any((option) => option.value == value)
-        ? value
-        : options.first.value;
-    return SettingsRow(
-      icon: icon,
-      title: title,
-      subtitle: subtitle,
-      trailing: SizedBox(
-        width: 188,
-        child: RecodexDropdown<double>(
-          value: selected,
-          options: options,
-          maxWidth: 188,
-          compact: true,
-          tooltip: '选择$title',
-          onChanged: onChanged,
         ),
       ),
     );

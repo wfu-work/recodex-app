@@ -115,13 +115,13 @@ void main() {
           ),
         ),
       );
-      expect(find.text('消耗 · 总 1.23K'), findsOneWidget);
+      expect(find.text('本次回答消耗 · 总 1.23K'), findsOneWidget);
       expect(find.text('输入 1.22K'), findsOneWidget);
       expect(find.text('输出 10'), findsOneWidget);
       expect(find.text('缓存 未提供'), findsOneWidget);
       expect(find.text('耗时 1分钟 5秒'), findsOneWidget);
       expect(find.text('完成 2026/09/10 17:20:30'), findsOneWidget);
-      await tester.tap(find.text('消耗 · 总 1.23K'));
+      await tester.tap(find.text('本次回答消耗 · 总 1.23K'));
       await tester.pumpAndSettle();
       expect(find.textContaining('输入 1,224 · 输出 10'), findsOneWidget);
     },
@@ -138,7 +138,7 @@ void main() {
           ),
         ),
       );
-      expect(find.text('消耗 未提供'), findsOneWidget);
+      expect(find.text('本次回答消耗 未提供'), findsOneWidget);
       expect(find.text('耗时 未记录'), findsOneWidget);
       expect(find.text('完成时间未记录'), findsOneWidget);
       expect(find.byTooltip('复制回答'), findsOneWidget);
@@ -164,11 +164,11 @@ void main() {
           ),
         ),
       );
-      expect(find.text('消耗 · 总 280.57K'), findsOneWidget);
+      expect(find.text('本次回答消耗 · 总 280.57K'), findsOneWidget);
       expect(find.text('输入 276.67K'), findsOneWidget);
       expect(find.text('输出 3.9K'), findsOneWidget);
       expect(find.text('缓存 175.23K'), findsOneWidget);
-      await tester.tap(find.text('消耗 · 总 280.57K'));
+      await tester.tap(find.text('本次回答消耗 · 总 280.57K'));
       await tester.pumpAndSettle();
       expect(find.textContaining('输入中含缓存 175,232'), findsOneWidget);
       expect(find.textContaining('输出中含推理 2,129'), findsOneWidget);
@@ -192,9 +192,52 @@ void main() {
         ),
       ),
     );
-    expect(find.text('消耗 · 总 1.23M'), findsOneWidget);
+    expect(find.text('本次回答消耗 · 总 1.23M'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('legacy totals show only the consumption of this answer', (
+    tester,
+  ) async {
+    SessionEvent snapshot(String turnId, int input, int output, int cached) =>
+        SessionEvent(
+          kind: 'done',
+          text: '',
+          turnId: turnId,
+          usage: TokenUsage(
+            inputTokens: input,
+            outputTokens: output,
+            totalTokens: input + output,
+            cachedInputTokens: cached,
+            scope: TokenUsageScope.thread,
+          ),
+        );
+    final current = [
+      const SessionEvent(kind: 'assistant', text: '第二次回答', turnId: 'b'),
+      snapshot('b', 12000, 2500, 9000),
+    ];
+    await tester.pumpWidget(
+      page(
+        AssistantAnswerBlock(
+          events: current,
+          previousAnswerEvents: [snapshot('a', 8000, 2000, 6000)],
+          completed: true,
+        ),
+      ),
+    );
+    expect(find.text('本次回答消耗 · 总 4.5K'), findsOneWidget);
+    expect(find.text('输入 4K'), findsOneWidget);
+    expect(find.text('输出 500'), findsOneWidget);
+    expect(find.text('缓存 3K'), findsOneWidget);
+    expect(find.textContaining('会话累计消耗'), findsNothing);
+
+    await tester.pumpWidget(
+      page(AssistantAnswerBlock(events: current, completed: true)),
+    );
+    expect(find.text('本次回答消耗 未提供'), findsOneWidget);
+    expect(find.text('输入 12K'), findsNothing);
+    expect(find.text('缓存 9K'), findsNothing);
   });
 
   testWidgets('metrics preference keeps copy available', (tester) async {
@@ -208,7 +251,7 @@ void main() {
       ),
     );
     expect(find.byTooltip('复制回答'), findsOneWidget);
-    expect(find.text('消耗 · 总 1.23K'), findsNothing);
+    expect(find.text('本次回答消耗 · 总 1.23K'), findsNothing);
     expect(find.textContaining('17:20:30'), findsNothing);
     expect(find.textContaining('耗时'), findsNothing);
   });
@@ -255,7 +298,7 @@ void main() {
       ),
     );
     expect(tester.takeException(), isNull);
-    expect(find.text('消耗 · 总 123.46B'), findsOneWidget);
+    expect(find.text('本次回答消耗 · 总 123.46B'), findsOneWidget);
     expect(find.text('完成 2026/09/10 17:20:30'), findsOneWidget);
   });
 

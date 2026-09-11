@@ -51,29 +51,19 @@ class ConnectionSettingsPage extends StatelessWidget {
                       onTap: () => Get.toNamed(Routes.pairing),
                     ),
                     const SettingsDivider(),
-                    SettingsRow(
+                    SettingsDropdownRow<String>(
                       icon: RecodexIcons.switcher,
                       title: '默认配对',
                       subtitle: bridge.activePairing?.displayName ?? '未选择',
-                      trailing: bridge.pairings.isEmpty
-                          ? null
-                          : SizedBox(
-                              width: 156,
-                              child: RecodexDropdown<String>(
-                                value: bridge.activePairingId.value ?? '',
-                                maxWidth: 156,
-                                compact: true,
-                                tooltip: '选择默认配对',
-                                options: [
-                                  for (final profile in bridge.pairings)
-                                    RecodexDropdownOption<String>(
-                                      value: profile.id,
-                                      label: profile.displayName,
-                                    ),
-                                ],
-                                onChanged: bridge.switchPairing,
-                              ),
-                            ),
+                      value: bridge.activePairingId.value ?? '',
+                      options: [
+                        for (final profile in bridge.pairings)
+                          RecodexDropdownOption<String>(
+                            value: profile.id,
+                            label: profile.displayName,
+                          ),
+                      ],
+                      onChanged: bridge.switchPairing,
                     ),
                     const SettingsDivider(),
                     SettingsRow(

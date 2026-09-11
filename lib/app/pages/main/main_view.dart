@@ -11,6 +11,7 @@ import '../../components/chat_components.dart';
 import '../../components/liquid_background.dart';
 import '../../components/menu_drawer.dart';
 import '../../models/bridge_models.dart';
+import '../../services/timeline_events.dart';
 import '../../routes/app_pages.dart';
 import '../../theme/recodex_theme.dart';
 import '../pairing/pairing_view.dart';
@@ -392,6 +393,8 @@ class _MainPageState extends State<MainPage> {
                                     key: timelineEntryKeys[index],
                                     child: AssistantAnswerBlock(
                                       events: entry.events,
+                                      previousAnswerEvents:
+                                          entry.previousAnswerEvents,
                                       completed:
                                           !isLatestEntry ||
                                           controller
@@ -413,8 +416,11 @@ class _MainPageState extends State<MainPage> {
                                       showUsageMetrics: showUsageMetrics,
                                       cardRadius: answerCardRadius,
                                       maxWidth: answerMaxWidth,
-                                      gitChangeSummary: _gitChangeSummary,
-                                      onGitFileTap: _openGitDiff,
+                                      gitChangeSummary: GitChangeSummary.tryParse(
+                                        GitSnapshot.fromEvents(entry.events).numstat,
+                                      ),
+                                      onGitFileTap: (file) =>
+                                          _openGitDiff(file, entry.events),
                                       onUndoGitChanges: _confirmUndoChanges,
                                     ),
                                   );
@@ -604,18 +610,31 @@ class _MainPageState extends State<MainPage> {
   List<_TimelineEntry> get _timelineEntries {
     final entries = <_TimelineEntry>[];
     final answerEvents = <SessionEvent>[];
+    var previousAnswerEvents = const <SessionEvent>[];
 
     void flushAnswer() {
-      if (answerEvents.isEmpty) return;
-      entries.add(_TimelineEntry.answer(List.of(answerEvents)));
+      if (answerEvents.isEmpty) {
+        previousAnswerEvents = const [];
+        return;
+      }
+      final currentEvents = List<SessionEvent>.of(answerEvents);
+      entries.add(_TimelineEntry.answer(currentEvents, previousAnswerEvents));
+      previousAnswerEvents = currentEvents;
       answerEvents.clear();
     }
 
-    for (final event in controller.events) {
+    String? answerTurnId;
+    for (final event in orderTimelineEvents(controller.events)) {
       if (event.kind == 'user') {
         flushAnswer();
+        answerTurnId = event.turnId;
         entries.add(_TimelineEntry.user(event));
       } else {
+        if (event.turnId != null && answerTurnId != null &&
+            event.turnId != answerTurnId) {
+          flushAnswer();
+        }
+        answerTurnId = event.turnId ?? answerTurnId;
         answerEvents.add(event);
       }
     }
@@ -640,14 +659,6 @@ class _MainPageState extends State<MainPage> {
     if (name.isNotEmpty) return lastPathSegment(name);
     final path = workspace.path.trim();
     return path.isEmpty ? '' : lastPathSegment(path);
-  }
-
-  GitChangeSummary? get _gitChangeSummary {
-    final snapshot = controller.gitSnapshot.value;
-    if (snapshot == null) return null;
-    return GitChangeSummary.tryParse(
-      snapshot.numstat.isNotEmpty ? snapshot.numstat : snapshot.stat,
-    );
   }
 
   String get _taskOutputText {
@@ -1002,16 +1013,14 @@ class _MainPageState extends State<MainPage> {
     Get.toNamed(route, arguments: arguments);
   }
 
-  void _openGitDiff(GitFileChange file) {
-    final snapshot = GitSnapshot.fromEvents(controller.events);
-    controller.gitStatus(includeDiff: true);
+  void _openGitDiff(GitFileChange file, List<SessionEvent> answerEvents) {
+    final snapshot = GitSnapshot.fromEvents(answerEvents);
     Get.toNamed(
       Routes.gitDiff,
       arguments: GitDiffPageArgs(
-        snapshot: snapshot.fileDiffs.isNotEmpty
-            ? snapshot
-            : controller.gitSnapshot.value,
+        snapshot: snapshot,
         selectedPath: file.path,
+        followWorkspace: false,
       ),
     );
   }
@@ -1042,17 +1051,28 @@ class _StopTaskIntent extends Intent {
 }
 
 class _TimelineEntry {
-  const _TimelineEntry._({required this.events, this.userEvent});
+  const _TimelineEntry._({
+    required this.events,
+    this.userEvent,
+    this.previousAnswerEvents = const [],
+  });
 
   factory _TimelineEntry.user(SessionEvent event) {
     return _TimelineEntry._(events: const [], userEvent: event);
   }
 
-  factory _TimelineEntry.answer(List<SessionEvent> events) {
-    return _TimelineEntry._(events: events);
+  factory _TimelineEntry.answer(
+    List<SessionEvent> events,
+    List<SessionEvent> previousAnswerEvents,
+  ) {
+    return _TimelineEntry._(
+      events: events,
+      previousAnswerEvents: previousAnswerEvents,
+    );
   }
 
   final List<SessionEvent> events;
+  final List<SessionEvent> previousAnswerEvents;
   final SessionEvent? userEvent;
 }
 

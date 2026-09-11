@@ -9,7 +9,7 @@ import 'package:recodex/app/models/bridge_models.dart';
 import 'package:recodex/app/pages/main/bridge_controller.dart';
 
 Future<void> until(bool Function() check) async {
-  for (var i = 0; i < 300; i++) {
+  for (var i = 0; i < 600; i++) {
     if (check()) return;
     await Future<void>.delayed(const Duration(milliseconds: 10));
   }
@@ -47,12 +47,13 @@ void main() {
       final journal = <Map<String, dynamic>>[];
       final interactions = <Map<String, dynamic>>[];
       Map<String, dynamic>? heldRead;
+      List<Map<String, dynamic>>? snapshotTurns;
       Map<String, dynamic> thread() => {
         'id': 'task',
         'cwd': '/tmp/project',
         'name': 'fixture',
         'status': {'type': active ? 'active' : 'idle'},
-        'turns': [
+        'turns': snapshotTurns ?? [
           {
             'id': 'turn',
             'status': active ? 'inProgress' : 'interrupted',
@@ -237,6 +238,11 @@ void main() {
             .map((item) => item.text)
             .join();
         expect(output, 'ALPHABETAGAMMA');
+        send(event('message.assistant.delta', {
+          'delta': 'ALPHA', 'itemId': 'answer',
+        }));
+        await until(() => bridge.events.any((item) =>
+          item.text == 'ALPHABETAGAMMAALPHA'));
         expect(await bridge.steerCurrentTurn('补充测试'), true);
         final steer = commands.lastWhere(
           (c) => c['command']['type'] == 'turn.steer',
@@ -322,6 +328,62 @@ void main() {
           lessThan(12),
           reason: 'recovery must settle',
         );
+
+        // History omits live-only turn diffs. Those patches and repeated
+        // commentary must stay with their original turn after reconciliation.
+        active = true;
+        Map<String, dynamic> turn(String id, String status) => {
+          'id': id, 'status': status, 'items': [
+            {'id': 'user-$id', 'type': 'userMessage', 'content': [
+              {'type': 'text', 'text': '问题 $id'},
+            ]},
+            {'id': 'message-$id', 'type': 'agentMessage',
+             'phase': 'commentary', 'text': '正在检查'},
+          ],
+        };
+        snapshotTurns = [turn('a', 'completed'), turn('b', 'inProgress')];
+        bridge.events.assignAll(const [
+          SessionEvent(kind: 'user', text: '问题 a', turnId: 'a', itemId: 'user-a'),
+          SessionEvent(kind: 'assistant', text: '正在检查', turnId: 'a',
+            itemId: 'message-a'),
+          SessionEvent(kind: 'git_change', text: '', turnId: 'a',
+            itemId: 'turn-diff:a', fileDiffs: {'old.dart': '@@ -0,0 +1 @@\n+old'}),
+          SessionEvent(kind: 'done', text: '', turnId: 'a', itemId: 'turn-end:a'),
+          SessionEvent(kind: 'user', text: '问题 b', turnId: 'b', itemId: 'user-b'),
+          SessionEvent(kind: 'assistant', text: '正在检查', turnId: 'b',
+            itemId: 'message-b'),
+          SessionEvent(kind: 'assistant', text: '正在检查', turnId: 'b',
+            itemId: 'another-message-b'),
+        ]);
+        bridge.selectSession(const SessionRecord(id: 'task', workspace: '/tmp/project',
+          prompt: '', status: 'active', createdAt: '', updatedAt: ''));
+        await until(() => !bridge.timelineLoading.value && bridge.events.any(
+          (item) => item.itemId == 'message-b' && item.phase == 'commentary'));
+        final split = bridge.events.indexWhere((item) => item.itemId == 'user-b');
+        expect(split, greaterThan(0));
+        expect(bridge.events.skip(split).where((item) => item.turnId == 'a'), isEmpty);
+        expect(bridge.events.where((item) => item.kind == 'assistant').length, 3);
+        expect(GitSnapshot.fromEvents(bridge.events.skip(split)).fileDiffs, isEmpty);
+        expect(GitSnapshot.fromEvents(bridge.events.take(split)).fileDiffs.keys, ['old.dart']);
+
+        // The same placement rule applies to a late live patch, before any
+        // subsequent snapshot has a chance to repair the transcript.
+        final late = event('diff.updated', {
+          'diff': 'diff --git a/late.dart b/late.dart\n@@ -0,0 +1 @@\n+late\n',
+        });
+        late['turnId'] = 'a';
+        send(late);
+        await until(() => bridge.events.any((item) => item.fileDiffs.containsKey('late.dart')));
+        final currentPrompt = bridge.events.indexWhere((item) => item.itemId == 'user-b');
+        expect(bridge.events.skip(currentPrompt).where((item) => item.turnId == 'a'), isEmpty);
+
+        await socket!.close();
+        await until(() => bridge.events.any((item) =>
+          item.kind == 'reconnecting' && item.text.contains('正在重新连接')));
+        await until(() => bridge.connected.value && bridge.events.any((item) =>
+          item.kind == 'reconnecting' && item.text == '连接已恢复'));
+        expect(bridge.events.where((item) => item.kind == 'reconnecting' &&
+          item.text.contains('正在重新连接')), isEmpty);
       } finally {
         await bridge.disconnect(silent: true);
         Get.reset();

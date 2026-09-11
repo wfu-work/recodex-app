@@ -574,21 +574,17 @@ class RecodexTheme {
       ),
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.selected)
-              // A white thumb keeps the selected control legible against
-              // Codex's blue track in both light and dark themes.
-              ? const Color(0xffffffff)
-              : colors.textMuted,
+          (states) => Colors.white.withValues(
+            alpha: states.contains(WidgetState.disabled) ? 0.6 : 1,
+          ),
         ),
-        trackColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.selected)
-              // Use the same functional blue in both themes so selected
-              // switches have one predictable Codex state color.
-              ? RecodexTheme.codexBlue
-              : outline.withValues(alpha: 0.5),
-        ),
-        // Keep the native hit box compact; CodexSwitch applies the small
-        // visual compression without sacrificing that touch target.
+        trackColor: WidgetStateProperty.resolveWith((states) {
+          final opacity = states.contains(WidgetState.disabled) ? 0.6 : 1.0;
+          return states.contains(WidgetState.selected)
+              ? codexBlue.withValues(alpha: opacity)
+              : colors.text.withValues(alpha: 0.1 * opacity);
+        }),
+        // CodexSwitch supplies the compact visual and a 44px touch target.
         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
         padding: EdgeInsets.zero,
       ),

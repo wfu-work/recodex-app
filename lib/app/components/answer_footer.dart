@@ -93,17 +93,11 @@ class _AnswerFooterState extends State<AnswerFooter> {
           4,
     );
     final copyHeight = math.max(40.0, lineHeight);
-    final usage = widget.usage;
-    final usageScope = switch (usage?.scope) {
-      TokenUsageScope.turn => '本轮回答用量',
-      TokenUsageScope.thread => '截至本次记录的会话累计用量，非本轮用量',
-      TokenUsageScope.lastCall => '最近一次模型调用用量，非本轮总用量',
-      _ => '主机报告的用量，未注明统计范围',
-    };
+    final usage = widget.usage?.scope == TokenUsageScope.turn ? widget.usage : null;
     final tokenDetail = usage == null
-        ? '此回答的记录未提供消耗数据'
+        ? '此回答缺少单轮用量或完整的累计记录，无法确定本次消耗'
         : [
-            usageScope,
+            '本次回答用量（包含本轮所有模型调用）',
             '计量单位：Token',
             if (usage.hasBreakdown)
               '输入 ${formatTokenCount(usage.inputTokens)} · 输出 ${formatTokenCount(usage.outputTokens)}'

@@ -37,7 +37,7 @@ class TaskSettingsPage extends StatelessWidget {
                 const SizedBox(height: 10),
                 SettingsGroup(
                   children: [
-                    _SelectorRow(
+                    SettingsDropdownRow<String>(
                       icon: RecodexIcons.folderOpen,
                       title: '默认工作区',
                       subtitle: '新建任务时优先使用的项目目录',
@@ -55,7 +55,7 @@ class TaskSettingsPage extends StatelessWidget {
                       },
                     ),
                     const SettingsDivider(),
-                    _SelectorRow(
+                    SettingsDropdownRow<String>(
                       icon: RecodexIcons.fast,
                       title: '默认模型',
                       subtitle: '选择新会话优先使用的模型',
@@ -67,9 +67,10 @@ class TaskSettingsPage extends StatelessWidget {
                       },
                     ),
                     const SettingsDivider(),
-                    _SelectorRow(
+                    SettingsDropdownRow<String>(
                       icon: RecodexIcons.reasoning,
                       title: '默认推理强度',
+                      emptyLabel: '连接主机后可用',
                       subtitle: '控制 Codex 思考深度和响应速度的平衡',
                       value: preferences.defaultReasoningEffort.value,
                       options: _reasoningOptions(bridge, preferences),
@@ -79,7 +80,7 @@ class TaskSettingsPage extends StatelessWidget {
                       },
                     ),
                     const SettingsDivider(),
-                    _SelectorRow(
+                    SettingsDropdownRow<String>(
                       icon: RecodexIcons.shield,
                       title: '默认权限模式',
                       subtitle: '控制任务执行时的确认策略',
@@ -251,63 +252,6 @@ class TaskSettingsPage extends StatelessWidget {
     if (confirmed != true) return;
     await preferences.resetTaskPreferences();
     bridge.applyTaskPreferences(preferences);
-  }
-}
-
-class _SelectorRow extends StatelessWidget {
-  const _SelectorRow({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.value,
-    required this.options,
-    required this.onChanged,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final String value;
-  final List<RecodexDropdownOption<String>> options;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    final selected = options.isEmpty
-        ? ''
-        : options.any((option) => option.value == value)
-        ? value
-        : options.first.value;
-    return SettingsRow(
-      icon: icon,
-      title: title,
-      subtitle: subtitle,
-      // Let the trigger hug its selected label instead of reserving the same
-      // 158px slot for every option. The dropdown still caps long labels at
-      // 158px internally and ellipsizes them on narrow windows.
-      trailing: options.isEmpty
-          ? ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 158),
-              child: Text(
-                '连接主机后可用',
-                textAlign: TextAlign.right,
-                style: TextStyle(
-                  color: colors.textMuted,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            )
-          : RecodexDropdown<String>(
-              value: selected,
-              options: options,
-              maxWidth: 158,
-              compact: true,
-              tooltip: '选择$title',
-              onChanged: onChanged,
-            ),
-    );
   }
 }
 

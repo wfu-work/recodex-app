@@ -14,7 +14,9 @@ import '../../services/answer_metadata.dart';
 import '../../services/context_window_usage.dart';
 import '../../services/relay_protocol.dart';
 import '../../services/turn_file_changes.dart';
+import '../../services/timeline_events.dart';
 import '../../services/session_cache.dart';
+import '../../services/usage_statistics.dart';
 import '../../services/task_notification_controller.dart';
 import '../settings/settings_preferences_controller.dart';
 
@@ -74,8 +76,10 @@ class BridgeController extends GetxController {
   final backendReady = true.obs;
   int _interactionRevision = 0;
   final _eventRecovery = EventRecovery();
-  List<PendingInteraction> get selectedInteractions => pendingInteractions.values
-      .where((item) => item.threadId == selectedSessionId.value).toList();
+  List<PendingInteraction> get selectedInteractions => pendingInteractions
+      .values
+      .where((item) => item.threadId == selectedSessionId.value)
+      .toList();
   final connected = false.obs;
   final busy = false.obs;
 
@@ -96,9 +100,12 @@ class BridgeController extends GetxController {
   final selectedSessionId = RxnString();
   final gitSnapshot = Rxn<GitSnapshot>();
   final composerContext = ComposerContext.fallback.obs;
-  ContextWindowUsage? get contextWindowUsage => latestContextWindowUsage(events);
+  ContextWindowUsage? get contextWindowUsage =>
+      latestContextWindowUsage(events);
   final permissionMode = '默认权限'.obs;
   final currentSessionId = RxnString();
+  final _threadComposerSettings = <String, Map<String, dynamic>>{};
+  final _deferredComposerSends = <String, Object>{};
 
   /// Canonical state for the selected timeline. [timelineSessionRunning] is
   /// retained as a compatibility flag for the composer and older widgets,
@@ -1272,6 +1279,7 @@ class BridgeController extends GetxController {
     gitSnapshot.value = null;
     selectedSessionId.value = session.id;
     currentSessionId.value = session.id;
+    _showThreadComposerSettings(session.id);
     // A selected task may have a different latest turn than the task that was
     // visible before it. Do not let a delayed terminal event from the old
     // task pass the turn guard while the new thread.read is in flight.
@@ -1386,6 +1394,9 @@ class BridgeController extends GetxController {
     _sessionRestoreAttempted = true;
     events.clear();
     _bumpTimelineRevision();
+    if (Get.isRegistered<SettingsPreferencesController>()) {
+      applyTaskPreferences(Get.find<SettingsPreferencesController>());
+    }
   }
 
   void startSession(String prompt) {
@@ -1451,19 +1462,63 @@ class BridgeController extends GetxController {
   }
 
   bool _sendTurnStart(String prompt, {required String threadId}) {
-    final context = composerContext.value;
-    return _sendCommand('turn.start', {
+    if (!connected.value) return false;
+    final waiting = _pendingCommands.values
+        .where(
+          (p) => p.kind == 'thread.settings.update' && p.threadId == threadId,
+        )
+        .map((p) => p.completion!.future)
+        .toList();
+    final command = <String, dynamic>{
       'text': prompt,
       if ((selectedWorkspace.value?.path ?? '').trim().isNotEmpty)
         'cwd': selectedWorkspace.value!.path,
-      if (context.model.trim().isNotEmpty) 'model': context.model,
-      if (context.reasoningEfforts.contains(context.reasoningEffort))
-        'effort': context.reasoningEffort,
-    }, threadId: threadId);
+    };
+    if (waiting.isEmpty) {
+      // The shared thread is authoritative. Echoing a cached model/effort
+      // here would overwrite a desktop edit that is still crossing Relay.
+      return _sendCommand('turn.start', command, threadId: threadId);
+    }
+    final sendToken = Object();
+    _deferredComposerSends[threadId] = sendToken;
+    unawaited(() async {
+      final accepted = await Future.wait(
+        waiting,
+      ).timeout(_commandTimeout, onTimeout: () => [false]);
+      if (_deferredComposerSends[threadId] != sendToken) return;
+      _deferredComposerSends.remove(threadId);
+      if (accepted.every((value) => value) && connected.value) {
+        if (_sendCommand('turn.start', command, threadId: threadId)) return;
+      }
+      lastError.value = '任务设置未同步成功，消息未发送。请核对设置后重新发送。';
+      _sessionLifecycles[threadId]?.visibleRunning = false;
+      if (selectedSessionId.value == threadId) {
+        _setTimelineStatus(TimelineTaskStatus.unknown);
+        _reconcileSelectedTask();
+      }
+    }());
+    return true;
+  }
+
+  bool _canEditComposer() {
+    final id = _composerSettingsThreadId();
+    if (id == null) return true;
+    if (connected.value) {
+      if (_threadComposerSettings.containsKey(id)) return true;
+      lastError.value = '正在同步此任务的设置，请稍后重试。';
+      return false;
+    }
+    lastError.value = '尚未连接 Relay，连接后才能修改此任务的设置。';
+    return false;
   }
 
   void setComposerModel(String model) {
     final context = composerContext.value;
+    if (model == context.model ||
+        !context.models.contains(model) ||
+        !_canEditComposer()) {
+      return;
+    }
     final efforts = context.modelReasoningEfforts[model] ?? const <String>[];
     final effort = _resolveReasoningEffort(
       requested: context.reasoningEffort,
@@ -1475,24 +1530,152 @@ class BridgeController extends GetxController {
       reasoningEfforts: efforts,
       reasoningEffort: effort,
     );
+    _sendComposerSettings({
+      'model': model,
+      if (effort.isNotEmpty) 'effort': effort,
+    });
   }
 
   void setReasoningEffort(String effort) {
-    final available = composerContext.value.reasoningEfforts;
-    if (available.isNotEmpty && !available.contains(effort)) return;
-    composerContext.value = composerContext.value.copyWith(
-      reasoningEffort: effort,
-    );
+    final context = composerContext.value;
+    if (effort == context.reasoningEffort ||
+        !context.reasoningEfforts.contains(effort) ||
+        !_canEditComposer()) {
+      return;
+    }
+    composerContext.value = context.copyWith(reasoningEffort: effort);
+    _sendComposerSettings({'effort': effort});
   }
 
   void setPermissionMode(String mode) {
+    if (!['默认权限', '自动审查', '完全访问权限', '只读权限'].contains(mode) ||
+        permissionMode.value == mode ||
+        !_canEditComposer()) {
+      return;
+    }
     permissionMode.value = mode;
+    composerContext.value = composerContext.value.copyWith(
+      approvalPolicy: _approvalPolicyFor(mode),
+    );
+    _sendComposerSettings({'permissionMode': mode});
+  }
+
+  String? _composerSettingsThreadId() {
+    final id = selectedSessionId.value?.trim();
+    return id == null || id.isEmpty ? null : id;
+  }
+
+  bool _sendComposerSettings(Map<String, dynamic> patch, {String? threadId}) {
+    final id = threadId ?? _composerSettingsThreadId();
+    if (id == null) {
+      return true; // A new draft is applied once its thread exists.
+    }
+    final sent = _sendCommand(
+      'thread.settings.update',
+      patch,
+      threadId: id,
+      completion: Completer<bool>(),
+    );
+    if (!sent) {
+      _showThreadComposerSettings(id);
+      lastError.value = '任务设置未发送，请连接 Relay 后重试。';
+    }
+    if (sent) _showThreadComposerSettings(id);
+    return sent;
+  }
+
+  void _applyThreadComposerSettings(String? threadId, Object? value) {
+    final map = _asMap(value);
+    final id =
+        threadId ??
+        _readString(map?['threadId']) ??
+        _readString(_asMap(map?['thread'])?['id']);
+    final raw = _asMap(map?['threadSettings']) ?? map;
+    if (id == null || id.isEmpty || raw == null || raw['model'] is! String) {
+      return;
+    }
+    final previous = _threadComposerSettings[id];
+    final revision = raw['revision'];
+    if (revision is num &&
+        previous?['revision'] is num &&
+        revision < (previous!['revision'] as num)) {
+      _showThreadComposerSettings(id);
+      return;
+    }
+    _threadComposerSettings.remove(id);
+    _threadComposerSettings[id] = Map<String, dynamic>.from(raw);
+    while (_threadComposerSettings.length > 256) {
+      _threadComposerSettings.remove(_threadComposerSettings.keys.first);
+    }
+    _showThreadComposerSettings(id);
+  }
+
+  void _showThreadComposerSettings(String id) {
+    if (selectedSessionId.value != id) return;
+    final saved = _threadComposerSettings[id];
+    if (saved == null) return;
+    final raw = <String, dynamic>{...saved};
+    // Keep newer local choices visible while older acknowledgements arrive.
+    for (final pending in _pendingCommands.values) {
+      if (pending.kind == 'thread.settings.update' && pending.threadId == id) {
+        raw.addAll(pending.composerPatch ?? const {});
+      }
+    }
+    final context = composerContext.value;
+    final model = _readString(raw['model']) ?? context.model;
+    final efforts = context.modelReasoningEfforts[model] ?? const <String>[];
+    final effort =
+        _readString(raw['effort'] ?? raw['reasoningEffort']) ??
+        context.modelDefaultReasoningEfforts[model] ??
+        '';
+    composerContext.value = context.copyWith(
+      model: model,
+      reasoningEffort: effort,
+      reasoningEfforts: efforts,
+      approvalPolicy:
+          _readString(raw['approvalPolicy']) ?? context.approvalPolicy,
+    );
+    permissionMode.value = _permissionModeFromSettings(raw);
+  }
+
+  String _permissionModeFromSettings(Map<String, dynamic> raw) {
+    if (raw['permissionMode'] is String) return raw['permissionMode'] as String;
+    final profile = _asMap(raw['activePermissionProfile']);
+    final profileId =
+        _readString(profile?['id']) ?? _readString(raw['permissions']);
+    final sandbox = _asMap(raw['sandboxPolicy'] ?? raw['sandbox']);
+    final sandboxType = _readString(sandbox?['type']);
+    final reviewer = _readString(raw['approvalsReviewer']);
+    final policy = raw['approvalPolicy'];
+    if (profileId != null && !profileId.startsWith(':')) {
+      return '自定义权限（$profileId）';
+    }
+    if ((profileId == ':danger-full-access' ||
+            sandboxType == 'dangerFullAccess') &&
+        policy == 'never') {
+      return '完全访问权限';
+    }
+    if (profileId == ':read-only' || sandboxType == 'readOnly') return '只读权限';
+    if (policy == 'on-request' &&
+        (profileId == ':workspace' || sandboxType == 'workspaceWrite')) {
+      if (reviewer == 'auto_review' || reviewer == 'guardian_subagent') {
+        return '自动审查';
+      }
+      if (reviewer == null || reviewer == 'user') return '默认权限';
+    }
+    return '自定义权限';
   }
 
   /// Applies task defaults loaded from the settings page to the active
   /// composer. The remote host may still provide its own capability list;
   /// these values only select the user's preferred defaults.
   void applyTaskPreferences(SettingsPreferencesController preferences) {
+    if (_composerSettingsThreadId() != null) {
+      composerContext.value = composerContext.value.copyWith(
+        requireConfirmGitWrite: preferences.confirmSensitiveActions.value,
+      );
+      return;
+    }
     final model = preferences.defaultModel.value;
     final selectedModel = model == '自动选择' || model.trim().isEmpty
         ? composerContext.value.models.isEmpty
@@ -1543,13 +1726,33 @@ class BridgeController extends GetxController {
 
     final sessionId = currentSessionId.value;
     if (sessionId == null || sessionId.isEmpty) return;
+    if (_deferredComposerSends.remove(sessionId) != null) {
+      _sessionLifecycles[sessionId]?.visibleRunning = false;
+      _setTimelineStatus(TimelineTaskStatus.interrupted);
+      _appendSessionEvent(
+        const SessionEvent(kind: 'interrupted', text: '已取消发送。'),
+      );
+      return;
+    }
     final turnId = _currentTurnId;
     if (turnId == null || turnId.isEmpty) {
       _interruptRequested = true;
       return;
     }
-    if (_pendingCommands.values.any((p) => p.kind == 'turn.interrupt' && p.threadId == sessionId && p.turnId == turnId)) return;
-    if (_sendCommand('turn.interrupt', {}, threadId: sessionId, turnId: turnId)) {
+    if (_pendingCommands.values.any(
+      (p) =>
+          p.kind == 'turn.interrupt' &&
+          p.threadId == sessionId &&
+          p.turnId == turnId,
+    )) {
+      return;
+    }
+    if (_sendCommand(
+      'turn.interrupt',
+      {},
+      threadId: sessionId,
+      turnId: turnId,
+    )) {
       interactionNotice.value = '正在请求停止当前轮次…';
     }
   }
@@ -1565,8 +1768,20 @@ class BridgeController extends GetxController {
       return;
     }
     _interruptRequested = false;
-    if (_pendingCommands.values.any((p) => p.kind == 'turn.interrupt' && p.threadId == sessionId && p.turnId == turnId)) return;
-    if (_sendCommand('turn.interrupt', {}, threadId: sessionId, turnId: turnId)) {
+    if (_pendingCommands.values.any(
+      (p) =>
+          p.kind == 'turn.interrupt' &&
+          p.threadId == sessionId &&
+          p.turnId == turnId,
+    )) {
+      return;
+    }
+    if (_sendCommand(
+      'turn.interrupt',
+      {},
+      threadId: sessionId,
+      turnId: turnId,
+    )) {
       interactionNotice.value = '正在请求停止当前轮次…';
     }
   }
@@ -1591,7 +1806,6 @@ class BridgeController extends GetxController {
   }
 
   void refreshContext() {
-    _clearRemoteModels();
     _sendCommand('model.list', {'includeHidden': false, 'limit': 100});
     _sendCommand('host.get_status', {});
   }
@@ -1685,6 +1899,41 @@ class BridgeController extends GetxController {
     final activeScope = scope ?? _cacheScope;
     if (activeScope == null) return threadId.trim();
     return '${activeScope.key}\u0000${threadId.trim()}';
+  }
+
+  /// Usage reads never select another task or disturb the live transcript.
+  Future<List<AnswerUsageRecord>> loadUsageStatistics() async {
+    final scope = _buildSessionCacheScope();
+    final selected = selectedSessionId.value ?? currentSessionId.value;
+    final catalog = {for (final session in sessions) session.id: session};
+    final current = selected == null
+        ? <AnswerUsageRecord>[]
+        : collectAnswerUsage(
+            selected,
+            events.toList(),
+            session: catalog[selected],
+          );
+    if (scope == null) return current;
+    await _flushCacheWrites();
+    final stored = await _sessionCache.loadUsage(scope);
+    if (_buildSessionCacheScope()?.key != scope.key) return [];
+    final merged = {for (final record in stored) record.key: record};
+    for (final record in current) {
+      merged[record.key] = merged[record.key]?.merge(record) ?? record;
+    }
+    return merged.values.map((record) {
+      final session = catalog[record.threadId];
+      return session == null
+          ? record
+          : record.merge(
+              AnswerUsageRecord(
+                threadId: record.threadId,
+                turnId: record.turnId,
+                title: session.displayTitle,
+                workspace: session.workspace,
+              ),
+            );
+    }).toList();
   }
 
   Future<void> _activateSessionCache() async {
@@ -2074,13 +2323,22 @@ class BridgeController extends GetxController {
       final threadId = separator < 0
           ? entry.key
           : entry.key.substring(separator + 1);
+      final session = sessions.firstWhereOrNull(
+        (session) => session.id == threadId,
+      );
       if (pendingReplacements.contains(entry.key)) {
-        await _sessionCache.saveTimeline(scope, threadId, entry.value);
+        await _sessionCache.saveTimeline(
+          scope,
+          threadId,
+          entry.value,
+          session: session,
+        );
       } else {
         await _sessionCache.saveTimelineIncremental(
           scope,
           threadId,
           entry.value,
+          session: session,
         );
       }
     }
@@ -2175,9 +2433,13 @@ class BridgeController extends GetxController {
         final from = decoded['from'] as String? ?? targetDeviceId.value;
         if (from.isNotEmpty && _eventRecovery.sequence > 0) {
           _lastIncomingSequence = _eventRecovery.sequence;
-          _sendRaw(RelayProtocol.ack(
-            stream: decoded['streamId'] as String? ?? RelayProtocol.streamId,
-            sequence: _lastIncomingSequence, targetDeviceId: from));
+          _sendRaw(
+            RelayProtocol.ack(
+              stream: decoded['streamId'] as String? ?? RelayProtocol.streamId,
+              sequence: _lastIncomingSequence,
+              targetDeviceId: from,
+            ),
+          );
         }
       } else if (productType == 'host.snapshot') {
         _applyHostStatus(productMessage['status']);
@@ -2363,8 +2625,17 @@ class BridgeController extends GetxController {
     final requestId = message['requestId'] as String? ?? '';
     final pending = _pendingCommands.remove(requestId);
     if (pending == null) return;
+    if (pending.kind == 'thread.settings.update' &&
+        pending.settingsStreamId != _eventRecovery.streamId) {
+      if (pending.completion?.isCompleted == false) {
+        pending.completion!.complete(false);
+      }
+      return;
+    }
     final success = message['success'] == true;
-    if (pending.completion?.isCompleted == false) pending.completion!.complete(success);
+    if (pending.completion?.isCompleted == false) {
+      pending.completion!.complete(success);
+    }
     if (!success) {
       if (pending.kind == 'sync.request') _syncRecoveryInFlight = false;
       final error = message['error'];
@@ -2380,6 +2651,16 @@ class BridgeController extends GetxController {
       if (pending.interactionId != null) {
         submittedInteractions.remove(pending.interactionId);
         _reconcileSelectedTask();
+      }
+      if (pending.kind == 'thread.settings.update' &&
+          pending.threadId != null) {
+        _showThreadComposerSettings(pending.threadId!);
+        _sendCommand(
+          'thread.status',
+          {},
+          threadId: pending.threadId,
+          force: true,
+        );
       }
       if (errorMap['code'] == 'COMMAND_OUTCOME_UNKNOWN') {
         lastError.value = '命令结果尚未确认，正在核对任务；请勿重复发送。';
@@ -2456,6 +2737,8 @@ class BridgeController extends GetxController {
       case 'thread.status':
         _restoreInteractions(result, pending);
         _handleThreadStatusResult(result, threadId: pending.threadId);
+      case 'thread.settings.update':
+        _applyThreadComposerSettings(pending.threadId, result);
       case 'turn.start':
         final startThreadId = pending.threadId?.trim();
         if (startThreadId != null &&
@@ -2516,15 +2799,19 @@ class BridgeController extends GetxController {
     if (_eventRecovery.isRetired(id)) return false;
     if (_eventRecovery.adopt(id)) {
       _lastIncomingSequence = 0;
+      _threadComposerSettings.clear();
       _timelineSnapshotGuard.resetRevision();
       _timelineSnapshotHash = null;
       _timelineReadGeneration++;
       _interactionRevision++;
       pendingInteractions.clear();
       submittedInteractions.clear();
-      _pendingCommands.removeWhere((_, pending) =>
-          pending.kind == 'thread.read' || pending.kind == 'thread.status' ||
-          pending.kind == 'sync.request');
+      _pendingCommands.removeWhere(
+        (_, pending) =>
+            pending.kind == 'thread.read' ||
+            pending.kind == 'thread.status' ||
+            pending.kind == 'sync.request',
+      );
       _syncRecoveryInFlight = false;
       cacheStale.value = true;
       if (recover) _requestEventRecovery();
@@ -2549,7 +2836,10 @@ class BridgeController extends GetxController {
   void _applySyncResult(Object? value) {
     _syncRecoveryInFlight = false;
     final map = _asMap(value);
-    if (map == null || !_adoptEventStream(map['eventStreamId'], recover: false)) return;
+    if (map == null ||
+        !_adoptEventStream(map['eventStreamId'], recover: false)) {
+      return;
+    }
     final mode = _readString(map['mode']);
     if (mode == 'events') {
       for (final item in _asList(map['events'])) {
@@ -2558,7 +2848,9 @@ class BridgeController extends GetxController {
       }
       // Never advance past events we did not consume.
       final latest = map['latestSequence'];
-      if (latest is num && latest > _eventRecovery.sequence) _requestEventRecovery();
+      if (latest is num && latest > _eventRecovery.sequence) {
+        _requestEventRecovery();
+      }
       if (sessions.isEmpty || workspaces.isEmpty) {
         _sendCommand('thread.list', {'limit': 100});
         _sendCommand('project.list', {'limit': 100});
@@ -2589,12 +2881,16 @@ class BridgeController extends GetxController {
 
   void _restoreInteractions(Object? value, _PendingCommand? pending) {
     final map = _asMap(value);
-    if (map == null || !map.containsKey('pendingInteractions') ||
+    if (map == null ||
+        !map.containsKey('pendingInteractions') ||
         pending?.interactionRevision != _interactionRevision) {
       return;
     }
     final thread = _asMap(map['thread']);
-    final id = _readString(thread?['id']) ?? _readString(map['threadId']) ?? pending?.threadId;
+    final id =
+        _readString(thread?['id']) ??
+        _readString(map['threadId']) ??
+        pending?.threadId;
     if (id == null) return;
     pendingInteractions.removeWhere((_, item) => item.threadId == id);
     for (final raw in _asList(map['pendingInteractions'])) {
@@ -2605,19 +2901,34 @@ class BridgeController extends GetxController {
         pendingInteractions[item.id] = item;
       }
     }
-    submittedInteractions.removeWhere((id) =>
-        !pendingInteractions.containsKey(id) ||
-        (!pendingInteractions[id]!.responding && !_pendingCommands.values.any((command) => command.interactionId == id)));
+    submittedInteractions.removeWhere(
+      (id) =>
+          !pendingInteractions.containsKey(id) ||
+          (!pendingInteractions[id]!.responding &&
+              !_pendingCommands.values.any(
+                (command) => command.interactionId == id,
+              )),
+    );
   }
 
-  void respondToInteraction(PendingInteraction item, Map<String, dynamic> response) {
-    if (!backendReady.value || !item.canRespond || item.responding ||
-        submittedInteractions.contains(item.id) || !pendingInteractions.containsKey(item.id)) {
+  void respondToInteraction(
+    PendingInteraction item,
+    Map<String, dynamic> response,
+  ) {
+    if (!backendReady.value ||
+        !item.canRespond ||
+        item.responding ||
+        submittedInteractions.contains(item.id) ||
+        !pendingInteractions.containsKey(item.id)) {
       return;
     }
-    final sent = _sendCommand(item.kind == 'userInput' ? 'userInput.respond' : 'approval.respond',
-      {'approvalId': item.id, ...response}, threadId: item.threadId, turnId: item.turnId,
-      interactionId: item.id);
+    final sent = _sendCommand(
+      item.kind == 'userInput' ? 'userInput.respond' : 'approval.respond',
+      {'approvalId': item.id, ...response},
+      threadId: item.threadId,
+      turnId: item.turnId,
+      interactionId: item.id,
+    );
     if (sent) {
       submittedInteractions.add(item.id);
     } else {
@@ -2628,23 +2939,37 @@ class BridgeController extends GetxController {
   Future<bool> steerCurrentTurn(String text) async {
     final threadId = selectedSessionId.value;
     final turnId = _currentTurnId;
-    if (!backendReady.value || !timelineStatus.value.isActive || threadId == null ||
-        turnId == null || _pendingCommands.values.any((pending) => pending.kind == 'turn.steer' && pending.threadId == threadId)) {
+    if (!backendReady.value ||
+        !timelineStatus.value.isActive ||
+        threadId == null ||
+        turnId == null ||
+        _pendingCommands.values.any(
+          (pending) =>
+              pending.kind == 'turn.steer' && pending.threadId == threadId,
+        )) {
       lastError.value = '正在核对当前轮次，请稍后补充；草稿已保留。';
       _reconcileSelectedTask();
       return false;
     }
     final completion = Completer<bool>();
-    if (!_sendCommand('turn.steer', {'text': text}, threadId: threadId,
-        turnId: turnId, completion: completion)) {
+    if (!_sendCommand(
+      'turn.steer',
+      {'text': text},
+      threadId: threadId,
+      turnId: turnId,
+      completion: completion,
+    )) {
       lastError.value = '连接不可用，补充内容尚未发送。';
       return false;
     }
-    return completion.future.timeout(_commandTimeout, onTimeout: () {
-      lastError.value = '补充内容是否已送达尚未确认，请核对任务后再操作。';
-      _reconcileSelectedTask();
-      return false;
-    });
+    return completion.future.timeout(
+      _commandTimeout,
+      onTimeout: () {
+        lastError.value = '补充内容是否已送达尚未确认，请核对任务后再操作。';
+        _reconcileSelectedTask();
+        return false;
+      },
+    );
   }
 
   void _applyThreadListResult(Object? value) {
@@ -3626,9 +3951,12 @@ class BridgeController extends GetxController {
           updatedAt: DateTime.now().toUtc().toIso8601String(),
         );
     if (record.id.isEmpty) return;
+    final draftContext = composerContext.value;
+    final draftPermission = permissionMode.value;
     _pendingSessionStart = false;
     currentSessionId.value = record.id;
     selectedSessionId.value = record.id;
+    _applyThreadComposerSettings(record.id, value);
     _currentTurnId = null;
     _lastTerminalTurnId = null;
     _currentTurnStartedAt = null;
@@ -3646,7 +3974,14 @@ class BridgeController extends GetxController {
     final prompt = _pendingPrompt;
     _pendingPrompt = null;
     if (prompt != null && prompt.isNotEmpty) {
-      _sendTurnStart(prompt, threadId: record.id);
+      if (_sendComposerSettings({
+        if (draftContext.model.isNotEmpty) 'model': draftContext.model,
+        if (draftContext.reasoningEffort.isNotEmpty)
+          'effort': draftContext.reasoningEffort,
+        'permissionMode': draftPermission,
+      }, threadId: record.id)) {
+        _sendTurnStart(prompt, threadId: record.id);
+      }
     }
   }
 
@@ -3657,6 +3992,7 @@ class BridgeController extends GetxController {
   /// selected task still needs hydration).
   void _handleThreadStatusResult(Object? value, {String? threadId}) {
     final map = _asMap(value);
+    _applyThreadComposerSettings(threadId, map);
     final thread = _asMap(map?['thread']) ?? map;
     if (thread == null) return;
     final id =
@@ -3939,6 +4275,7 @@ class BridgeController extends GetxController {
       return;
     }
     final map = _asMap(value);
+    _applyThreadComposerSettings(_readString(map?['threadId']), map);
     if (map?['unchanged'] == true) {
       // This is an acknowledgement, never an empty transcript or a terminal
       // lifecycle update. Keep deltas that arrived after the last snapshot.
@@ -3961,6 +4298,7 @@ class BridgeController extends GetxController {
     }
     final sessionId = _readString(thread['id']) ?? requestedSessionId;
     if (sessionId != requestedSessionId) return;
+    _applyThreadComposerSettings(sessionId, value);
     _timelineSnapshotHash = _readString(map?['snapshotHash']);
     _timelineSnapshotHashSessionId = sessionId;
     _timelineSnapshotHashReceivedAt = DateTime.now();
@@ -4161,7 +4499,8 @@ class BridgeController extends GetxController {
       if (hasExplicitTerminal) {
         final resolvedDuration =
             turnDurationMs ?? _durationBetween(turnStartedAt, turnCompletedAt);
-        final resolvedEnd = turnCompletedAt ??
+        final resolvedEnd =
+            turnCompletedAt ??
             (turnStartedAt != null && resolvedDuration != null
                 ? turnStartedAt.add(Duration(milliseconds: resolvedDuration))
                 : null);
@@ -4180,12 +4519,17 @@ class BridgeController extends GetxController {
         );
       } else if ((turnUsage != null || contextUsage != null) &&
           snapshotTurnId != null) {
-        loaded.add(SessionEvent(
-          kind: 'token_usage', text: '', usage: turnUsage,
-          contextWindowUsage: contextUsage,
-          turnId: snapshotTurnId,
-          itemId: 'turn-usage:$snapshotTurnId:${turnUsage?.scope.name ?? 'context'}',
-        ));
+        loaded.add(
+          SessionEvent(
+            kind: 'token_usage',
+            text: '',
+            usage: turnUsage,
+            contextWindowUsage: contextUsage,
+            turnId: snapshotTurnId,
+            itemId:
+                'turn-usage:$snapshotTurnId:${turnUsage?.scope.name ?? 'context'}',
+          ),
+        );
       }
     }
     if (snapshotStatus.isActive &&
@@ -4199,6 +4543,7 @@ class BridgeController extends GetxController {
               ? '等待你的输入...'
               : 'Codex 正在执行...',
           time: resolvedStartedAt,
+          turnId: _currentTurnId,
         ),
       );
     }
@@ -4220,6 +4565,19 @@ class BridgeController extends GetxController {
     }
     _refreshGitSnapshotFromEvents(events);
     _rememberTimelineMemory(_timelineCacheKey(requestedSessionId), events);
+    final usageScope = _cacheScope;
+    if (usageScope != null) {
+      unawaited(
+        _sessionCache.rememberUsage(
+          usageScope,
+          requestedSessionId,
+          merged,
+          session: sessions.firstWhereOrNull(
+            (session) => session.id == requestedSessionId,
+          ),
+        ),
+      );
+    }
     _queueTimelineCacheReplace(requestedSessionId);
   }
 
@@ -4357,6 +4715,7 @@ class BridgeController extends GetxController {
       attachments: attachments,
       itemId: _eventItemId(item),
       turnId: turnId,
+      phase: _readString(item['phase']),
       fileDiffs: fileDiffs,
     );
   }
@@ -4379,6 +4738,8 @@ class BridgeController extends GetxController {
     return switch (normalized) {
       'thread.created' => 'thread.created',
       'thread/started' => 'thread.created',
+      'thread.settings.updated' ||
+      'thread/settings/updated' => 'thread.settings.updated',
       'thread.updated' => 'thread.updated',
       'thread/status/changed' => 'thread.updated',
       'thread.queue.changed' => 'thread.queue.changed',
@@ -4500,11 +4861,14 @@ class BridgeController extends GetxController {
         _turnIdFromTurn(nestedTurn ?? const <String, dynamic>{}) ??
         _readString(_asMap(data['item'])?['turnId']) ??
         _readString(_asMap(data['item'])?['turn_id']);
-    final eventUsage = (nestedTurn == null ? null :
-        readTokenUsage(nestedTurn, scope: TokenUsageScope.turn)) ??
+    final eventUsage =
+        (nestedTurn == null
+            ? null
+            : readTokenUsage(nestedTurn, scope: TokenUsageScope.turn)) ??
         _extractTokenUsage(data);
-    final eventContextUsage = (nestedTurn == null ? null :
-        readContextWindowUsage(nestedTurn)) ?? readContextWindowUsage(data);
+    final eventContextUsage =
+        (nestedTurn == null ? null : readContextWindowUsage(nestedTurn)) ??
+        readContextWindowUsage(data);
     final explicitThreadId =
         _readString(message['threadId']) ??
         _readString(message['thread_id']) ??
@@ -4525,6 +4889,10 @@ class BridgeController extends GetxController {
         // different thread.
         selectedSessionId.value;
     final selectedId = selectedSessionId.value?.trim();
+    if (type == 'thread.settings.updated') {
+      _applyThreadComposerSettings(explicitThreadId, data);
+      return;
+    }
     final updatesCatalog =
         type == 'thread.created' ||
         type == 'thread.updated' ||
@@ -4691,7 +5059,12 @@ class BridgeController extends GetxController {
           _requestTimelineRead(threadId, force: true);
         }
         _appendSessionEvent(
-          SessionEvent(kind: 'running', text: 'Codex 正在执行...', time: startedAt),
+          SessionEvent(
+            kind: 'running',
+            text: 'Codex 正在执行...',
+            time: startedAt,
+            turnId: eventTurnId,
+          ),
         );
         _sendRequestedInterrupt();
       case 'message.assistant.delta':
@@ -4736,10 +5109,13 @@ class BridgeController extends GetxController {
             usageTurnId != null) {
           _appendSessionEvent(
             SessionEvent(
-              kind: 'token_usage', text: '', usage: eventUsage,
+              kind: 'token_usage',
+              text: '',
+              usage: eventUsage,
               contextWindowUsage: eventContextUsage,
               turnId: usageTurnId,
-              itemId: 'turn-usage:$usageTurnId:${eventUsage?.scope.name ?? 'context'}',
+              itemId:
+                  'turn-usage:$usageTurnId:${eventUsage?.scope.name ?? 'context'}',
             ),
           );
         }
@@ -4819,7 +5195,9 @@ class BridgeController extends GetxController {
             _turnDurationMs(turnData) ??
             _durationBetween(completedTurnStartedAt, completedTurnAt);
         final completedTurnId = eventTurnId ?? _currentTurnId;
-        final terminalItemId = completedTurnId == null ? null : 'turn-end:$completedTurnId';
+        final terminalItemId = completedTurnId == null
+            ? null
+            : 'turn-end:$completedTurnId';
         if (completionStatus == TimelineTaskStatus.failed) {
           final message = text.isEmpty ? 'Codex 任务失败' : text;
           _appendSessionEvent(
@@ -4884,8 +5262,14 @@ class BridgeController extends GetxController {
         pendingInteractions[item.id] = item;
         if (item.params['isBlocking'] != false) {
           _setTimelineStatus(
-            item.kind == 'userInput' ? TimelineTaskStatus.waitingUserInput : TimelineTaskStatus.waitingApproval,
-            activeFlags: [item.kind == 'userInput' ? 'waitingOnUserInput' : 'waitingOnApproval'],
+            item.kind == 'userInput'
+                ? TimelineTaskStatus.waitingUserInput
+                : TimelineTaskStatus.waitingApproval,
+            activeFlags: [
+              item.kind == 'userInput'
+                  ? 'waitingOnUserInput'
+                  : 'waitingOnApproval',
+            ],
           );
         }
       case 'interaction.resolved':
@@ -4914,7 +5298,9 @@ class BridgeController extends GetxController {
     interactionNotice.value = '';
     _interactionRevision++;
     pendingInteractions.removeWhere((_, item) => item.threadId == id);
-    submittedInteractions.removeWhere((key) => !pendingInteractions.containsKey(key));
+    submittedInteractions.removeWhere(
+      (key) => !pendingInteractions.containsKey(key),
+    );
     if (message != null &&
         message.isNotEmpty &&
         status == TaskNotificationStatus.failed) {
@@ -4953,7 +5339,9 @@ class BridgeController extends GetxController {
     final state = _readString(appServer['state']);
     if (state != null) {
       final latestSequence = _asMap(map['protocol'])?['latestSequence'];
-      if (state == 'ready' && latestSequence is num && latestSequence > _eventRecovery.sequence) {
+      if (state == 'ready' &&
+          latestSequence is num &&
+          latestSequence > _eventRecovery.sequence) {
         _requestEventRecovery();
       }
       final wasReady = backendReady.value;
@@ -5042,9 +5430,12 @@ class BridgeController extends GetxController {
       }
       applyTaskPreferences(preferences);
     }
+    final id = _composerSettingsThreadId();
+    if (id != null) _showThreadComposerSettings(id);
   }
 
   void _clearRemoteModels() {
+    _threadComposerSettings.clear();
     composerContext.value = composerContext.value.copyWith(
       model: '',
       models: const [],
@@ -5107,6 +5498,10 @@ class BridgeController extends GetxController {
       interactionRevision: _interactionRevision,
       interactionId: interactionId,
       completion: completion,
+      settingsStreamId: _eventRecovery.streamId,
+      composerPatch: type == 'thread.settings.update'
+          ? Map<String, dynamic>.from(command)
+          : null,
     );
     final sent = _sendRaw(
       RelayProtocol.command(
@@ -5155,11 +5550,20 @@ class BridgeController extends GetxController {
 
   void _markUnconfirmedWrites() {
     for (final pending in _pendingCommands.values) {
-      if (!{'thread.create', 'turn.start', 'turn.steer', 'turn.interrupt',
-          'approval.respond', 'userInput.respond'}.contains(pending.kind)) {
+      if (!{
+        'thread.create',
+        'thread.settings.update',
+        'turn.start',
+        'turn.steer',
+        'turn.interrupt',
+        'approval.respond',
+        'userInput.respond',
+      }.contains(pending.kind)) {
         continue;
       }
-      if (pending.completion?.isCompleted == false) pending.completion!.complete(false);
+      if (pending.completion?.isCompleted == false) {
+        pending.completion!.complete(false);
+      }
       lastError.value = '连接中断，命令结果尚未确认；恢复后请核对任务，勿重复发送。';
       if (pending.kind == 'thread.create') {
         _pendingSessionStart = false;
@@ -5177,10 +5581,24 @@ class BridgeController extends GetxController {
       if (expired && pending.kind == 'sync.request') {
         _syncRecoveryInFlight = false;
       }
-      if (expired && {'thread.create', 'turn.start', 'turn.steer', 'turn.interrupt', 'approval.respond', 'userInput.respond'}.contains(pending.kind)) {
-        if (pending.completion?.isCompleted == false) pending.completion!.complete(false);
+      if (expired &&
+          {
+            'thread.create',
+            'thread.settings.update',
+            'turn.start',
+            'turn.steer',
+            'turn.interrupt',
+            'approval.respond',
+            'userInput.respond',
+          }.contains(pending.kind)) {
+        if (pending.completion?.isCompleted == false) {
+          pending.completion!.complete(false);
+        }
         lastError.value = '命令回执超时，执行结果尚未确认；请刷新任务核对，勿重复发送。';
-        if (pending.kind == 'thread.create') { _pendingSessionStart = false; _pendingPrompt = null; }
+        if (pending.kind == 'thread.create') {
+          _pendingSessionStart = false;
+          _pendingPrompt = null;
+        }
         scheduleMicrotask(_reconcileSelectedTask);
       }
       if (expired && pending.kind == 'thread.list') catalogTimedOut = true;
@@ -5339,7 +5757,8 @@ class BridgeController extends GetxController {
     if (resolvedEnd != null) {
       final lastIndex = timed.length - 1;
       timed[lastIndex] = timed[lastIndex].copyWith(
-        time: resolvedEnd, completedAt: resolvedEnd,
+        time: resolvedEnd,
+        completedAt: resolvedEnd,
       );
     }
     if (resolvedDuration != null) {
@@ -6015,6 +6434,7 @@ class BridgeController extends GetxController {
         event.attachments.isEmpty &&
         event.usage == null &&
         event.contextWindowUsage == null &&
+        event.phase == null &&
         event.kind != 'running' &&
         event.kind != 'done' &&
         event.kind != 'interrupted' &&
@@ -6028,7 +6448,7 @@ class BridgeController extends GetxController {
     if (timelineLoading.value) _finishTimelineLoad();
     if (event.kind == 'running') {
       final last = events.isEmpty ? null : events.last;
-      if (last?.kind == 'running') {
+      if (last?.kind == 'running' && last?.turnId == event.turnId) {
         events[events.length - 1] = event;
         _bumpTimelineRevision();
         _queueTimelineCacheWrite(
@@ -6085,7 +6505,7 @@ class BridgeController extends GetxController {
         return;
       }
     } else {
-      events.add(event);
+      insertEventInTurn(events, event);
     }
     _trimVisibleTimeline();
     _bumpTimelineRevision();
@@ -6167,7 +6587,32 @@ class BridgeController extends GetxController {
   List<SessionEvent> _mergeLiveEvents(List<SessionEvent> loadedEvents) {
     if (events.isEmpty) return loadedEvents;
     final merged = List<SessionEvent>.of(loadedEvents);
+    final loadedTurns = loadedEvents
+        .map((event) => event.turnId)
+        .whereType<String>()
+        .toSet();
     for (final event in events) {
+      // Omitted older turns have left the history window. Do not resurrect
+      // their cached tools/diffs under the newest answer. A newer live turn
+      // may be absent from an in-flight read and must still be retained.
+      if (loadedTurns.isNotEmpty &&
+          event.turnId != null &&
+          !loadedTurns.contains(event.turnId) &&
+          event.turnId != _currentTurnId) {
+        continue;
+      }
+      if (event.kind == 'running' &&
+          (!timelineStatus.value.isActive ||
+              loadedEvents.any((item) => item.kind == 'running'))) {
+        continue;
+      }
+      if (event.kind == 'reconnecting' &&
+          connected.value &&
+          event.text != '连接已恢复') {
+        // Successful hydration also repairs retry warnings stored by older
+        // clients, even if no new disconnect occurs in this process.
+        continue;
+      }
       if (_isAnswerMetadata(event)) {
         final index = _eventIdentityIndex(merged, event);
         if (index >= 0) {
@@ -6201,9 +6646,22 @@ class BridgeController extends GetxController {
         merged[similarIndex] = _mergeSnapshotEvent(merged[similarIndex], event);
         continue;
       }
-      merged.add(event);
+      // Use a surviving following item as an ordering anchor. This retains
+      // commentary/tool interleaving when history omits a live-only item.
+      final sourceIndex = events.indexOf(event);
+      var before = -1;
+      for (var i = sourceIndex + 1; i < events.length; i++) {
+        if (events[i].turnId != event.turnId) continue;
+        before = _eventIdentityIndex(merged, events[i]);
+        if (before >= 0) break;
+      }
+      if (before >= 0) {
+        merged.insert(before, event);
+      } else {
+        insertEventInTurn(merged, event);
+      }
     }
-    return merged;
+    return orderTimelineEvents(merged);
   }
 
   int _eventIdentityIndex(List<SessionEvent> source, SessionEvent event) {
@@ -6235,7 +6693,8 @@ class BridgeController extends GetxController {
       completedAt: delta.completedAt ?? existing.completedAt,
       usage: delta.usage ?? existing.usage,
       contextWindowUsage: newerContextWindowUsage(
-        existing.contextWindowUsage, delta.contextWindowUsage,
+        existing.contextWindowUsage,
+        delta.contextWindowUsage,
       ),
       attachments: _mergeEventAttachments(
         existing.attachments,
@@ -6243,6 +6702,7 @@ class BridgeController extends GetxController {
       ),
       itemId: existing.itemId ?? delta.itemId,
       turnId: existing.turnId ?? delta.turnId,
+      phase: delta.phase ?? existing.phase,
       isDelta: true,
     );
   }
@@ -6251,7 +6711,13 @@ class BridgeController extends GetxController {
     SessionEvent existing,
     SessionEvent snapshot,
   ) {
-    if (snapshot.kind == 'git_change') return snapshot;
+    // Transport states replace one another; a shorter recovery label must
+    // replace the longer retry/error text rather than losing to text length.
+    if (snapshot.kind == 'git_change' ||
+        snapshot.kind == 'reconnecting' ||
+        snapshot.kind == 'running') {
+      return snapshot;
+    }
     final nextText = _preferSnapshotText(existing.text, snapshot.text);
     return existing.copyWith(
       text: nextText,
@@ -6260,7 +6726,8 @@ class BridgeController extends GetxController {
       completedAt: snapshot.completedAt ?? existing.completedAt,
       usage: snapshot.usage ?? existing.usage,
       contextWindowUsage: newerContextWindowUsage(
-        existing.contextWindowUsage, snapshot.contextWindowUsage,
+        existing.contextWindowUsage,
+        snapshot.contextWindowUsage,
       ),
       attachments: _mergeEventAttachments(
         existing.attachments,
@@ -6268,6 +6735,7 @@ class BridgeController extends GetxController {
       ),
       itemId: existing.itemId ?? snapshot.itemId,
       turnId: existing.turnId ?? snapshot.turnId,
+      phase: snapshot.phase ?? existing.phase,
       isDelta: existing.isDelta || snapshot.isDelta,
       fileDiffs: snapshot.fileDiffs.isNotEmpty
           ? snapshot.fileDiffs
@@ -6276,13 +6744,8 @@ class BridgeController extends GetxController {
   }
 
   String _appendDeltaText(String current, String delta) {
-    if (delta.isEmpty) return current;
-    if (current.isEmpty) return delta;
-    // Some App Server releases call a cumulative text snapshot a "delta".
-    // Treat it idempotently so reconnects do not duplicate the answer.
-    if (current.endsWith(delta) || current == delta) return current;
-    if (delta.startsWith(current)) return delta;
-    if (current.contains(delta)) return current;
+    // Duplicate frames are rejected by event stream id/sequence before here.
+    // Repeated words, spaces and punctuation are valid incremental content.
     return '$current$delta';
   }
 
@@ -6309,6 +6772,7 @@ class BridgeController extends GetxController {
         a.completedAt?.toUtc() != b.completedAt?.toUtc() ||
         a.itemId != b.itemId ||
         a.turnId != b.turnId ||
+        a.phase != b.phase ||
         a.isDelta != b.isDelta ||
         jsonEncode(a.fileDiffs) != jsonEncode(b.fileDiffs) ||
         !_sameTokenUsage(a.usage, b.usage) ||
@@ -6336,18 +6800,22 @@ class BridgeController extends GetxController {
     if (left == null || right == null) return false;
     return left.inputTokens == right.inputTokens &&
         left.outputTokens == right.outputTokens &&
-        left.totalTokens == right.totalTokens && left.scope == right.scope &&
+        left.totalTokens == right.totalTokens &&
+        left.scope == right.scope &&
         left.hasBreakdown == right.hasBreakdown &&
         left.cachedInputTokens == right.cachedInputTokens &&
         left.reasoningOutputTokens == right.reasoningOutputTokens;
   }
 
   bool _isAnswerMetadata(SessionEvent event) =>
-      event.kind == 'token_usage' || event.kind == 'done' ||
-      event.completedAt != null && event.itemId?.startsWith('turn-end:') == true;
+      event.kind == 'token_usage' ||
+      event.kind == 'done' ||
+      event.completedAt != null &&
+          event.itemId?.startsWith('turn-end:') == true;
 
   bool _isLiveStatusEvent(SessionEvent event) {
-    return event.kind == 'running' ||
+    return event.kind == 'user' && event.turnId != null ||
+        event.kind == 'running' ||
         event.kind == 'reconnecting' ||
         event.kind == 'assistant' ||
         event.kind == 'reasoning' ||
@@ -6362,6 +6830,19 @@ class BridgeController extends GetxController {
     for (var index = 0; index < source.length; index += 1) {
       final candidate = source[index];
       if (candidate.kind != event.kind) continue;
+      // Text is not an identity across turns or distinct protocol items.
+      // Repeated commentary (e.g. "正在检查") is valid content.
+      if (candidate.turnId != event.turnId) continue;
+      if (candidate.itemId?.isNotEmpty == true &&
+          event.itemId?.isNotEmpty == true &&
+          candidate.itemId != event.itemId) {
+        continue;
+      }
+      if (candidate.phase != null &&
+          event.phase != null &&
+          candidate.phase != event.phase) {
+        continue;
+      }
       final candidateText = candidate.text.trim();
       if (candidateText == text) return index;
       // A persisted assistant/reasoning item is usually the aggregate of
@@ -6607,7 +7088,7 @@ class BridgeController extends GetxController {
   String _approvalPolicyFor(String mode) {
     return switch (mode) {
       '完全访问权限' => 'never',
-      '自动审查' => 'on-failure',
+      '自动审查' => 'on-request',
       _ => 'on-request',
     };
   }
@@ -7662,6 +8143,8 @@ class _PendingCommand {
     this.interactionRevision,
     this.interactionId,
     this.completion,
+    this.composerPatch,
+    this.settingsStreamId,
   });
 
   final String kind;
@@ -7673,6 +8156,8 @@ class _PendingCommand {
   final int? interactionRevision;
   final String? interactionId;
   final Completer<bool>? completion;
+  final Map<String, dynamic>? composerPatch;
+  final String? settingsStreamId;
 
   bool matches(String commandKind, {String? threadId}) {
     return kind == commandKind && this.threadId == threadId;

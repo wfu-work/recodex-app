@@ -12,6 +12,7 @@ import '../pages/settings/notification_settings_view.dart';
 import '../pages/settings/security_settings_view.dart';
 import '../pages/settings/task_settings_view.dart';
 import '../pages/settings/task_history_view.dart';
+import '../pages/settings/usage_statistics_view.dart';
 import '../pages/settings/conversation_display_settings_view.dart';
 import '../pages/settings/shortcuts_settings_view.dart';
 import '../pages/settings/theme_settings_view.dart';
@@ -52,6 +53,11 @@ class AppPages {
     GetPage(
       name: _Paths.taskHistory,
       page: () => const TaskHistoryPage(),
+      preventDuplicates: true,
+    ),
+    GetPage(
+      name: _Paths.usageStatistics,
+      page: () => const UsageStatisticsPage(),
       preventDuplicates: true,
     ),
     GetPage(

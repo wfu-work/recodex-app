@@ -597,6 +597,7 @@ class AssistantAnswerBlock extends StatefulWidget {
   const AssistantAnswerBlock({
     required this.events,
     required this.completed,
+    this.previousAnswerEvents = const [],
     this.status,
     this.startedAt,
     this.showReasoning = true,
@@ -612,6 +613,7 @@ class AssistantAnswerBlock extends StatefulWidget {
   });
 
   final List<SessionEvent> events;
+  final List<SessionEvent> previousAnswerEvents;
   final bool completed;
 
   /// Optional explicit lifecycle state from the bridge. Older callers can
@@ -682,7 +684,10 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
     final gitSummaries = <GitChangeSummary>[];
     final fileChangePaths = <String>{};
     var fileChangeStepIndex = -1;
-    final usage = answerTokenUsage(widget.events);
+    final usage = answerTokenUsage(
+      widget.events,
+      previousAnswerEvents: widget.previousAnswerEvents,
+    );
     var hasTerminalEvent = false;
     SessionEvent? latestLiveEvent;
     final structuredGitSummary = GitChangeSummary.tryParse(
@@ -731,12 +736,16 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
       }
       if (event.kind == 'running') {
         flushAnswerText();
-        latestLiveEvent = event;
+        latestLiveEvent ??= event;
         continue;
       }
       if (event.kind == 'reconnecting') {
         flushAnswerText();
         flushReasoningText();
+        if (event.text.trim() == '连接已恢复' || !statusIsActive) {
+          latestLiveEvent = null;
+          continue;
+        }
         final lines = event.text.trim().split('\n');
         final title = lines.isEmpty || lines.first.trim().isEmpty
             ? '正在重新连接'
@@ -769,7 +778,30 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
       }
       if (event.kind.toLowerCase().contains('reason')) {
         if (!widget.showReasoning) continue;
+        if (reasoningBuffer.isNotEmpty) reasoningBuffer.write('\n\n');
         reasoningBuffer.write(_cleanEventText(event));
+        continue;
+      }
+      if (event.kind == 'assistant' && event.phase == 'commentary') {
+        flushAnswerText();
+        flushReasoningText();
+        final text = _cleanEventText(event);
+        if (text.isNotEmpty) {
+          reasoningSteps.add(
+            _AnswerStep(
+              icon: RecodexIcons.reasoning,
+              title: text,
+              content: _AnswerText(
+                text: text,
+                cardRadius: widget.cardRadius,
+                gitChangeSummary: structuredGitSummary,
+                onFileTap: widget.onGitFileTap,
+              ),
+            ),
+          );
+        }
+        latestLiveEvent = null;
+        fileChangeStepIndex = -1;
         continue;
       }
       // Structured changes already feed the summary above. Their generated
@@ -843,6 +875,7 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
       }
       final text = _cleanEventText(event);
       if (text.isEmpty) continue;
+      latestLiveEvent = null;
       flushReasoningText();
       if (textBuffer.isNotEmpty && _shouldSeparateText(event.kind)) {
         textBuffer.writeln();
@@ -887,7 +920,8 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
     }
 
     final isDone =
-        !statusIsUnknown && !statusIsActive &&
+        !statusIsUnknown &&
+        !statusIsActive &&
         (widget.completed || statusIsTerminal || hasTerminalEvent);
     if (answerChildren.isEmpty && (isDone || reasoningSteps.isEmpty)) {
       final fallbackText = switch (taskStatus) {
@@ -994,12 +1028,16 @@ class _ReasoningContent extends StatelessWidget {
     final groups = <List<_AnswerStep>>[];
     for (final step in steps) {
       final isExecutionStep =
+          step.content == null &&
           step.icon != RecodexIcons.reasoning &&
           step.icon != RecodexIcons.warning &&
           step.icon != RecodexIcons.check;
       if (isExecutionStep &&
           groups.isNotEmpty &&
-          groups.last.every((item) => item.icon != RecodexIcons.reasoning)) {
+          groups.last.every(
+            (item) =>
+                item.content == null && item.icon != RecodexIcons.reasoning,
+          )) {
         groups.last.add(step);
       } else {
         groups.add([step]);
@@ -1010,7 +1048,9 @@ class _ReasoningContent extends StatelessWidget {
       children: [
         for (var index = 0; index < groups.length; index += 1) ...[
           if (index > 0) const SizedBox(height: 12),
-          groups[index].length > 1
+          groups[index].first.content != null
+              ? groups[index].first.content!
+              : groups[index].length > 1
               ? _ExecutionGroup(steps: groups[index])
               : groups[index].first.icon == RecodexIcons.reasoning
               ? _ReasoningTextRow(text: groups[index].first.title)
@@ -1115,8 +1155,8 @@ class _ReasoningTextRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final fontScale = Get.find<ThemeController>().fontScale.value;
-    return Text(
-      text,
+    return Text.rich(
+      TextSpan(children: _inlineSpans(context, text)),
       style: TextStyle(
         color: colors.text.withValues(alpha: 0.92),
         fontSize: _scaledFontSize(15, fontScale),
@@ -1128,7 +1168,12 @@ class _ReasoningTextRow extends StatelessWidget {
 }
 
 class _AnswerStep {
-  const _AnswerStep({required this.icon, required this.title, this.detail});
+  const _AnswerStep({
+    required this.icon,
+    required this.title,
+    this.detail,
+    this.content,
+  });
 
   factory _AnswerStep.fromToolEvent(
     SessionEvent event, {
@@ -1159,6 +1204,7 @@ class _AnswerStep {
   final IconData icon;
   final String title;
   final String? detail;
+  final Widget? content;
 }
 
 class _AnswerStepRow extends StatelessWidget {
@@ -2355,7 +2401,12 @@ class ComposerBar extends StatelessWidget {
     super.key,
   });
 
-  static const List<String> permissionModes = ['默认权限', '自动审查', '完全访问权限'];
+  static const List<String> permissionModes = [
+    '默认权限',
+    '自动审查',
+    '完全访问权限',
+    '只读权限',
+  ];
 
   final TextEditingController controller;
   final bool enabled;
@@ -2401,7 +2452,9 @@ class ComposerBar extends StatelessWidget {
                   fontWeight: FontWeight.w400,
                 ),
                 decoration: InputDecoration(
-                  hintText: running ? '编辑草稿，或补充到当前任务…' : 'Ask anything... @files, \$skills, /commands',
+                  hintText: running
+                      ? '编辑草稿，或补充到当前任务…'
+                      : 'Ask anything... @files, \$skills, /commands',
                   hintStyle: TextStyle(
                     color: colors.textMuted.withValues(alpha: 0.72),
                     fontWeight: FontWeight.w400,
@@ -2429,7 +2482,11 @@ class ComposerBar extends StatelessWidget {
                         child: _PermissionModePill(
                           icon: RecodexIcons.shield,
                           value: permissionMode,
-                          values: permissionModes,
+                          values: [
+                            ...permissionModes,
+                            if (!permissionModes.contains(permissionMode))
+                              permissionMode,
+                          ],
                           onChanged: onPermissionModeChanged,
                         ),
                       ),
@@ -2460,7 +2517,14 @@ class ComposerBar extends StatelessWidget {
                             _ComposerMenuButton(
                               icon: RecodexIcons.fast,
                               label: this.context.model,
-                              values: this.context.models,
+                              values: [
+                                ...this.context.models,
+                                if (this.context.model.isNotEmpty &&
+                                    !this.context.models.contains(
+                                      this.context.model,
+                                    ))
+                                  this.context.model,
+                              ],
                               labelForValue: this.context.modelLabel,
                               onChanged: onModelChanged,
                             ),
@@ -2470,7 +2534,14 @@ class ComposerBar extends StatelessWidget {
                               label: _reasoningLabel(
                                 this.context.reasoningEffort,
                               ),
-                              values: this.context.reasoningEfforts,
+                              values: [
+                                ...this.context.reasoningEfforts,
+                                if (this.context.reasoningEffort.isNotEmpty &&
+                                    !this.context.reasoningEfforts.contains(
+                                      this.context.reasoningEffort,
+                                    ))
+                                  this.context.reasoningEffort,
+                              ],
                               labelForValue: _reasoningLabel,
                               onChanged: onReasoningChanged,
                             ),
@@ -2488,14 +2559,20 @@ class ComposerBar extends StatelessWidget {
                     ),
                   ],
                   const SizedBox(width: 8),
-                  if (running) ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: controller,
-                    builder: (context, value, _) => IconButton(
-                      tooltip: '补充到当前任务',
-                      onPressed: enabled && value.text.trim().isNotEmpty ? onSteer : null,
-                      icon: const Icon(Icons.subdirectory_arrow_left, size: 20),
+                  if (running)
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: controller,
+                      builder: (context, value, _) => IconButton(
+                        tooltip: '补充到当前任务',
+                        onPressed: enabled && value.text.trim().isNotEmpty
+                            ? onSteer
+                            : null,
+                        icon: const Icon(
+                          Icons.subdirectory_arrow_left,
+                          size: 20,
+                        ),
+                      ),
                     ),
-                  ),
                   Tooltip(
                     message: running ? '停止任务' : '发送消息',
                     child: SizedBox.square(
@@ -2670,7 +2747,7 @@ class _ComposerMenuButton extends StatelessWidget {
           )
           .toList(),
       leadingIcon: icon,
-      maxWidth: 168,
+      maxWidth: 229,
       compact: true,
       showBorder: false,
       tooltip: '选择$label',
@@ -2737,6 +2814,7 @@ class _PermissionModePill extends StatelessWidget {
 
 String _reasoningLabel(String value) {
   return switch (value) {
+    'none' => '无',
     'minimal' => '最低',
     'low' => '低',
     'medium' => '中',
@@ -2757,7 +2835,7 @@ List<InlineSpan> _inlineSpans(BuildContext context, String text) {
   final isDark = Theme.of(context).brightness == Brightness.dark;
   final spans = <InlineSpan>[];
   final matches = RegExp(
-    r'\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|((?:/|[A-Za-z]:\\)[^\s，。；、]+(?::\d+)?)',
+    r'\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|((?:/|[A-Za-z]:\\)[^\s，。；、]+(?::\d+)?)|\*\*(.+?)\*\*',
   ).allMatches(text).toList();
   var cursor = 0;
   for (final match in matches) {
@@ -2766,6 +2844,17 @@ List<InlineSpan> _inlineSpans(BuildContext context, String text) {
     }
     final markdownLabel = match.group(1);
     final markdownTarget = match.group(2);
+    final bold = match.group(5);
+    if (bold != null) {
+      spans.add(
+        TextSpan(
+          text: bold,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+      );
+      cursor = match.end;
+      continue;
+    }
     if (markdownTarget != null) {
       if (_isFileLinkTarget(markdownTarget)) {
         spans.add(_fileLinkSpan(context, markdownTarget, markdownLabel));

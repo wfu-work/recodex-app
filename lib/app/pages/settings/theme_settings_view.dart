@@ -99,7 +99,7 @@ class ThemeSettingsPage extends StatelessWidget {
                 const SizedBox(height: 10),
                 SettingsGroup(
                   children: [
-                    _AppearanceSelectorRow(
+                    SettingsDropdownRow<String>(
                       icon: RecodexIcons.menu,
                       title: '侧边栏密度',
                       subtitle: '舒适模式留白更多，紧凑模式显示更多项目和任务',
@@ -117,7 +117,7 @@ class ThemeSettingsPage extends StatelessWidget {
                           preferences.setCompactSidebar(value == 'compact'),
                     ),
                     const SettingsDivider(),
-                    _AppearanceSelectorRow(
+                    SettingsDropdownRow<String>(
                       icon: RecodexIcons.tune,
                       title: '对话卡片圆角',
                       subtitle: '统一调整消息、工具和文件结果卡片的圆角大小',
@@ -391,47 +391,6 @@ class _ThemeOptionRow extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _AppearanceSelectorRow extends StatelessWidget {
-  const _AppearanceSelectorRow({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.value,
-    required this.options,
-    required this.onChanged,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final String value;
-  final List<RecodexDropdownOption<String>> options;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final selected = options.any((option) => option.value == value)
-        ? value
-        : options.first.value;
-    return SettingsRow(
-      icon: icon,
-      title: title,
-      subtitle: subtitle,
-      trailing: SizedBox(
-        width: 120,
-        child: RecodexDropdown<String>(
-          value: selected,
-          options: options,
-          maxWidth: 120,
-          compact: true,
-          tooltip: '选择$title',
-          onChanged: onChanged,
         ),
       ),
     );
