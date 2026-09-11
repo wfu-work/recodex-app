@@ -27,6 +27,21 @@ DMG_STAGE := $(BUILD_DIR)/dmg-stage
 MACOS_APP := $(BUILD_DIR)/macos/Build/Products/Release/$(MACOS_APP_NAME).app
 
 UNAME_S := $(shell uname -s 2>/dev/null || echo unknown)
+# Flutter prefers Android Studio's JDK even when JAVA_HOME is set. Pin the
+# Gradle build JVM locally: Gradle 8.14's embedded Kotlin cannot parse Java 25.
+# Prefer installed LTS JDKs on macOS; other hosts can use JAVA_HOME or an
+# explicit ANDROID_GRADLE_JAVA_HOME. Do not change global Flutter settings.
+ANDROID_GRADLE_JAVA_HOME ?= $(shell \
+	if [ "$(UNAME_S)" = "Darwin" ] && [ -x /usr/libexec/java_home ]; then \
+		/usr/libexec/java_home -F -v 21 2>/dev/null || \
+		/usr/libexec/java_home -F -v 17 2>/dev/null || true; \
+	else \
+		printf '%s' "$$JAVA_HOME"; \
+	fi)
+# Quote once for the recipe shell and again for gradlew's JVM option parser,
+# so a JDK path containing spaces remains one -D argument.
+shell_quote = '$(subst ','"'"',$(1))'
+android_gradle_env = $(if $(ANDROID_GRADLE_JAVA_HOME),GRADLE_OPTS=$(call shell_quote,$(GRADLE_OPTS) -Dorg.gradle.java.home=$(call shell_quote,$(ANDROID_GRADLE_JAVA_HOME))),)
 ifeq ($(UNAME_S),Darwin)
 DESKTOP_PLATFORM := macos
 else ifeq ($(UNAME_S),Linux)
@@ -40,7 +55,7 @@ DESKTOP_PLATFORM :=
 endif
 
 .PHONY: all help deps check analyze test doctor devices dev build build-all package desktop \
-	android android-apk android-apk-unsigned android-appbundle apk apk-unsigned aab ios ipa macos windows linux web dmg \
+	android android-jdk-check android-apk android-apk-unsigned android-appbundle apk apk-unsigned aab ios ipa macos windows linux web dmg \
 	build-android build-ios build-macos build-windows build-linux build-web build-dmg clean
 
 all: check build
@@ -74,6 +89,7 @@ help:
 	@echo "ANDROID_ARGS、IOS_ARGS、MACOS_ARGS、WINDOWS_ARGS、LINUX_ARGS、WEB_ARGS。"
 	@echo "Android Dart 混淆默认启用；可用 ANDROID_OBFUSCATE=false 临时关闭。"
 	@echo "Android Release 签名读取 android/key.properties 或 ANDROID_* 环境变量。"
+	@echo "Android 构建在 macOS 自动选择 JDK 21/17；可用 ANDROID_GRADLE_JAVA_HOME 指定。"
 
 deps:
 	"$(FLUTTER)" pub get
@@ -123,19 +139,34 @@ android: android-apk android-appbundle
 
 android_obfuscation_args = $(if $(and $(filter release profile,$(BUILD_MODE)),$(filter true 1 yes,$(ANDROID_OBFUSCATE))),--obfuscate --split-debug-info="$(ANDROID_SYMBOLS_DIR)/$(1)")
 
-android-apk: deps
-	"$(FLUTTER)" build apk --$(BUILD_MODE) $(call android_obfuscation_args,apk) $(BUILD_ARGS) $(ANDROID_ARGS)
+android-jdk-check:
+	@jdk_dir=$(call shell_quote,$(ANDROID_GRADLE_JAVA_HOME)); \
+	if [ -z "$$jdk_dir" ]; then \
+		if [ "$(UNAME_S)" = "Darwin" ]; then \
+			echo "未找到 JDK 21/17。请安装后重试，或用 ANDROID_GRADLE_JAVA_HOME 指定 JDK 路径。"; exit 1; \
+		fi; \
+	else \
+		test -x "$$jdk_dir/bin/java" && test -x "$$jdk_dir/bin/javac" || { echo "无效的 JDK 路径：$$jdk_dir"; exit 1; }; \
+		jdk_major=$$("$$jdk_dir/bin/java" -version 2>&1 | sed -n 's/.*version "\([0-9]*\).*/\1/p' | head -n 1); \
+		case "$$jdk_major" in 17|18|19|20|21|22|23|24) ;; \
+			*) echo "Gradle 8.14 不支持当前 JDK（$${jdk_major}），请用 ANDROID_GRADLE_JAVA_HOME 指定 JDK 21 或 17。"; exit 1 ;; \
+		esac; \
+		echo "Android Gradle 使用 JDK $${jdk_major}：$${jdk_dir}"; \
+	fi
 
-android-apk-unsigned: deps
-	ORG_GRADLE_PROJECT_allowUnsignedRelease=true "$(FLUTTER)" build apk --release $(call android_obfuscation_args,apk-unsigned) $(BUILD_ARGS) $(ANDROID_ARGS)
+android-apk: android-jdk-check deps
+	$(android_gradle_env) "$(FLUTTER)" build apk --$(BUILD_MODE) $(call android_obfuscation_args,apk) $(BUILD_ARGS) $(ANDROID_ARGS)
+
+android-apk-unsigned: android-jdk-check deps
+	$(android_gradle_env) ORG_GRADLE_PROJECT_allowUnsignedRelease=true "$(FLUTTER)" build apk --release $(call android_obfuscation_args,apk-unsigned) $(BUILD_ARGS) $(ANDROID_ARGS)
 	@mkdir -p "$(PACKAGE_DIR)"
 	@cp "$(BUILD_DIR)/app/outputs/flutter-apk/app-release.apk" "$(ANDROID_UNSIGNED_APK)"
 	@echo "未签名 Android APK 已生成：$(ANDROID_UNSIGNED_APK)"
 
 apk-unsigned: android-apk-unsigned
 
-android-appbundle: deps
-	"$(FLUTTER)" build appbundle --$(BUILD_MODE) $(call android_obfuscation_args,aab) $(BUILD_ARGS) $(ANDROID_ARGS)
+android-appbundle: android-jdk-check deps
+	$(android_gradle_env) "$(FLUTTER)" build appbundle --$(BUILD_MODE) $(call android_obfuscation_args,aab) $(BUILD_ARGS) $(ANDROID_ARGS)
 
 apk: android-apk
 

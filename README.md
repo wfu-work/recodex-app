@@ -195,6 +195,19 @@ Flutter 的桌面和 iOS 构建受宿主系统限制，无法从 macOS 直接生
 
 ### Android Release 签名与混淆
 
+Android 构建使用 Gradle 8.14，需要兼容的 JDK，推荐 JDK 21 或 17。
+新版 Android Studio 自带的 JDK 25 会导致 Kotlin 初始化失败，错误可能只有
+`25.0.2`。Makefile 在 macOS 自动选择已安装的 JDK 21（其次为 17），
+在其他系统使用 `JAVA_HOME`；也可以显式指定：
+
+```sh
+make apk ANDROID_GRADLE_JAVA_HOME="/path/to/jdk-21"
+```
+
+该设置仅作用于本次 Android Gradle 构建，同时适用于 `make aab` 和
+`make apk-unsigned`。如果直接运行 `flutter build apk`，Flutter 仍可能优先
+使用 Android Studio 的 JDK，而忽略 `JAVA_HOME`。
+
 Release APK/AAB 必须使用独立签名证书，不再回退到 Android 调试证书。首次
 打包前先创建上传密钥（密钥和密码请自行安全备份）：
 

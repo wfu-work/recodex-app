@@ -256,6 +256,42 @@ void main() {
     expect(find.textContaining('耗时'), findsNothing);
   });
 
+  testWidgets('git panel waits until the answer is terminal', (tester) async {
+    const fileEvent = SessionEvent(
+      kind: 'file_change',
+      text: '',
+      fileDiffs: {'lib/main.dart': '@@ -1 +1 @@\n-old\n+new'},
+    );
+    await tester.pumpWidget(
+      page(
+        const AssistantAnswerBlock(
+          events: [
+            SessionEvent(kind: 'assistant', text: '正在修改'),
+            fileEvent,
+          ],
+          completed: false,
+          status: TimelineTaskStatus.processing,
+        ),
+      ),
+    );
+    expect(find.text('文件变更'), findsNothing);
+    expect(find.text('正在修改文件'), findsOneWidget);
+
+    await tester.pumpWidget(
+      page(
+        const AssistantAnswerBlock(
+          events: [
+            SessionEvent(kind: 'assistant', text: '已完成'),
+            fileEvent,
+          ],
+          completed: true,
+          status: TimelineTaskStatus.completed,
+        ),
+      ),
+    );
+    expect(find.text('文件变更'), findsOneWidget);
+  });
+
   testWidgets(
     'explicit active or unknown status overrides a stale completion',
     (tester) async {

@@ -50,7 +50,7 @@ void main() {
   });
 
   for (final running in [false, true]) {
-    for (final width in [320.0, 390.0, 800.0]) {
+    for (final width in [180.0, 220.0, 320.0, 390.0, 800.0]) {
       testWidgets(
         'composer at $width wide, running=$running, fits context controls',
         (tester) async {
@@ -88,7 +88,11 @@ void main() {
           await tester.pumpWidget(view(usage));
           await tester.pumpAndSettle();
           expect(tester.takeException(), isNull);
-          expect(find.byType(ContextWindowIndicator), findsOneWidget);
+          if (width >= 320) {
+            expect(find.byType(ContextWindowIndicator), findsOneWidget);
+          } else {
+            expect(find.byType(ContextWindowIndicator), findsNothing);
+          }
           expect(find.byTooltip(running ? '停止任务' : '发送消息'), findsOneWidget);
           expect(
             tester.getRect(find.byTooltip(running ? '停止任务' : '发送消息')).right,
@@ -101,4 +105,38 @@ void main() {
       );
     }
   }
+
+  testWidgets('permission menu uses the desktop labels and three choices', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.light,
+        home: Scaffold(
+          body: ComposerBar(
+            controller: controller,
+            enabled: true,
+            context: ComposerContext.fallback,
+            permissionMode: '默认权限',
+            running: true,
+            onSend: () {},
+            onStop: () {},
+            onModelChanged: (_) {},
+            onReasoningChanged: (_) {},
+            onPermissionModeChanged: (_) {},
+            onVoicePressed: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byTooltip('选择权限模式'));
+    await tester.pumpAndSettle();
+    // The selected label is rendered once on the trigger and once in the menu.
+    expect(find.text('请求批准'), findsNWidgets(2));
+    expect(find.text('帮我批准'), findsOneWidget);
+    expect(find.text('完全访问权限'), findsOneWidget);
+    expect(find.text('只读权限'), findsNothing);
+  });
 }

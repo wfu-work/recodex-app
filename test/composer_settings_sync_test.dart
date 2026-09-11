@@ -47,6 +47,7 @@ void main() {
       var epoch = 'first';
       var holdWrites = false;
       var rejectWrites = false;
+      String? persistedPrompt;
       final held = <Map<String, dynamic>>[];
       final commands = <Map<String, dynamic>>[];
       final settings = <String, Map<String, dynamic>>{
@@ -72,7 +73,23 @@ void main() {
         'cwd': '/tmp/project',
         'name': id,
         'status': {'type': 'idle'},
-        'turns': [],
+        'turns': id == 'new' && persistedPrompt != null
+            ? [
+                {
+                  'id': 'turn-new',
+                  'status': 'inProgress',
+                  'items': [
+                    {
+                      'id': 'user-new',
+                      'type': 'userMessage',
+                      'content': [
+                        {'type': 'text', 'text': persistedPrompt},
+                      ],
+                    },
+                  ],
+                },
+              ]
+            : [],
       };
       void send(Map<String, dynamic> payload) => socket!.add(
         jsonEncode({
@@ -389,6 +406,7 @@ void main() {
         bridge.setReasoningEffort('high');
         bridge.setPermissionMode('自动审查');
         holdWrites = true;
+        persistedPrompt = 'new task';
         bridge.startSession('new task');
         await until(() => held.isNotEmpty);
         expect(count('turn.start'), 1);
@@ -398,6 +416,15 @@ void main() {
         expect(initial['command']['permissionMode'], '自动审查');
         applyWrite(initial);
         await until(() => count('turn.start') == 2);
+        await until(
+          () =>
+              bridge.events
+                  .where(
+                    (event) => event.kind == 'user' && event.text == 'new task',
+                  )
+                  .length ==
+              1,
+        );
         expect(bridge.composerContext.value.reasoningEffort, 'high');
         expect(bridge.permissionMode.value, '自动审查');
 

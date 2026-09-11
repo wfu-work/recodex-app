@@ -887,7 +887,15 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
     flushReasoningText();
     final mergedGitSummary =
         structuredGitSummary ?? _mergeGitSummaries(gitSummaries);
-    if (mergedGitSummary != null) {
+    // Git changes are provisional while Codex is still editing. Keep the
+    // execution timeline compact and reveal one final review card only after
+    // the selected turn reaches a terminal state.
+    final canShowGitSummary =
+        mergedGitSummary != null &&
+        !statusIsActive &&
+        !statusIsUnknown &&
+        (widget.completed || taskStatus.isTerminal || hasTerminalEvent);
+    if (canShowGitSummary) {
       if (answerChildren.isNotEmpty) {
         answerChildren.add(const SizedBox(height: 18));
       }
@@ -2401,12 +2409,7 @@ class ComposerBar extends StatelessWidget {
     super.key,
   });
 
-  static const List<String> permissionModes = [
-    '默认权限',
-    '自动审查',
-    '完全访问权限',
-    '只读权限',
-  ];
+  static const List<String> permissionModes = ['默认权限', '自动审查', '完全访问权限'];
 
   final TextEditingController controller;
   final bool enabled;
@@ -2468,150 +2471,231 @@ class ComposerBar extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  _ComposerIconButton(
-                    icon: RecodexIcons.add,
-                    onPressed: enabled && !running ? () {} : null,
-                  ),
-                  if (running) ...[
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: _PermissionModePill(
-                          icon: RecodexIcons.shield,
-                          value: permissionMode,
-                          values: [
-                            ...permissionModes,
-                            if (!permissionModes.contains(permissionMode))
-                              permissionMode,
-                          ],
-                          onChanged: onPermissionModeChanged,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      flex: 2,
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          if (contextWindowUsage != null)
-                            ContextWindowIndicator(usage: contextWindowUsage!),
-                          Flexible(
-                            child: _RunningModelLabel(context: this.context),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ] else ...[
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _ComposerMenuButton(
-                              icon: RecodexIcons.fast,
-                              label: this.context.model,
-                              values: [
-                                ...this.context.models,
-                                if (this.context.model.isNotEmpty &&
-                                    !this.context.models.contains(
-                                      this.context.model,
-                                    ))
-                                  this.context.model,
-                              ],
-                              labelForValue: this.context.modelLabel,
-                              onChanged: onModelChanged,
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  // The composer can be resized well below a phone width on
+                  // desktop. Keep the primary action and the relevant
+                  // settings reachable without forcing a RenderFlex to
+                  // allocate more than the available row width.
+                  if (constraints.maxWidth < 240) {
+                    final veryNarrow = constraints.maxWidth < 190;
+                    return Row(
+                      mainAxisSize: MainAxisSize.max,
+                      children: [
+                        if (running)
+                          SizedBox(
+                            width: 48,
+                            child: _PermissionModePill(
+                              icon: RecodexIcons.shield,
+                              value: permissionMode,
+                              values: [...permissionModes],
+                              onChanged: onPermissionModeChanged,
                             ),
-                            const SizedBox(width: 6),
-                            _ComposerMenuButton(
-                              icon: RecodexIcons.reasoning,
-                              label: _reasoningLabel(
-                                this.context.reasoningEffort,
+                          )
+                        else
+                          _ComposerCompactSettingsButton(
+                            context: this.context,
+                            onModelChanged: onModelChanged,
+                            onReasoningChanged: onReasoningChanged,
+                          ),
+                        const Spacer(),
+                        if (!running && !veryNarrow)
+                          _ComposerIconButton(
+                            icon: RecodexIcons.mic,
+                            active: listening,
+                            onPressed: enabled ? onVoicePressed : null,
+                          ),
+                        Tooltip(
+                          message: running ? '停止任务' : '发送消息',
+                          child: SizedBox.square(
+                            dimension: 36,
+                            child: FilledButton(
+                              onPressed: running
+                                  ? onStop
+                                  : enabled
+                                  ? onSend
+                                  : null,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: colors.text,
+                                foregroundColor: running
+                                    ? (isDark
+                                          ? colors.glassColor
+                                          : colors.surfaceOverlay)
+                                    : (isDark
+                                          ? colors.glassColor
+                                          : colors.glassHighlight),
+                                disabledBackgroundColor: colors.textMuted
+                                    .withValues(alpha: 0.34),
+                                disabledForegroundColor: colors.textMuted,
+                                shape: const CircleBorder(),
+                                padding: EdgeInsets.zero,
+                                elevation: 0,
                               ),
-                              values: [
-                                ...this.context.reasoningEfforts,
-                                if (this.context.reasoningEffort.isNotEmpty &&
-                                    !this.context.reasoningEfforts.contains(
-                                      this.context.reasoningEffort,
-                                    ))
-                                  this.context.reasoningEffort,
-                              ],
-                              labelForValue: _reasoningLabel,
-                              onChanged: onReasoningChanged,
+                              child: Icon(
+                                running
+                                    ? RecodexIcons.stop
+                                    : RecodexIcons.arrowUp,
+                                size: running ? 18 : 22,
+                              ),
                             ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    if (contextWindowUsage != null)
-                      ContextWindowIndicator(usage: contextWindowUsage!),
-                    _ComposerIconButton(
-                      icon: RecodexIcons.mic,
-                      active: listening,
-                      onPressed: enabled ? onVoicePressed : null,
-                    ),
-                  ],
-                  const SizedBox(width: 8),
-                  if (running)
-                    ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: controller,
-                      builder: (context, value, _) => IconButton(
-                        tooltip: '补充到当前任务',
-                        onPressed: enabled && value.text.trim().isNotEmpty
-                            ? onSteer
-                            : null,
-                        icon: const Icon(
-                          Icons.subdirectory_arrow_left,
-                          size: 20,
-                        ),
-                      ),
-                    ),
-                  Tooltip(
-                    message: running ? '停止任务' : '发送消息',
-                    child: SizedBox.square(
-                      // Keep the primary action in the same visual rhythm as
-                      // the compact selector pills beside it. The hit target
-                      // remains easy to reach while the circular button no
-                      // longer dominates the composer row.
-                      dimension: 36,
-                      child: FilledButton(
-                        onPressed: running
-                            ? onStop
-                            : enabled
-                            ? onSend
-                            : null,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: running ? colors.text : colors.text,
-                          foregroundColor: running
-                              ? (isDark
-                                    ? colors.glassColor
-                                    : colors.surfaceOverlay)
-                              : (isDark
-                                    ? colors.glassColor
-                                    : colors.glassHighlight),
-                          disabledBackgroundColor: colors.textMuted.withValues(
-                            alpha: 0.34,
                           ),
-                          disabledForegroundColor: colors.textMuted,
-                          shape: const CircleBorder(),
-                          padding: EdgeInsets.zero,
-                          elevation: 0,
                         ),
-                        child: Icon(
-                          running ? RecodexIcons.stop : RecodexIcons.arrowUp,
-                          size: running ? 18 : 22,
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    children: [
+                      _ComposerIconButton(
+                        icon: RecodexIcons.add,
+                        onPressed: enabled && !running ? () {} : null,
+                      ),
+                      if (running) ...[
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: _PermissionModePill(
+                              icon: RecodexIcons.shield,
+                              value: permissionMode,
+                              values: [...permissionModes],
+                              onChanged: onPermissionModeChanged,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          flex: 2,
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              if (contextWindowUsage != null)
+                                ContextWindowIndicator(
+                                  usage: contextWindowUsage!,
+                                ),
+                              Flexible(
+                                child: _RunningModelLabel(
+                                  context: this.context,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ] else ...[
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            physics: const BouncingScrollPhysics(),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _ComposerMenuButton(
+                                  icon: RecodexIcons.fast,
+                                  label: this.context.model,
+                                  values: [
+                                    ...this.context.models,
+                                    if (this.context.model.isNotEmpty &&
+                                        !this.context.models.contains(
+                                          this.context.model,
+                                        ))
+                                      this.context.model,
+                                  ],
+                                  labelForValue: this.context.modelLabel,
+                                  onChanged: onModelChanged,
+                                ),
+                                const SizedBox(width: 6),
+                                _ComposerMenuButton(
+                                  icon: RecodexIcons.reasoning,
+                                  label: _reasoningLabel(
+                                    this.context.reasoningEffort,
+                                  ),
+                                  values: [
+                                    ...this.context.reasoningEfforts,
+                                    if (this
+                                            .context
+                                            .reasoningEffort
+                                            .isNotEmpty &&
+                                        !this.context.reasoningEfforts.contains(
+                                          this.context.reasoningEffort,
+                                        ))
+                                      this.context.reasoningEffort,
+                                  ],
+                                  labelForValue: _reasoningLabel,
+                                  onChanged: onReasoningChanged,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        if (contextWindowUsage != null)
+                          ContextWindowIndicator(usage: contextWindowUsage!),
+                        _ComposerIconButton(
+                          icon: RecodexIcons.mic,
+                          active: listening,
+                          onPressed: enabled ? onVoicePressed : null,
+                        ),
+                      ],
+                      const SizedBox(width: 8),
+                      if (running)
+                        ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: controller,
+                          builder: (context, value, _) => IconButton(
+                            tooltip: '补充到当前任务',
+                            onPressed: enabled && value.text.trim().isNotEmpty
+                                ? onSteer
+                                : null,
+                            icon: const Icon(
+                              Icons.subdirectory_arrow_left,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                      Tooltip(
+                        message: running ? '停止任务' : '发送消息',
+                        child: SizedBox.square(
+                          // Keep the primary action in the same visual rhythm as
+                          // the compact selector pills beside it. The hit target
+                          // remains easy to reach while the circular button no
+                          // longer dominates the composer row.
+                          dimension: 36,
+                          child: FilledButton(
+                            onPressed: running
+                                ? onStop
+                                : enabled
+                                ? onSend
+                                : null,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: running
+                                  ? colors.text
+                                  : colors.text,
+                              foregroundColor: running
+                                  ? (isDark
+                                        ? colors.glassColor
+                                        : colors.surfaceOverlay)
+                                  : (isDark
+                                        ? colors.glassColor
+                                        : colors.glassHighlight),
+                              disabledBackgroundColor: colors.textMuted
+                                  .withValues(alpha: 0.34),
+                              disabledForegroundColor: colors.textMuted,
+                              shape: const CircleBorder(),
+                              padding: EdgeInsets.zero,
+                              elevation: 0,
+                            ),
+                            child: Icon(
+                              running
+                                  ? RecodexIcons.stop
+                                  : RecodexIcons.arrowUp,
+                              size: running ? 18 : 22,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                ],
+                    ],
+                  );
+                },
               ),
             ],
           ),
@@ -2756,6 +2840,61 @@ class _ComposerMenuButton extends StatelessWidget {
   }
 }
 
+/// A single compact entry point for model and reasoning settings when the
+/// composer is narrower than the regular desktop control row.
+class _ComposerCompactSettingsButton extends StatelessWidget {
+  const _ComposerCompactSettingsButton({
+    required this.context,
+    required this.onModelChanged,
+    required this.onReasoningChanged,
+  });
+
+  final ComposerContext context;
+  final ValueChanged<String> onModelChanged;
+  final ValueChanged<String> onReasoningChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final modelValues = [
+      ...this.context.models,
+      if (this.context.model.isNotEmpty &&
+          !this.context.models.contains(this.context.model))
+        this.context.model,
+    ];
+    final reasoningValues = [
+      ...this.context.reasoningEfforts,
+      if (this.context.reasoningEffort.isNotEmpty &&
+          !this.context.reasoningEfforts.contains(this.context.reasoningEffort))
+        this.context.reasoningEffort,
+    ];
+    return RecodexPopupMenuButton<String>(
+      tooltip: '模型和推理设置',
+      icon: Icon(RecodexIcons.tune, color: context.recodexColors.textMuted),
+      onSelected: (value) {
+        if (value.startsWith('model:')) {
+          onModelChanged(value.substring('model:'.length));
+        } else if (value.startsWith('reasoning:')) {
+          onReasoningChanged(value.substring('reasoning:'.length));
+        }
+      },
+      itemBuilder: (context) => [
+        if (modelValues.isNotEmpty)
+          for (final value in modelValues)
+            PopupMenuItem<String>(
+              value: 'model:$value',
+              child: Text('模型 · ${this.context.modelLabel(value)}'),
+            ),
+        if (reasoningValues.isNotEmpty)
+          for (final value in reasoningValues)
+            PopupMenuItem<String>(
+              value: 'reasoning:$value',
+              child: Text('推理 · ${_reasoningLabel(value)}'),
+            ),
+      ],
+    );
+  }
+}
+
 class _PermissionModePill extends StatelessWidget {
   const _PermissionModePill({
     required this.icon,
@@ -2789,7 +2928,10 @@ class _PermissionModePill extends StatelessWidget {
             ),
             itemBuilder: (context) => [
               for (final item in values)
-                PopupMenuItem(value: item, child: Text(item)),
+                PopupMenuItem(
+                  value: item,
+                  child: Text(_desktopPermissionLabel(item)),
+                ),
             ],
           );
         }
@@ -2797,8 +2939,10 @@ class _PermissionModePill extends StatelessWidget {
           value: selected,
           options: values
               .map(
-                (item) =>
-                    RecodexDropdownOption<String>(value: item, label: item),
+                (item) => RecodexDropdownOption<String>(
+                  value: item,
+                  label: _desktopPermissionLabel(item),
+                ),
               )
               .toList(),
           leadingIcon: icon,
@@ -2810,6 +2954,16 @@ class _PermissionModePill extends StatelessWidget {
       },
     );
   }
+}
+
+/// The desktop composer exposes these names while the relay keeps the
+/// historical values on the wire for compatibility with older hosts.
+String _desktopPermissionLabel(String value) {
+  return switch (value) {
+    '默认权限' => '请求批准',
+    '自动审查' => '帮我批准',
+    _ => value,
+  };
 }
 
 String _reasoningLabel(String value) {

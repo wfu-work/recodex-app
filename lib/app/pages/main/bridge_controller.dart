@@ -6495,6 +6495,24 @@ class BridgeController extends GetxController {
         return;
       }
     }
+    if (event.kind == 'user') {
+      // The live user item can arrive before the first thread.read snapshot.
+      // Reuse the same temporary-prompt bridge as snapshot merging so the
+      // initial local bubble is upgraded with the persisted turn id.
+      final similarIndex = _similarEventIndex(events, event);
+      if (similarIndex >= 0) {
+        final existing = events[similarIndex];
+        final merged = _mergeSnapshotEvent(existing, event);
+        if (!_sameTimelineEvent(existing, merged)) {
+          events[similarIndex] = merged;
+          _bumpTimelineRevision();
+          _queueTimelineCacheWrite(
+            selectedSessionId.value ?? currentSessionId.value,
+          );
+        }
+        return;
+      }
+    }
     if (_isAnswerMetadata(event) && event.turnId != null) {
       final hasTurn = events.any((item) => item.turnId == event.turnId);
       if (hasTurn) {
@@ -6844,6 +6862,18 @@ class BridgeController extends GetxController {
         continue;
       }
       final candidateText = candidate.text.trim();
+      // A newly sent prompt is rendered immediately without a turn id. The
+      // first persisted snapshot carries the same prompt with its turn id.
+      // Treat that pair as one event so hydration does not show the prompt
+      // twice. Restrict this bridge to user messages with exact text: two
+      // assistant fragments with an omitted id may be legitimate content.
+      final candidateTurnId = candidate.turnId?.trim() ?? '';
+      final eventTurnId = event.turnId?.trim() ?? '';
+      if (candidate.kind == 'user' &&
+          candidateText == text &&
+          candidateTurnId.isEmpty != eventTurnId.isEmpty) {
+        return index;
+      }
       if (candidateText == text) return index;
       // A persisted assistant/reasoning item is usually the aggregate of
       // several streamed deltas. Treat containment as the same event so a

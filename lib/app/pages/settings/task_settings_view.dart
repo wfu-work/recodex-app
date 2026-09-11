@@ -86,8 +86,8 @@ class TaskSettingsPage extends StatelessWidget {
                       subtitle: '控制任务执行时的确认策略',
                       value: preferences.defaultPermissionMode.value,
                       options: const [
-                        RecodexDropdownOption(value: '默认权限', label: '默认权限'),
-                        RecodexDropdownOption(value: '自动审查', label: '自动审查'),
+                        RecodexDropdownOption(value: '默认权限', label: '请求批准'),
+                        RecodexDropdownOption(value: '自动审查', label: '帮我批准'),
                         RecodexDropdownOption(value: '完全访问权限', label: '完全访问权限'),
                       ],
                       onChanged: (value) {

@@ -1,9 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:recodex/app/components/recodex_dropdown.dart';
+import 'package:recodex/app/components/chat_components.dart';
 import 'package:recodex/app/theme/recodex_theme.dart';
 
 void main() {
+  test('permission picker matches the desktop three-option menu', () {
+    expect(ComposerBar.permissionModes, ['默认权限', '自动审查', '完全访问权限']);
+    expect(ComposerBar.permissionModes, isNot(contains('只读权限')));
+  });
+
   testWidgets('RecodexDropdown exposes and selects every option', (
     tester,
   ) async {
