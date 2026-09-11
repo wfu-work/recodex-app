@@ -533,6 +533,7 @@ class _NotificationVibrationControl extends StatelessWidget {
                       label: _vibrationStrengthLabel(strength),
                       onChanged: (value) =>
                           controller.setVibrationStrength(value.round()),
+                      onChangeEnd: (_) => controller.previewVibration(),
                     ),
                   ),
                 ),

@@ -200,6 +200,18 @@ class TaskNotificationController extends GetxController
     await _persistPreferences();
   }
 
+  /// Gives immediate tactile feedback when the user picks a strength in the
+  /// settings page. It is intentionally separate from notification delivery
+  /// so changing the slider never causes a system notification.
+  Future<void> previewVibration() async {
+    if (!vibrationEnabled.value ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      return;
+    }
+    await _vibrateWithCurrentStrength();
+  }
+
   Future<bool> requestPermissions() async {
     await initialize();
     if (!ready.value) return false;
@@ -302,8 +314,12 @@ class TaskNotificationController extends GetxController
         notificationDetails: _notificationDetails(),
         payload: payload,
       );
-    } catch (_) {
-      permissionGranted.value = false;
+    } catch (error, stackTrace) {
+      // A failed show (for example an invalid channel resource) is not proof
+      // that the user revoked notification permission. Keep the permission
+      // state intact so the settings page remains actionable and log the
+      // concrete plugin error for diagnostics.
+      debugPrint('本地通知发送失败: $error\n$stackTrace');
     }
   }
 
@@ -321,7 +337,7 @@ class TaskNotificationController extends GetxController
         channelName,
         channelDescription: _channelDescription,
         icon: 'ic_notification',
-        largeIcon: const DrawableResourceAndroidBitmap('ic_launcher'),
+        largeIcon: const DrawableResourceAndroidBitmap('ic_notification_large'),
         importance: Importance.high,
         priority: Priority.high,
         category: AndroidNotificationCategory.status,
@@ -458,6 +474,10 @@ class TaskNotificationController extends GetxController
   }
 
   Future<void> _vibrateOnIos() async {
+    await _vibrateWithCurrentStrength();
+  }
+
+  Future<void> _vibrateWithCurrentStrength() async {
     try {
       final normalized = vibrationStrength.value.clamp(1, 3).toInt();
       await Vibration.vibrate(
@@ -470,6 +490,11 @@ class TaskNotificationController extends GetxController
           1 => 0.25,
           3 => 0.85,
           _ => 0.5,
+        },
+        amplitude: switch (normalized) {
+          1 => 70,
+          3 => 255,
+          _ => 160,
         },
       );
     } catch (_) {
