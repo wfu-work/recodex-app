@@ -32,6 +32,7 @@ abstract final class RecodexIcons {
   static const IconData fileText = LucideIcons.fileText300;
   static const IconData gitCompare = LucideIcons.gitCompare300;
   static const IconData image = LucideIcons.image300;
+  static const IconData camera = LucideIcons.camera300;
   static const IconData devices = LucideIcons.monitorSmartphone300;
   static const IconData edit = LucideIcons.pencil300;
   static const IconData error = LucideIcons.circleAlert300;

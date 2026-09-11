@@ -4,9 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../theme/recodex_theme.dart';
 
-/// The shared running-state mark for live activity surfaces and the
-/// jump-to-latest control. Keeping one renderer for both surfaces makes the
-/// activity state read as one thing instead of two unrelated spinners.
+/// Three gently moving dots that indicate ongoing work in the
+/// jump-to-latest control.
 class RecodexActivityRipple extends StatefulWidget {
   const RecodexActivityRipple({
     this.size = 28,
@@ -51,10 +50,9 @@ class _RecodexActivityRippleState extends State<RecodexActivityRipple>
 
   void _syncMotion() {
     final media = MediaQuery.of(context);
-    final reduceMotion =
-        widget.reduceMotion ||
-        media.disableAnimations ||
-        media.accessibleNavigation;
+    // Accessible navigation (for example, a screen reader) does not request
+    // reduced motion. Only explicit motion preferences pause this indicator.
+    final reduceMotion = widget.reduceMotion || media.disableAnimations;
     if (reduceMotion != _reduceMotion) {
       _reduceMotion = reduceMotion;
       if (_reduceMotion) {
@@ -131,20 +129,6 @@ class _ActivityRipplePainter extends CustomPainter {
         Paint()..color = color.withValues(alpha: opacity),
       );
     }
-
-    final ringProgress = (progress + 0.28) % 1;
-    final ringScale = reduceMotion ? 0.74 : 0.72 + ringProgress * 0.25;
-    final ringOpacity = reduceMotion
-        ? 0.24
-        : (0.26 * (1 - ringProgress)).clamp(0.04, 0.26);
-    canvas.drawCircle(
-      center,
-      size * 0.5 * ringScale,
-      Paint()
-        ..color = color.withValues(alpha: ringOpacity)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2,
-    );
   }
 
   @override
@@ -211,10 +195,9 @@ class _RecodexActivityShimmerTextState extends State<RecodexActivityShimmerText>
 
   void _syncMotion() {
     final media = MediaQuery.of(context);
-    final reduceMotion =
-        widget.reduceMotion ||
-        media.disableAnimations ||
-        media.accessibleNavigation;
+    // Screen readers enable accessible navigation, not reduced motion. Use
+    // the same explicit motion preferences as the running dots above.
+    final reduceMotion = widget.reduceMotion || media.disableAnimations;
     if (reduceMotion != _reduceMotion) {
       _reduceMotion = reduceMotion;
       if (_reduceMotion) {

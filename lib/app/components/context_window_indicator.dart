@@ -56,13 +56,13 @@ class _ContextWindowIndicatorState extends State<ContextWindowIndicator> {
             style: IconButton.styleFrom(
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               minimumSize: const Size(44, 44),
-              padding: const EdgeInsets.all(13),
+              padding: const EdgeInsets.all(15),
             ),
             icon: SizedBox.square(
-              dimension: 18,
+              dimension: 14,
               child: CircularProgressIndicator(
                 value: usage.fraction,
-                strokeWidth: 2.5,
+                strokeWidth: 2,
                 strokeCap: StrokeCap.round,
                 backgroundColor: colors.textMuted.withValues(alpha: 0.2),
                 color: colors.textMuted,

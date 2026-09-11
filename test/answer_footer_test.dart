@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
 import 'package:recodex/app/components/answer_footer.dart';
 import 'package:recodex/app/components/chat_components.dart';
+import 'package:recodex/app/components/recodex_notice.dart';
 import 'package:recodex/app/models/bridge_models.dart';
 import 'package:recodex/app/pages/settings/theme_controller.dart';
 import 'package:recodex/app/theme/recodex_theme.dart';
@@ -24,6 +25,7 @@ void main() {
 
   Widget page(Widget child) => MaterialApp(
     theme: RecodexTheme.light,
+    builder: (context, child) => RecodexNoticeHost(child: child!),
     home: Scaffold(body: SingleChildScrollView(child: child)),
   );
   final end = DateTime(2026, 9, 10, 17, 20, 30);

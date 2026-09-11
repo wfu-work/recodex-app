@@ -3,10 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
-import '../../components/liquid_glass.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../components/recodex_dropdown.dart';
+import '../../components/recodex_notice.dart';
 import '../../models/bridge_models.dart';
+import '../../services/relay_protocol.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
 import '../settings/settings_widgets.dart';
@@ -113,59 +114,40 @@ class _PairingPageState extends State<PairingPage> {
   }
 
   Widget _buildPairingList(BuildContext context) {
-    final horizontalPadding = MediaQuery.sizeOf(context).width >= 720
-        ? 48.0
-        : 24.0;
     final profiles = controller.pairings.toList(growable: false);
     final activeId = controller.activePairingId.value;
-    return ListView(
-      padding: EdgeInsets.fromLTRB(
-        horizontalPadding,
-        22,
-        horizontalPadding,
-        32,
-      ),
+    return _PairingPageContent(
+      key: const ValueKey('pairing-list'),
       children: [
-        Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(
-              maxWidth: SettingsPageContent.maxWidth,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _PairingListHero(
-                  count: profiles.length,
-                  connected: controller.connected.value,
-                ),
-                const SizedBox(height: 20),
-                if (profiles.isEmpty)
-                  _EmptyPairingCard(onCreate: _newPairing)
-                else ...[
-                  for (final profile in profiles) ...[
-                    _PairingListTile(
-                      profile: profile,
-                      active: profile.id == activeId,
-                      connected:
-                          profile.id == activeId && controller.connected.value,
-                      busy: profile.id == activeId && controller.busy.value,
-                      onSelect: () => controller.switchPairing(profile.id),
-                      onEdit: () => _openEditor(profile),
-                      onDelete: () => _confirmDelete(profile),
-                    ),
-                    const SizedBox(height: 14),
-                  ],
-                  const SizedBox(height: 6),
-                  BluePillButton(
-                    label: '新建配对',
-                    icon: RecodexIcons.add,
-                    onPressed: _newPairing,
-                  ),
-                ],
-              ],
-            ),
-          ),
+        _PairingIntro(
+          title: '你的配对',
+          subtitle: profiles.isEmpty
+              ? '连接主机，在手机上继续 Codex 任务。'
+              : '已保存 ${profiles.length} 个配对，点按卡片管理连接。',
         ),
+        const SizedBox(height: 20),
+        if (profiles.isEmpty)
+          _EmptyPairingCard(onCreate: _newPairing)
+        else ...[
+          for (final profile in profiles) ...[
+            _PairingListTile(
+              profile: profile,
+              active: profile.id == activeId,
+              connected: profile.id == activeId && controller.connected.value,
+              busy: profile.id == activeId && controller.busy.value,
+              onSelect: () => controller.switchPairing(profile.id),
+              onEdit: () => _openEditor(profile),
+              onDelete: () => _confirmDelete(profile),
+            ),
+            const SizedBox(height: 12),
+          ],
+          const SizedBox(height: 4),
+          _PairingActionButton(
+            label: '新建配对',
+            icon: RecodexIcons.add,
+            onPressed: _newPairing,
+          ),
+        ],
       ],
     );
   }
@@ -178,264 +160,163 @@ class _PairingPageState extends State<PairingPage> {
     required bool busy,
     required ComposerContext serviceContext,
   }) {
-    final horizontalPadding = MediaQuery.sizeOf(context).width >= 720
-        ? 48.0
-        : 24.0;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        return ListView(
-          padding: EdgeInsets.fromLTRB(
-            horizontalPadding,
-            22,
-            horizontalPadding,
-            32,
-          ),
+    final currentProfile =
+        _editingProfile != null &&
+        _editingProfile!.id == controller.activePairingId.value;
+    final showRemote = currentProfile && connected;
+    final unavailable = _testing || _saving || busy || _preparingKey;
+    return _PairingPageContent(
+      key: ValueKey('pairing-editor:$_activeDraftId'),
+      children: [
+        _PairingIntro(
+          title: _editingProfile?.displayName ?? '连接你的 Codex 主机',
+          subtitle: '填写 Relay 连接信息与凭证，保存后即可连接。',
+        ),
+        const SizedBox(height: 20),
+        _PairingCard(
+          icon: RecodexIcons.router,
+          title: '连接信息',
           children: [
-            Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(
-                  maxWidth: SettingsPageContent.maxWidth,
-                ),
-                child: Column(
-                  children: [
-                    _PairingHero(connected: connected),
-                    const SizedBox(height: 22),
-                    _PairingCard(
-                      icon: RecodexIcons.tag,
-                      title: '配对信息',
-                      children: [
-                        _TextSettingRow(
-                          title: '配对名称',
-                          subtitle: '用于在侧边栏和列表中识别这台主机',
-                          controller: _nameController,
-                          keyboardType: TextInputType.text,
-                          onSubmitted: (_) => _savePairing(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 22),
-                    _PairingCard(
-                      icon: RecodexIcons.router,
-                      title: 'Relay 连接',
-                      children: [
-                        _TextSettingRow(
-                          title: 'Relay 连接地址',
-                          subtitle: 'Relay 协议 v1 /v1/connect',
-                          controller: _baseUrlController,
-                          onSubmitted: (_) => _savePairing(),
-                        ),
-                        const SizedBox(height: 20),
-                        _TextSettingRow(
-                          title: '空间 ID',
-                          subtitle: '与连接令牌中的空间 ID 一致',
-                          controller: _spaceIdController,
-                          onSubmitted: (_) => _savePairing(),
-                        ),
-                        const SizedBox(height: 20),
-                        _TextSettingRow(
-                          title: '目标主机接入端 ID',
-                          subtitle: '桌面插件登记的主机接入端 ID',
-                          controller: _targetDeviceController,
-                          onSubmitted: (_) => _savePairing(),
-                        ),
-                        const SizedBox(height: 20),
-                        _TextSettingRow(
-                          title: '本机接入端 ID',
-                          subtitle: '需与连接令牌中的接入端 ID 完全一致',
-                          controller: _endpointIdController,
-                          onSubmitted: (_) => _savePairing(),
-                        ),
-                        const SizedBox(height: 20),
-                        _ConnectionStatusRow(
-                          connected: connected,
-                          label: connectionLabel,
-                          error: lastError,
-                        ),
-                        const SizedBox(height: 30),
-                        const _PairingHint(
-                          text:
-                              'Relay 连接地址示例：wss://relay.example.com/v1/connect；公网 Relay 必须使用 WSS。',
-                          error: false,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 22),
-                    _PairingCard(
-                      icon: RecodexIcons.key,
-                      title: '连接认证',
-                      children: [
-                        _PublicKeySettingRow(
-                          controller: _publicKeyController,
-                          onCopy: _copyPublicKey,
-                          preparing: _preparingKey,
-                        ),
-                        const SizedBox(height: 18),
-                        _TokenSettingRow(
-                          controller: _tokenController,
-                          showToken: _showToken,
-                          onToggleToken: () =>
-                              setState(() => _showToken = !_showToken),
-                        ),
-                        const SizedBox(height: 18),
-                        _TextSettingRow(
-                          title: '接入端授权凭证',
-                          subtitle: '建议填写；连接令牌到期后由它自动续期（通常有效 30 天）',
-                          controller: _grantController,
-                          keyboardType: TextInputType.text,
-                          onSubmitted: (_) => _savePairing(),
-                        ),
-                        const SizedBox(height: 18),
-                        _PairingHint(
-                          text:
-                              '建议同时保存 Endpoint Grant：短期连接令牌会自动续期；Grant 失效后需重新签发。私钥只保存在本机。',
-                          error: false,
-                        ),
-                        const SizedBox(height: 22),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: Wrap(
-                            alignment: WrapAlignment.end,
-                            spacing: 12,
-                            runSpacing: 12,
-                            children: [
-                              OutlinedButton.icon(
-                                onPressed:
-                                    _testing || _saving || busy || _preparingKey
-                                    ? null
-                                    : _testConnection,
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: Theme.of(
-                                    context,
-                                  ).colorScheme.primary,
-                                  side: BorderSide(
-                                    color: Theme.of(context).colorScheme.primary
-                                        .withValues(alpha: 0.55),
-                                  ),
-                                  minimumSize: const Size(0, 58),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 20,
-                                  ),
-                                  shape: const StadiumBorder(),
-                                ),
-                                icon: _testing
-                                    ? const SizedBox.square(
-                                        dimension: 18,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                        ),
-                                      )
-                                    : const Icon(RecodexIcons.network),
-                                label: Text(_testing ? '测试中' : '测试连接'),
-                              ),
-                              BluePillButton(
-                                label: _saving
-                                    ? '保存中'
-                                    : busy
-                                    ? '连接中'
-                                    : _preparingKey
-                                    ? '生成密钥中'
-                                    : '保存并连接',
-                                icon: _saving || busy
-                                    ? RecodexIcons.sync
-                                    : RecodexIcons.qrCode,
-                                onPressed: _saving || busy || _preparingKey
-                                    ? null
-                                    : _savePairing,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    if (connected) ...[
-                      const SizedBox(height: 22),
-                      _PairingCard(
-                        icon: RecodexIcons.terminal,
-                        title: '远程 Codex',
-                        children: [
-                          _ServiceInfoGrid(
-                            items: [
-                              _ServiceInfoItem(
-                                label: '网关版本',
-                                value: serviceContext.bridgeVersion.isEmpty
-                                    ? '未知'
-                                    : serviceContext.bridgeVersion,
-                                icon: RecodexIcons.network,
-                              ),
-                              _ServiceInfoItem(
-                                label: 'Codex 版本',
-                                value: serviceContext.codexVersion.isEmpty
-                                    ? '未检测到'
-                                    : serviceContext.codexVersion,
-                                icon: RecodexIcons.terminal,
-                              ),
-                              _ServiceInfoItem(
-                                label: 'API 密钥',
-                                value: serviceContext.apiKeyConfigured
-                                    ? '已配置'
-                                    : '未配置',
-                                icon: serviceContext.apiKeyConfigured
-                                    ? RecodexIcons.key
-                                    : RecodexIcons.keyOff,
-                                positive: serviceContext.apiKeyConfigured,
-                              ),
-                              _ServiceInfoItem(
-                                label: '默认模型',
-                                value: serviceContext.model,
-                                icon: RecodexIcons.cpu,
-                              ),
-                              _ServiceInfoItem(
-                                label: '今日用量',
-                                value: _formatTokenCount(
-                                  serviceContext.usage.todayTokens,
-                                ),
-                                icon: RecodexIcons.calendar,
-                              ),
-                              _ServiceInfoItem(
-                                label: '本月用量',
-                                value: _formatTokenCount(
-                                  serviceContext.usage.monthTokens,
-                                ),
-                                icon: RecodexIcons.calendar,
-                              ),
-                              _ServiceInfoItem(
-                                label: '估算费用',
-                                value: serviceContext.usage.rateConfigured
-                                    ? _formatCost(
-                                        serviceContext.usage.monthCost,
-                                      )
-                                    : '未配置费率',
-                                icon: RecodexIcons.payments,
-                              ),
-                              _ServiceInfoItem(
-                                label: '最近更新',
-                                value: _formatUsageTime(
-                                  serviceContext.usage.lastUpdated,
-                                ),
-                                icon: RecodexIcons.sync,
-                              ),
-                              _ServiceInfoItem(
-                                label: '用量读取',
-                                value: serviceContext.usage.canReadUsage
-                                    ? '可读取'
-                                    : '不可读取',
-                                icon: serviceContext.usage.canReadUsage
-                                    ? RecodexIcons.checkCircle
-                                    : RecodexIcons.error,
-                                positive: serviceContext.usage.canReadUsage,
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
-              ),
+            _TextSettingRow(
+              title: '配对名称',
+              subtitle: '给这台主机一个容易识别的名称',
+              controller: _nameController,
+              keyboardType: TextInputType.text,
+              onSubmitted: (_) => _savePairing(),
+            ),
+            const SizedBox(height: 16),
+            _TextSettingRow(
+              title: 'Relay 连接地址',
+              subtitle: '例如 wss://relay.example.com/v1/connect',
+              controller: _baseUrlController,
+              onSubmitted: (_) => _savePairing(),
+            ),
+            const SizedBox(height: 16),
+            _TextSettingRow(
+              title: '空间 ID',
+              subtitle: '与连接令牌中的空间一致',
+              controller: _spaceIdController,
+              onSubmitted: (_) => _savePairing(),
+            ),
+            const SizedBox(height: 16),
+            _TextSettingRow(
+              title: '目标主机接入端 ID',
+              subtitle: '桌面插件登记的主机 ID',
+              controller: _targetDeviceController,
+              onSubmitted: (_) => _savePairing(),
+            ),
+            const SizedBox(height: 16),
+            _TextSettingRow(
+              title: '本机接入端 ID',
+              subtitle: '与为本机签发的连接令牌一致',
+              controller: _endpointIdController,
+              onSubmitted: (_) => _savePairing(),
             ),
           ],
-        );
-      },
+        ),
+        const SizedBox(height: 16),
+        _PairingCard(
+          icon: RecodexIcons.key,
+          title: '连接认证',
+          children: [
+            _PublicKeySettingRow(
+              controller: _publicKeyController,
+              onCopy: _copyPublicKey,
+              preparing: _preparingKey,
+            ),
+            const SizedBox(height: 16),
+            _TokenSettingRow(
+              controller: _tokenController,
+              showToken: _showToken,
+              onToggleToken: () => setState(() => _showToken = !_showToken),
+            ),
+            const SizedBox(height: 16),
+            _TextSettingRow(
+              title: '接入端授权凭证',
+              subtitle: 'Endpoint Grant · 用于自动续期连接令牌',
+              controller: _grantController,
+              keyboardType: TextInputType.text,
+              onSubmitted: (_) => _savePairing(),
+            ),
+            const SizedBox(height: 12),
+            const _PairingHint(text: '建议同时保存授权凭证，令牌到期后可自动续期。私钥仅保存在本机。'),
+          ],
+        ),
+        const SizedBox(height: 16),
+        _PairingActions(
+          testing: _testing,
+          saving: _saving,
+          busy: busy,
+          preparingKey: _preparingKey,
+          onTest: unavailable ? null : _testConnection,
+          onSave: unavailable ? null : _savePairing,
+        ),
+        const SizedBox(height: 12),
+        _ConnectionStatusRow(
+          connected: showRemote,
+          label: currentProfile ? connectionLabel : 'idle',
+          error: lastError,
+        ),
+        if (showRemote) ...[
+          const SizedBox(height: 24),
+          _PairingCard(
+            icon: RecodexIcons.terminal,
+            title: '远程 Codex',
+            children: [
+              _ServiceInfoList(
+                items: [
+                  _ServiceInfoItem(
+                    label: '网关版本',
+                    value: serviceContext.bridgeVersion.isEmpty
+                        ? '未知'
+                        : serviceContext.bridgeVersion,
+                  ),
+                  _ServiceInfoItem(
+                    label: 'Codex 版本',
+                    value: serviceContext.codexVersion.isEmpty
+                        ? '未检测到'
+                        : serviceContext.codexVersion,
+                  ),
+                  _ServiceInfoItem(
+                    label: 'API 密钥',
+                    value: serviceContext.apiKeyConfigured ? '已配置' : '未配置',
+                    positive: serviceContext.apiKeyConfigured,
+                  ),
+                  _ServiceInfoItem(
+                    label: '默认模型',
+                    value: serviceContext.model.isEmpty
+                        ? '未提供'
+                        : serviceContext.modelLabel(serviceContext.model),
+                  ),
+                  _ServiceInfoItem(
+                    label: '今日用量',
+                    value: _formatTokenCount(serviceContext.usage.todayTokens),
+                  ),
+                  _ServiceInfoItem(
+                    label: '本月用量',
+                    value: _formatTokenCount(serviceContext.usage.monthTokens),
+                  ),
+                  _ServiceInfoItem(
+                    label: '估算费用',
+                    value: serviceContext.usage.rateConfigured
+                        ? _formatCost(serviceContext.usage.monthCost)
+                        : '未配置费率',
+                  ),
+                  _ServiceInfoItem(
+                    label: '最近更新',
+                    value: _formatUsageTime(serviceContext.usage.lastUpdated),
+                  ),
+                  _ServiceInfoItem(
+                    label: '用量读取',
+                    value: serviceContext.usage.canReadUsage ? '可读取' : '不可读取',
+                    positive: serviceContext.usage.canReadUsage,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ],
     );
   }
 
@@ -491,11 +372,11 @@ class _PairingPageState extends State<PairingPage> {
     if (value.isEmpty || _preparingKey) return;
     await Clipboard.setData(ClipboardData(text: value));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Ed25519 公钥已复制'),
-        duration: Duration(seconds: 2),
-      ),
+    RecodexNotice.show(
+      context,
+      'Ed25519 公钥已复制',
+      tone: RecodexNoticeTone.success,
+      duration: const Duration(seconds: 2),
     );
   }
 
@@ -546,11 +427,11 @@ class _PairingPageState extends State<PairingPage> {
       );
       if (!mounted) return;
       if (error == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('连接测试成功，Relay 连接正常。'),
-            duration: Duration(seconds: 2),
-          ),
+        RecodexNotice.show(
+          context,
+          '连接测试成功，Relay 连接正常。',
+          tone: RecodexNoticeTone.success,
+          duration: const Duration(seconds: 2),
         );
       } else {
         controller.lastError.value = error;
@@ -576,6 +457,22 @@ class _PairingPageState extends State<PairingPage> {
     if (keyPreparation != null) await keyPreparation;
     if (_draftDeviceKey.isEmpty || _publicKeyController.text.trim().isEmpty) {
       controller.lastError.value = '接入端公钥尚未生成，请稍后再试。';
+      return;
+    }
+    // The public key is editable for importing/correcting a value, but it
+    // must still correspond to the private seed held by this pairing. Relay
+    // verifies that relationship during the signed handshake.
+    try {
+      final keyPair = await RelayProtocol.keyPairFromSeed(
+        RelayProtocol.decodeBase64Url(_draftDeviceKey),
+      );
+      final derivedPublicKey = await RelayProtocol.publicKey(keyPair);
+      if (_publicKeyController.text.trim() != derivedPublicKey) {
+        controller.lastError.value = '公钥与本机私钥不匹配，请填写对应的公钥。';
+        return;
+      }
+    } catch (_) {
+      controller.lastError.value = '公钥格式无效，请检查后重试。';
       return;
     }
     final name = _nameController.text.trim();
@@ -656,41 +553,66 @@ class _PairingPageState extends State<PairingPage> {
 
 enum _PairingPageMode { list, editor }
 
-class _PairingListHero extends StatelessWidget {
-  const _PairingListHero({required this.count, required this.connected});
+class _PairingPageContent extends StatelessWidget {
+  const _PairingPageContent({required this.children, super.key});
 
-  final int count;
-  final bool connected;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final horizontal = MediaQuery.sizeOf(context).width < 600 ? 16.0 : 24.0;
+    return ListView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      padding: EdgeInsets.fromLTRB(
+        horizontal,
+        16,
+        horizontal,
+        24 + MediaQuery.paddingOf(context).bottom,
+      ),
+      children: [
+        Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: children,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PairingIntro extends StatelessWidget {
+  const _PairingIntro({required this.title, required this.subtitle});
+
+  final String title;
+  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return LiquidGlass(
-      radius: 32,
-      opacity: 0.72,
-      padding: const EdgeInsets.fromLTRB(26, 24, 26, 24),
-      child: Row(
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(RecodexIcons.devices, color: colors.icon, size: 30),
-          const SizedBox(width: 18),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  '你的配对',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  count == 0 ? '添加一台 Codex 主机开始使用' : '$count 个配对配置，可随时切换',
-                  style: TextStyle(
-                    color: colors.textMuted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
+          Text(
+            title,
+            style: TextStyle(
+              color: colors.text,
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            subtitle,
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: 14,
+              height: 1.45,
             ),
           ),
         ],
@@ -706,33 +628,35 @@ class _EmptyPairingCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return LiquidGlass(
-      radius: 28,
-      opacity: 0.66,
-      padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
+    final colors = context.recodexColors;
+    return SettingsCard(
+      padding: const EdgeInsets.all(20),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(
-            RecodexIcons.addLink,
-            size: 42,
-            color: context.recodexColors.icon,
-          ),
-          const SizedBox(height: 12),
+          Icon(RecodexIcons.devices, size: 28, color: colors.textMuted),
+          const SizedBox(height: 16),
           Text(
             '还没有配对',
+            textAlign: TextAlign.center,
             style: TextStyle(
-              color: context.recodexColors.text,
+              color: colors.text,
               fontSize: 16,
-              fontWeight: FontWeight.w800,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 6),
           Text(
-            '每台 Codex 主机都可以保存为独立配置。',
-            style: TextStyle(color: context.recodexColors.textMuted),
+            '添加主机的 Relay 连接信息，即可发送任务、查看回答与文件修改。',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: 14,
+              height: 1.5,
+            ),
           ),
           const SizedBox(height: 20),
-          BluePillButton(
+          _PairingActionButton(
             label: '新建配对',
             icon: RecodexIcons.add,
             onPressed: onCreate,
@@ -772,150 +696,164 @@ class _PairingListTile extends StatelessWidget {
         : profile.isComplete
         ? '离线'
         : '待配置';
-    final statusColor = connected || busy ? colors.success : colors.textMuted;
-    return LiquidGlass(
-      radius: 24,
-      opacity: active ? 0.82 : 0.64,
-      padding: EdgeInsets.zero,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(24),
-          // The whole card is the detail affordance. Selecting the default
-          // pairing remains an explicit action in the trailing control so a
-          // casual tap does not silently switch the active connection.
-          onTap: onEdit,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 16, 12, 16),
-            child: Row(
-              children: [
-                Icon(
-                  active ? RecodexIcons.link : RecodexIcons.router,
-                  color: active ? colors.icon : colors.textMuted,
-                  size: 24,
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        profile.displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: colors.text,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                        ),
+    final statusColor = connected
+        ? colors.success
+        : busy
+        ? colors.warning
+        : colors.textMuted;
+    return SettingsCard(
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 14),
+      // Opening details never switches the active connection. That action
+      // stays explicit in the menu alongside edit and delete.
+      onTap: onEdit,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(RecodexIcons.devices, color: colors.icon, size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      profile.displayName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colors.text,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        height: 1.3,
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${profile.spaceId.isEmpty ? '未填写空间 ID' : profile.spaceId} · ${profile.targetDeviceId.isEmpty ? '未填写主机接入端 ID' : profile.targetDeviceId}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: colors.textMuted, fontSize: 12),
-                      ),
-                      const SizedBox(height: 7),
-                      Row(
-                        children: [
-                          Icon(
-                            RecodexIcons.circle,
-                            size: 8,
-                            color: statusColor,
-                          ),
-                          const SizedBox(width: 6),
+                    ),
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        _PairingStatus(text: status, color: statusColor),
+                        if (active)
                           Text(
-                            status,
+                            '默认配对',
                             style: TextStyle(
-                              color: statusColor,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w800,
+                              color: colors.textMuted,
+                              fontSize: 13,
                             ),
                           ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                IconButton(
-                  tooltip: active ? '当前默认配对' : '设为默认配对',
-                  onPressed: active ? null : onSelect,
-                  icon: Icon(
-                    active ? RecodexIcons.selectedCircle : RecodexIcons.circle,
-                    color: active ? colors.icon : colors.textMuted,
-                  ),
-                ),
-                IconButton(
-                  tooltip: '编辑配对',
-                  onPressed: onEdit,
-                  icon: Icon(RecodexIcons.edit, color: colors.textMuted),
-                ),
-                RecodexPopupMenuButton<String>(
-                  padding: const EdgeInsets.all(8),
-                  tooltip: '更多操作',
-                  onSelected: (value) {
-                    if (value == 'delete') onDelete();
-                  },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(value: 'delete', child: Text('删除配对')),
+                      ],
+                    ),
                   ],
-                  icon: Icon(RecodexIcons.more, color: colors.textMuted),
                 ),
-              ],
-            ),
+              ),
+              SizedBox.square(
+                dimension: 44,
+                child: RecodexPopupMenuButton<String>(
+                  tooltip: '更多操作',
+                  icon: Icon(
+                    RecodexIcons.more,
+                    color: colors.textMuted,
+                    size: 20,
+                  ),
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'edit':
+                        onEdit();
+                      case 'select':
+                        onSelect();
+                      case 'delete':
+                        onDelete();
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(value: 'edit', child: Text('编辑配对')),
+                    PopupMenuItem(
+                      value: 'select',
+                      enabled: !active,
+                      child: Text(active ? '当前默认配对' : '设为默认配对'),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Text(
+                        '删除配对',
+                        style: TextStyle(color: colors.error),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ),
+          const SizedBox(height: 12),
+          _PairingDetail(label: '空间', value: profile.spaceId),
+          const SizedBox(height: 4),
+          _PairingDetail(label: '主机', value: profile.targetDeviceId),
+        ],
       ),
     );
   }
 }
 
-class _PairingHero extends StatelessWidget {
-  const _PairingHero({required this.connected});
-
-  final bool connected;
+class _PairingDetail extends StatelessWidget {
+  const _PairingDetail({required this.label, required this.value});
+  final String label;
+  final String value;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return LiquidGlass(
-      radius: 26,
-      opacity: 0.72,
-      padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
-      child: Row(
-        children: [
-          Icon(
-            connected ? RecodexIcons.link : RecodexIcons.linkOff,
-            color: colors.icon,
-            size: 30,
-          ),
-          const SizedBox(width: 18),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  connected ? 'Relay 已连接' : '连接你的 Codex 主机',
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  '客户端使用 Ed25519 接入端证明连接 Relay，与桌面插件通过 codex.v1 通信。',
-                  style: TextStyle(
-                    color: colors.textMuted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(color: colors.textMuted, fontSize: 13, height: 1.4),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            value.isEmpty ? '未填写' : value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: 13,
+              height: 1.4,
             ),
           ),
-        ],
-      ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PairingStatus extends StatelessWidget {
+  const _PairingStatus({required this.text, required this.color});
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 6,
+          height: 6,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          text,
+          style: TextStyle(
+            color: color,
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -934,29 +872,27 @@ class _PairingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    return LiquidGlass(
-      radius: 26,
-      opacity: 0.72,
-      padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
+    return SettingsCard(
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Icon(icon, color: colors.icon, size: 22),
+              Icon(icon, color: colors.textMuted, size: 20),
               const SizedBox(width: 10),
-              Text(
-                title,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  color: colors.icon,
-                  fontSize: 17,
-                  height: 1.2,
-                  fontWeight: FontWeight.w800,
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 18),
           ...children,
         ],
       ),
@@ -964,15 +900,132 @@ class _PairingCard extends StatelessWidget {
   }
 }
 
-Color _pairingInputFillColor(BuildContext context) {
-  final theme = Theme.of(context);
-  final colors = context.recodexColors;
-  final isDark = theme.brightness == Brightness.dark;
-  return Color.alphaBlend(
-    colors.icon.withValues(alpha: isDark ? 0.08 : 0.04),
-    theme.colorScheme.surfaceContainerHighest,
-  );
+class _PairingActionButton extends StatelessWidget {
+  const _PairingActionButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    this.secondary = false,
+    this.loading = false,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final bool secondary;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final style = ButtonStyle(
+      minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
+      padding: const WidgetStatePropertyAll(
+        EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      ),
+      shape: WidgetStatePropertyAll(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      textStyle: WidgetStatePropertyAll(
+        Theme.of(context).textTheme.labelLarge?.copyWith(
+          fontSize: 14,
+          height: 1.2,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+    final leading = loading
+        ? SizedBox.square(
+            dimension: 18,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: colors.textMuted,
+            ),
+          )
+        : Icon(icon, size: 18);
+    if (secondary) {
+      return OutlinedButton.icon(
+        onPressed: onPressed,
+        style: style.merge(
+          OutlinedButton.styleFrom(
+            foregroundColor: colors.text,
+            side: BorderSide(color: colors.glassBorder),
+          ),
+        ),
+        icon: leading,
+        label: Text(label),
+      );
+    }
+    return FilledButton.icon(
+      onPressed: onPressed,
+      style: style,
+      icon: leading,
+      label: Text(label),
+    );
+  }
 }
+
+class _PairingActions extends StatelessWidget {
+  const _PairingActions({
+    required this.testing,
+    required this.saving,
+    required this.busy,
+    required this.preparingKey,
+    required this.onTest,
+    required this.onSave,
+  });
+  final bool testing;
+  final bool saving;
+  final bool busy;
+  final bool preparingKey;
+  final VoidCallback? onTest;
+  final VoidCallback? onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    final test = _PairingActionButton(
+      label: testing ? '测试中' : '测试连接',
+      icon: RecodexIcons.network,
+      secondary: true,
+      loading: testing,
+      onPressed: onTest,
+    );
+    final save = _PairingActionButton(
+      label: saving
+          ? '保存中'
+          : busy
+          ? '连接中'
+          : preparingKey
+          ? '生成密钥中'
+          : '保存并连接',
+      icon: RecodexIcons.link,
+      loading: saving || busy || preparingKey,
+      onPressed: onSave,
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final textScale = MediaQuery.textScalerOf(context).scale(14) / 14;
+        if (constraints.maxWidth / textScale < 300) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [test, const SizedBox(height: 10), save],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: test),
+            const SizedBox(width: 12),
+            Expanded(child: save),
+          ],
+        );
+      },
+    );
+  }
+}
+
+Color _pairingInputFillColor(BuildContext context) =>
+    context.recodexColors.surfaceOverlay.withValues(alpha: 0.5);
 
 OutlineInputBorder _pairingInputBorder(
   BuildContext context, {
@@ -981,12 +1034,10 @@ OutlineInputBorder _pairingInputBorder(
   final colors = context.recodexColors;
   final theme = Theme.of(context);
   return OutlineInputBorder(
-    borderRadius: BorderRadius.circular(14),
+    borderRadius: BorderRadius.circular(10),
     borderSide: BorderSide(
-      color: focused
-          ? theme.colorScheme.primary
-          : colors.icon.withValues(alpha: 0.34),
-      width: focused ? 1.6 : 1,
+      color: focused ? theme.colorScheme.primary : colors.glassBorder,
+      width: focused ? 1.2 : 1,
     ),
   );
 }
@@ -1000,7 +1051,7 @@ InputDecoration _pairingInputDecoration(
     hintText: hintText,
     filled: true,
     fillColor: _pairingInputFillColor(context),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
     border: _pairingInputBorder(context),
     enabledBorder: _pairingInputBorder(context),
     focusedBorder: _pairingInputBorder(context, focused: true),
@@ -1009,6 +1060,8 @@ InputDecoration _pairingInputDecoration(
       fontSize: 14,
       fontWeight: FontWeight.w500,
     ),
+    isDense: true,
+    suffixIconConstraints: const BoxConstraints(minWidth: 44, minHeight: 44),
     suffixIcon: suffixIcon,
   );
 }
@@ -1040,7 +1093,7 @@ class _TextSettingRow extends StatelessWidget {
         style: TextStyle(
           color: context.recodexColors.icon,
           fontSize: 14,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w400,
         ),
         decoration: _pairingInputDecoration(context),
       ),
@@ -1073,7 +1126,7 @@ class _TokenSettingRow extends StatelessWidget {
         style: TextStyle(
           color: context.recodexColors.icon,
           fontSize: 14,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w400,
         ),
         decoration: _pairingInputDecoration(
           context,
@@ -1107,19 +1160,18 @@ class _PublicKeySettingRow extends StatelessWidget {
     return _ResponsiveSettingRow(
       label: const _SettingLabel(
         title: 'Ed25519 公钥',
-        subtitle: '本机生成的接入端公钥，用于在 relay-web 签发连接令牌',
+        subtitle: '可手动修改；必须与本机私钥匹配，用于在 relay-web 签发连接令牌',
       ),
       field: TextField(
         controller: controller,
-        readOnly: true,
         textAlign: TextAlign.left,
         maxLines: 2,
         minLines: 1,
         style: TextStyle(
           color: context.recodexColors.icon,
           fontSize: 13,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.15,
+          fontWeight: FontWeight.w400,
+          height: 1.4,
         ),
         decoration: _pairingInputDecoration(
           context,
@@ -1147,10 +1199,12 @@ class _ResponsiveSettingRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth < 520) {
+        if (constraints.maxWidth /
+                (MediaQuery.textScalerOf(context).scale(14) / 14) <
+            520) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [label, const SizedBox(height: 12), field],
+            children: [label, const SizedBox(height: 8), field],
           );
         }
         return Row(
@@ -1172,23 +1226,18 @@ class _ResponsiveSettingRow extends StatelessWidget {
 }
 
 class _PairingHint extends StatelessWidget {
-  const _PairingHint({required this.text, required this.error});
-
+  const _PairingHint({required this.text});
   final String text;
-  final bool error;
 
   @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    return Text(
-      text,
-      style: TextStyle(
-        color: error ? colors.error : colors.textMuted,
-        fontSize: 13,
-        fontWeight: FontWeight.w700,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Text(
+    text,
+    style: TextStyle(
+      color: context.recodexColors.textMuted,
+      fontSize: 13,
+      height: 1.5,
+    ),
+  );
 }
 
 class _ConnectionStatusRow extends StatelessWidget {
@@ -1205,94 +1254,49 @@ class _ConnectionStatusRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
+    final pending =
+        label == 'connecting' || label == 'auth' || label == 'reconnecting';
     final color = connected
         ? colors.success
-        : label == 'connecting' || label == 'auth' || label == 'reconnecting'
-        ? colors.icon
-        : colors.error;
+        : pending
+        ? colors.warning
+        : label == 'failed'
+        ? colors.error
+        : colors.textMuted;
     final text = connected
         ? '已连接'
-        : label == 'connecting'
-        ? '正在连接'
-        : label == 'auth'
-        ? '正在认证'
-        : label == 'reconnecting'
-        ? '正在重连'
-        : label == 'failed'
-        ? '连接失败'
-        : '未连接';
-
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final badge = Column(
-          crossAxisAlignment: constraints.maxWidth < 520
-              ? CrossAxisAlignment.start
-              : CrossAxisAlignment.end,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    connected ? RecodexIcons.checkCircle : RecodexIcons.info,
-                    size: 18,
-                    color: color,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    text,
-                    style: TextStyle(
-                      color: color,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (error.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Text(
-                error,
-                textAlign: constraints.maxWidth < 520
-                    ? TextAlign.left
-                    : TextAlign.right,
-                style: TextStyle(
-                  color: colors.error,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+        : switch (label) {
+            'connecting' => '正在连接',
+            'auth' => '正在认证',
+            'reconnecting' => '正在重连',
+            'failed' => '连接失败',
+            _ => '未连接',
+          };
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '连接状态',
+                  style: TextStyle(color: colors.textMuted, fontSize: 13),
                 ),
               ),
+              _PairingStatus(text: text, color: color),
             ],
-          ],
-        );
-        if (constraints.maxWidth < 520) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const _SettingLabel(title: '连接状态', subtitle: '网关实时状态'),
-              const SizedBox(height: 12),
-              badge,
-            ],
-          );
-        }
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(
-              width: 180,
-              child: _SettingLabel(title: '连接状态', subtitle: '网关实时状态'),
+          ),
+          if (error.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              error,
+              style: TextStyle(color: colors.error, fontSize: 13, height: 1.45),
             ),
-            const SizedBox(width: 22),
-            Expanded(child: badge),
           ],
-        );
-      },
+        ],
+      ),
     );
   }
 }
@@ -1311,20 +1315,16 @@ class _SettingLabel extends StatelessWidget {
       children: [
         Text(
           title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
           style: TextStyle(
             color: colors.text,
-            fontSize: 15,
-            fontWeight: FontWeight.w800,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
           ),
         ),
         const SizedBox(height: 4),
         Text(
           subtitle,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: colors.textMuted, fontSize: 12, height: 1.35),
+          style: TextStyle(color: colors.textMuted, fontSize: 13, height: 1.4),
         ),
       ],
     );
@@ -1335,93 +1335,83 @@ class _ServiceInfoItem {
   const _ServiceInfoItem({
     required this.label,
     required this.value,
-    required this.icon,
     this.positive = false,
   });
-
   final String label;
   final String value;
-  final IconData icon;
   final bool positive;
 }
 
-class _ServiceInfoGrid extends StatelessWidget {
-  const _ServiceInfoGrid({required this.items});
-
+class _ServiceInfoList extends StatelessWidget {
+  const _ServiceInfoList({required this.items});
   final List<_ServiceInfoItem> items;
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 560 ? 2 : 1;
-        return Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            for (final item in items)
-              SizedBox(
-                width: columns == 1
-                    ? constraints.maxWidth
-                    : (constraints.maxWidth - 12) / 2,
-                child: _ServiceInfoTile(item: item),
-              ),
-          ],
-        );
-      },
+    final colors = context.recodexColors;
+    return Column(
+      children: [
+        for (var i = 0; i < items.length; i++) ...[
+          if (i > 0)
+            Divider(
+              height: 1,
+              color: colors.glassBorder.withValues(alpha: 0.6),
+            ),
+          _ServiceInfoRow(item: items[i]),
+        ],
+      ],
     );
   }
 }
 
-class _ServiceInfoTile extends StatelessWidget {
-  const _ServiceInfoTile({required this.item});
-
+class _ServiceInfoRow extends StatelessWidget {
+  const _ServiceInfoRow({required this.item});
   final _ServiceInfoItem item;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    final accent = item.positive ? colors.success : colors.icon;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: colors.surfaceOverlay.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: colors.glassBorder),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        child: Row(
-          children: [
-            Icon(item.icon, color: accent, size: 22),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.label,
-                    style: TextStyle(
-                      color: colors.textMuted,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    item.value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: colors.text,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                ],
-              ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 11),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final label = Text(
+            item.label,
+            style: TextStyle(
+              color: colors.textMuted,
+              fontSize: 13,
+              height: 1.5,
             ),
-          ],
-        ),
+          );
+          final compact =
+              constraints.maxWidth /
+                  (MediaQuery.textScalerOf(context).scale(14) / 14) <
+              240;
+          final value = SelectableText(
+            item.value,
+            textAlign: compact ? TextAlign.left : TextAlign.right,
+            style: TextStyle(
+              color: item.positive ? colors.success : colors.text,
+              fontSize: 14,
+              height: 1.4,
+              fontWeight: FontWeight.w500,
+            ),
+          );
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [label, const SizedBox(height: 4), value],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(width: 86, child: label),
+              const SizedBox(width: 16),
+              Expanded(child: value),
+            ],
+          );
+        },
       ),
     );
   }

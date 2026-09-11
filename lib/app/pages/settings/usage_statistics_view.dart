@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
 import '../../components/liquid_page_app_bar.dart';
+import '../../components/recodex_date_picker.dart';
 import '../../components/usage_heatmap.dart';
 import '../../models/bridge_models.dart';
 import '../../routes/app_pages.dart';
@@ -265,23 +266,14 @@ class _UsageStatisticsPageState extends State<UsageStatisticsPage> {
                     '${usageDateLabel(start)} — ${usageDateLabel(today)}',
                     style: caption,
                   ),
-                  IconButton(
-                    tooltip: '选择日期',
-                    icon: const Icon(RecodexIcons.calendar, size: 18),
-                    onPressed: () async {
-                      final date = await showDatePicker(
-                        context: context,
-                        initialDate: _selectedDay ?? today,
-                        firstDate: start,
-                        lastDate: today,
-                      );
-                      if (date != null && mounted) {
-                        setState(() {
-                          _selectedDay = date;
-                          _visibleCount = 50;
-                        });
-                      }
-                    },
+                  RecodexDatePicker(
+                    value: _selectedDay,
+                    firstDate: start,
+                    lastDate: today,
+                    onChanged: (date) => setState(() {
+                      _selectedDay = date;
+                      _visibleCount = 50;
+                    }),
                   ),
                 ],
               ),

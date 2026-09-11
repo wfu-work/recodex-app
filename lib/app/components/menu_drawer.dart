@@ -58,6 +58,8 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
   final Set<String> _expandedWorkspaceKeys = <String>{};
   final Map<String, GlobalKey> _workspaceItemKeys = <String, GlobalKey>{};
   String? _lastScrolledWorkspaceKey;
+  bool _pinnedProjectsExpanded = true;
+  bool _otherProjectsExpanded = true;
 
   @override
   void initState() {
@@ -70,8 +72,12 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
   void didUpdateWidget(covariant RemodexDrawer oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (_workspaceKey(oldWidget.selectedWorkspace) !=
-        _workspaceKey(widget.selectedWorkspace)) {
+            _workspaceKey(widget.selectedWorkspace) ||
+        oldWidget.selectedSessionId != widget.selectedSessionId ||
+        _selectedWorkspaceIsPinned(oldWidget) !=
+            _selectedWorkspaceIsPinned(widget)) {
       _expandSelectedWorkspace();
+      _lastScrolledWorkspaceKey = null;
     }
     _scheduleScrollToSelected(
       jump:
@@ -90,7 +96,24 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
     final key = _workspaceKey(widget.selectedWorkspace);
     if (key != null) {
       _expandedWorkspaceKeys.add(key);
+      if (_selectedWorkspaceIsPinned(widget)) {
+        _pinnedProjectsExpanded = true;
+      } else {
+        _otherProjectsExpanded = true;
+      }
     }
+  }
+
+  bool _selectedWorkspaceIsPinned(RemodexDrawer drawer) {
+    final selected = drawer.selectedWorkspace;
+    if (selected == null) return false;
+    for (final workspace in drawer.workspaces) {
+      if (_workspaceKey(workspace) == _workspaceKey(selected) ||
+          (selected.id.isEmpty && workspace.path == selected.path)) {
+        return workspace.isPinned;
+      }
+    }
+    return false;
   }
 
   String? _workspaceKey(WorkspaceInfo? workspace) {
@@ -137,7 +160,13 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
     if (selectedKey == null) {
       return;
     }
-    final scrollKey = '$selectedKey:${widget.workspaces.length}';
+    final order = widget.workspaces
+        .map(
+          (workspace) =>
+              '${_workspaceKey(workspace)}:${workspace.isPinned}:${workspace.pinnedPosition}',
+        )
+        .join('|');
+    final scrollKey = '$selectedKey:$order';
     if (scrollKey == _lastScrolledWorkspaceKey) {
       return;
     }
@@ -197,7 +226,18 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    final verticalGap = widget.compact ? 14.0 : 22.0;
+    final verticalGap = widget.compact ? 10.0 : 14.0;
+    final pinnedProjects =
+        widget.workspaces.indexed.where((entry) => entry.$2.isPinned).toList()
+          ..sort((left, right) {
+            final position = (left.$2.pinnedPosition ?? 1 << 30).compareTo(
+              right.$2.pinnedPosition ?? 1 << 30,
+            );
+            return position != 0 ? position : left.$1.compareTo(right.$1);
+          });
+    final otherProjects = widget.workspaces
+        .where((workspace) => !workspace.isPinned)
+        .toList(growable: false);
     return Drawer(
       width: widget.compact ? 272 : 292,
       backgroundColor: Colors.transparent,
@@ -221,7 +261,7 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
             opacity: 1,
             padding: EdgeInsets.fromLTRB(
               widget.compact ? 16 : 22,
-              widget.compact ? 16 : 22,
+              widget.compact ? 12 : 14,
               widget.compact ? 10 : 14,
               8,
             ),
@@ -237,13 +277,15 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                   onNewPairing: widget.onNewPairing,
                 ),
                 SizedBox(height: verticalGap),
+                Divider(height: 1, color: colors.glassBorder),
+                const SizedBox(height: 8),
                 Expanded(
                   child: ListView(
                     controller: _sidebarScrollController,
                     padding: EdgeInsets.zero,
                     children: [
                       if (_pinnedSessions.isNotEmpty) ...[
-                        const _SidebarSectionTitle(title: '置顶'),
+                        const _SidebarSectionTitle(title: '置顶任务'),
                         SizedBox(height: widget.compact ? 5 : 8),
                         for (final session in _pinnedSessions)
                           _SidebarSessionLine(
@@ -260,30 +302,16 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                       ],
                       _SidebarSectionTitle(
                         title: '项目',
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              '${widget.workspaces.length}',
-                              style: TextStyle(
-                                color: colors.textMuted,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(width: 2),
-                            LiquidIconButton(
-                              icon: RecodexIcons.sync,
-                              tooltip: widget.refreshing ? '正在刷新项目' : '刷新项目',
-                              onPressed: widget.refreshing
-                                  ? null
-                                  : widget.onRefreshProjects,
-                              loading: widget.refreshing,
-                              size: 36,
-                              iconSize: 20,
-                              color: colors.textMuted,
-                            ),
-                          ],
+                        trailing: LiquidIconButton(
+                          icon: RecodexIcons.sync,
+                          tooltip: widget.refreshing ? '正在刷新项目' : '刷新项目',
+                          onPressed: widget.refreshing
+                              ? null
+                              : widget.onRefreshProjects,
+                          loading: widget.refreshing,
+                          size: 36,
+                          iconSize: 16,
+                          color: colors.textMuted,
                         ),
                       ),
                       SizedBox(height: widget.compact ? 5 : 8),
@@ -294,19 +322,37 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
                               ? '点击右侧刷新按钮重新获取'
                               : '连接 Relay 后同步',
                         )
-                      else
-                        for (final workspace in widget.workspaces)
-                          _WorkspaceBranch(
-                            key: _workspaceItemKey(workspace),
-                            workspace: workspace,
-                            active: _isSelectedWorkspace(workspace),
-                            expanded: _isWorkspaceExpanded(workspace),
-                            sessions: _sessionsForWorkspace(workspace),
-                            selectedSessionId: widget.selectedSessionId,
-                            compact: widget.compact,
-                            onTap: () => _toggleWorkspace(workspace),
-                            onSelectSession: widget.onSelectSession,
+                      else ...[
+                        if (pinnedProjects.isNotEmpty) ...[
+                          _ProjectGroupHeader(
+                            title: '置顶项目',
+                            count: pinnedProjects.length,
+                            expanded: _pinnedProjectsExpanded,
+                            onTap: () => setState(() {
+                              _pinnedProjectsExpanded =
+                                  !_pinnedProjectsExpanded;
+                            }),
                           ),
+                          if (_pinnedProjectsExpanded)
+                            for (final entry in pinnedProjects)
+                              _buildWorkspaceBranch(entry.$2),
+                          if (otherProjects.isNotEmpty)
+                            const SizedBox(height: 8),
+                        ],
+                        if (otherProjects.isNotEmpty) ...[
+                          _ProjectGroupHeader(
+                            title: '其他项目',
+                            count: otherProjects.length,
+                            expanded: _otherProjectsExpanded,
+                            onTap: () => setState(() {
+                              _otherProjectsExpanded = !_otherProjectsExpanded;
+                            }),
+                          ),
+                          if (_otherProjectsExpanded)
+                            for (final workspace in otherProjects)
+                              _buildWorkspaceBranch(workspace),
+                        ],
+                      ],
                       if (_archivedSessions.isNotEmpty) ...[
                         SizedBox(height: widget.compact ? 12 : 18),
                         const _SidebarSectionTitle(title: '归档'),
@@ -340,6 +386,18 @@ class _RemodexDrawerState extends State<RemodexDrawer> {
       ),
     );
   }
+
+  Widget _buildWorkspaceBranch(WorkspaceInfo workspace) => _WorkspaceBranch(
+    key: _workspaceItemKey(workspace),
+    workspace: workspace,
+    active: _isSelectedWorkspace(workspace),
+    expanded: _isWorkspaceExpanded(workspace),
+    sessions: _sessionsForWorkspace(workspace),
+    selectedSessionId: widget.selectedSessionId,
+    compact: widget.compact,
+    onTap: () => _toggleWorkspace(workspace),
+    onSelectSession: widget.onSelectSession,
+  );
 
   List<SessionRecord> get _pinnedSessions => widget.sessions
       .where((session) => session.isPinned && !session.isArchived)
@@ -428,13 +486,9 @@ class _PairingSwitcher extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final activeName = activePairing?.displayName ?? '尚未配对';
-    final activeSummary = activePairing == null
-        ? '添加 Codex 主机'
-        : (activePairing!.targetDeviceId.isEmpty
-              ? activePairing!.spaceId
-              : activePairing!.targetDeviceId);
     return RecodexPopupMenuButton<String>(
       tooltip: '切换配对',
+      borderRadius: BorderRadius.circular(12),
       onSelected: (value) {
         if (value == '__new') {
           onNewPairing();
@@ -504,41 +558,57 @@ class _PairingSwitcher extends StatelessWidget {
           ),
         ),
       ],
-      child: Row(
-        children: [
-          Icon(
-            activePairing == null ? RecodexIcons.addLink : RecodexIcons.router,
-            color: colors.text,
-            size: 22,
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  activeName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                    color: colors.text,
-                  ),
-                ),
-                ConnectionDot(
-                  connected: connected,
-                  label: connected
-                      ? '已连接到 Relay'
-                      : activeSummary.isEmpty
-                      ? '未连接'
-                      : activeSummary,
-                ),
-              ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: colors.surfaceOverlay,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(
+                activePairing == null
+                    ? RecodexIcons.addLink
+                    : RecodexIcons.router,
+                color: colors.text,
+                size: 20,
+              ),
             ),
-          ),
-          Icon(RecodexIcons.switcher, color: colors.textMuted, size: 20),
-        ],
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    activeName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 17,
+                      height: 1.2,
+                      fontWeight: FontWeight.w600,
+                      color: colors.text,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  ConnectionDot(
+                    connected: connected && activePairing != null,
+                    label: activePairing == null
+                        ? '添加 Codex 主机'
+                        : connected
+                        ? 'Relay 已连接'
+                        : 'Relay 未连接',
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(RecodexIcons.chevronDown, color: colors.textMuted, size: 16),
+          ],
+        ),
       ),
     );
   }
@@ -574,7 +644,9 @@ class _WorkspaceBranch extends StatelessWidget {
       children: [
         DecoratedBox(
           decoration: BoxDecoration(
-            color: Colors.transparent,
+            color: active
+                ? colors.surfaceOverlay.withValues(alpha: 0.86)
+                : Colors.transparent,
             borderRadius: BorderRadius.circular(9),
           ),
           child: InkWell(
@@ -583,16 +655,16 @@ class _WorkspaceBranch extends StatelessWidget {
             child: Padding(
               padding: EdgeInsets.fromLTRB(
                 7,
-                compact ? 5 : 8,
+                compact ? 6 : 12,
                 8,
-                compact ? 5 : 8,
+                compact ? 6 : 12,
               ),
               child: Row(
                 children: [
                   Icon(
                     expanded ? RecodexIcons.folderOpen : RecodexIcons.folder,
-                    size: 19,
-                    color: colors.textMuted,
+                    size: 18,
+                    color: active ? colors.text : colors.textMuted,
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -601,9 +673,9 @@ class _WorkspaceBranch extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 14.5,
-                        height: 1.2,
-                        fontWeight: FontWeight.w500,
+                        fontSize: 16,
+                        height: 1.25,
+                        fontWeight: active ? FontWeight.w600 : FontWeight.w500,
                         color: colors.text,
                       ),
                     ),
@@ -701,6 +773,68 @@ class _WorkspaceLine extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ProjectGroupHeader extends StatelessWidget {
+  const _ProjectGroupHeader({
+    required this.title,
+    required this.count,
+    required this.expanded,
+    required this.onTap,
+  });
+
+  final String title;
+  final int count;
+  final bool expanded;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    return Semantics(
+      button: true,
+      expanded: expanded,
+      label: '$title，$count 个项目',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: SizedBox(
+          height: 44,
+          child: Row(
+            children: [
+              const SizedBox(width: 7),
+              AnimatedRotation(
+                turns: expanded ? 0.25 : 0,
+                duration: MediaQuery.of(context).disableAnimations
+                    ? Duration.zero
+                    : const Duration(milliseconds: 160),
+                child: Icon(
+                  RecodexIcons.chevronRight,
+                  size: 14,
+                  color: colors.textMuted,
+                ),
+              ),
+              const SizedBox(width: 7),
+              Text(
+                title,
+                style: TextStyle(
+                  color: colors.textMuted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              const SizedBox(width: 7),
+              Text(
+                '$count',
+                style: TextStyle(color: colors.textMuted, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

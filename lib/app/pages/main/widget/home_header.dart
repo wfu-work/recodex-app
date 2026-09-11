@@ -34,6 +34,7 @@ class HomeHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final compact = MediaQuery.sizeOf(context).width < 600;
     final progress = Curves.easeOutCubic.transform(
       backgroundProgress.clamp(0.0, 1.0),
     );
@@ -67,18 +68,31 @@ class HomeHeader extends StatelessWidget {
         ],
       ),
       child: Padding(
-        padding: EdgeInsets.fromLTRB(36, topPadding + 12, 24, 8),
+        padding: EdgeInsets.fromLTRB(
+          compact ? 12 : 36,
+          topPadding + 12,
+          compact ? 12 : 24,
+          8,
+        ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: compact
+              ? CrossAxisAlignment.center
+              : CrossAxisAlignment.start,
           children: [
-            Builder(
-              builder: (context) => LiquidIconButton(
-                icon: RecodexIcons.menu,
-                tooltip: '菜单',
-                onPressed: () => Scaffold.of(context).openDrawer(),
+            SizedBox(
+              width: compact ? 44 : null,
+              height: compact ? 44 : null,
+              child: Builder(
+                builder: (context) => LiquidIconButton(
+                  icon: RecodexIcons.menu,
+                  tooltip: '菜单',
+                  size: compact ? 44 : 36,
+                  iconSize: compact ? 20 : null,
+                  onPressed: () => Scaffold.of(context).openDrawer(),
+                ),
               ),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: compact ? 8 : 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -88,7 +102,7 @@ class HomeHeader extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontSize: 24,
+                      fontSize: compact ? 18 : 24,
                       height: 1.12,
                       fontWeight: FontWeight.w600,
                     ),
@@ -111,8 +125,9 @@ class HomeHeader extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 12),
+            SizedBox(width: compact ? 8 : 12),
             _HeaderActionMenu(
+              compact: compact,
               onRefreshTasks: onRefreshTasks,
               onShowTaskOutput: onShowTaskOutput,
               onCopyTaskOutput: onCopyTaskOutput,
@@ -136,6 +151,7 @@ enum _HomeHeaderAction {
 
 class _HeaderActionMenu extends StatelessWidget {
   const _HeaderActionMenu({
+    required this.compact,
     required this.onRefreshTasks,
     required this.onShowTaskOutput,
     required this.onCopyTaskOutput,
@@ -144,6 +160,7 @@ class _HeaderActionMenu extends StatelessWidget {
     required this.refreshing,
   });
 
+  final bool compact;
   final VoidCallback? onRefreshTasks;
   final VoidCallback? onShowTaskOutput;
   final VoidCallback? onCopyTaskOutput;
@@ -205,7 +222,11 @@ class _HeaderActionMenu extends StatelessWidget {
         ),
       ],
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+        // Match the leading menu's 44px target so both icons share a center
+        // and the title stays centered between equal-width controls on phones.
+        padding: compact
+            ? const EdgeInsets.all(12)
+            : const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
         child: Semantics(
           label: refreshing ? '正在刷新任务' : '工作台操作',
           button: true,

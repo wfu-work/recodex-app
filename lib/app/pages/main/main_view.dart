@@ -1,4 +1,10 @@
 import 'dart:math' as math;
+import 'dart:async';
+
+import 'package:desktop_drop/desktop_drop.dart';
+import 'package:file_selector/file_selector.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:pasteboard/pasteboard.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -8,10 +14,13 @@ import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../../components/chat_components.dart';
+import '../../components/composer_images.dart';
 import '../../components/liquid_background.dart';
 import '../../components/menu_drawer.dart';
+import '../../components/recodex_notice.dart';
 import '../../models/bridge_models.dart';
 import '../../services/timeline_events.dart';
+import '../../services/composer_images.dart';
 import '../../routes/app_pages.dart';
 import '../../theme/recodex_theme.dart';
 import '../pairing/pairing_view.dart';
@@ -55,23 +64,41 @@ class _MainPageState extends State<MainPage> {
   double _headerBackgroundProgress = 0;
   bool _composerVisible = true;
   final _drafts = <String, String>{};
+  final _imageDrafts = <String, _ImageDraft>{};
+  final _referenceDrafts = <String, _ReferenceDraft>{};
+  _ImageDraft get _imageDraft =>
+      _imageDrafts.putIfAbsent(_draftKey, _ImageDraft.new);
+  _ReferenceDraft get _referenceDraft =>
+      _referenceDrafts.putIfAbsent(_draftKey, _ReferenceDraft.new);
+  double get _composerAttachmentHeight =>
+      (_imageDraft.images.isNotEmpty ||
+          _referenceDraft.files.isNotEmpty ||
+          _referenceDraft.skills.isNotEmpty)
+      ? 140
+      : 0;
+  bool _pickingImage = false;
   late Worker _draftTaskWorker;
   late Worker _draftHostWorker;
+  late Worker _draftWorkspaceWorker;
   String _draftKey = '';
   bool _sendingSupplement = false;
 
-  String get _currentDraftKey => '${controller.activePairingId.value}:${controller.selectedSessionId.value ?? 'new'}';
+  String get _currentDraftKey =>
+      '${controller.activePairingId.value}:${controller.selectedSessionId.value ?? 'new:${controller.selectedWorkspace.value?.path}'}';
 
   void _switchDraft() {
     final next = _currentDraftKey;
     if (next == _draftKey) return;
+    _composerFocusNode.unfocus();
     _drafts[_draftKey] = _promptController.text;
     _draftKey = next;
     _promptController.text = _drafts[next] ?? '';
   }
+
   bool _drawerOpen = false;
   bool _showScrollToLatest = false;
   bool _userDetachedFromLatest = false;
+  bool _userScrollingTimeline = false;
   bool? _lastAutoScrollEnabled;
   String _lastAutoScrollSignature = '';
   bool _scrollUiUpdateScheduled = false;
@@ -85,8 +112,15 @@ class _MainPageState extends State<MainPage> {
     _scrollController.addListener(_updateHeaderBackground);
     _scrollController.addListener(_updateScrollToLatestVisibility);
     _draftKey = _currentDraftKey;
-    _draftTaskWorker = ever(controller.selectedSessionId, (_) => _switchDraft());
+    _draftTaskWorker = ever(
+      controller.selectedSessionId,
+      (_) => _switchDraft(),
+    );
     _draftHostWorker = ever(controller.activePairingId, (_) => _switchDraft());
+    _draftWorkspaceWorker = ever(
+      controller.selectedWorkspace,
+      (_) => _switchDraft(),
+    );
     controller.startLiveTimelineRefresh();
   }
 
@@ -99,6 +133,7 @@ class _MainPageState extends State<MainPage> {
     controller.stopLiveTimelineRefresh();
     _draftTaskWorker.dispose();
     _draftHostWorker.dispose();
+    _draftWorkspaceWorker.dispose();
     _promptController.dispose();
     _composerFocusNode.dispose();
     super.dispose();
@@ -312,6 +347,7 @@ class _MainPageState extends State<MainPage> {
                   ),
                   onDrawerChanged: (open) {
                     if (_drawerOpen == open || !mounted) return;
+                    if (open) _composerFocusNode.unfocus();
                     setState(() => _drawerOpen = open);
                   },
                   body: Stack(
@@ -416,9 +452,12 @@ class _MainPageState extends State<MainPage> {
                                       showUsageMetrics: showUsageMetrics,
                                       cardRadius: answerCardRadius,
                                       maxWidth: answerMaxWidth,
-                                      gitChangeSummary: GitChangeSummary.tryParse(
-                                        GitSnapshot.fromEvents(entry.events).numstat,
-                                      ),
+                                      gitChangeSummary:
+                                          GitChangeSummary.tryParse(
+                                            GitSnapshot.fromEvents(
+                                              entry.events,
+                                            ).numstat,
+                                          ),
                                       onGitFileTap: (file) =>
                                           _openGitDiff(file, entry.events),
                                       onUndoGitChanges: _confirmUndoChanges,
@@ -428,28 +467,65 @@ class _MainPageState extends State<MainPage> {
                               ),
                             ),
                             SliverPadding(
-                              padding: EdgeInsets.symmetric(horizontal: answerHorizontalPadding),
-                              sliver: SliverToBoxAdapter(child: Column(children: [
-                                if (controller.interactionNotice.value.isNotEmpty)
-                                  Padding(padding: const EdgeInsets.all(12), child: Text(controller.interactionNotice.value)),
-                                if (controller.selectedInteractions.isEmpty &&
-                                    (controller.timelineStatus.value == TimelineTaskStatus.waitingApproval ||
-                                     controller.timelineStatus.value == TimelineTaskStatus.waitingUserInput))
-                                  const Padding(padding: EdgeInsets.all(12),
-                                    child: Text('Codex 正在等待处理，请在桌面端完成或刷新任务。')),
-                                for (final item in controller.selectedInteractions)
-                                  PendingInteractionCard(
-                                    key: ValueKey(item.id), item: item,
-                                    enabled: controller.connected.value && controller.backendReady.value,
-                                    submitted: controller.submittedInteractions.contains(item.id),
-                                    onRespond: (response) => controller.respondToInteraction(item, response),
-                                  ),
-                              ])),
+                              padding: EdgeInsets.symmetric(
+                                horizontal: answerHorizontalPadding,
+                              ),
+                              sliver: SliverToBoxAdapter(
+                                child: Column(
+                                  children: [
+                                    if (controller
+                                        .interactionNotice
+                                        .value
+                                        .isNotEmpty)
+                                      Padding(
+                                        padding: const EdgeInsets.all(12),
+                                        child: Text(
+                                          controller.interactionNotice.value,
+                                        ),
+                                      ),
+                                    if (controller
+                                            .selectedInteractions
+                                            .isEmpty &&
+                                        (controller.timelineStatus.value ==
+                                                TimelineTaskStatus
+                                                    .waitingApproval ||
+                                            controller.timelineStatus.value ==
+                                                TimelineTaskStatus
+                                                    .waitingUserInput))
+                                      const Padding(
+                                        padding: EdgeInsets.all(12),
+                                        child: Text(
+                                          'Codex 正在等待处理，请在桌面端完成或刷新任务。',
+                                        ),
+                                      ),
+                                    for (final item
+                                        in controller.selectedInteractions)
+                                      PendingInteractionCard(
+                                        key: ValueKey(item.id),
+                                        item: item,
+                                        enabled:
+                                            controller.connected.value &&
+                                            controller.backendReady.value,
+                                        submitted: controller
+                                            .submittedInteractions
+                                            .contains(item.id),
+                                        onRespond: (response) =>
+                                            controller.respondToInteraction(
+                                              item,
+                                              response,
+                                            ),
+                                      ),
+                                  ],
+                                ),
+                              ),
                             ),
                             SliverToBoxAdapter(
                               child: SizedBox(
                                 key: _timelineBottomKey,
-                                height: _composerReservedHeight + bottomInset,
+                                height:
+                                    _composerReservedHeight +
+                                    bottomInset +
+                                    _composerAttachmentHeight,
                               ),
                             ),
                           ],
@@ -511,29 +587,44 @@ class _MainPageState extends State<MainPage> {
                         curve: Curves.easeOutCubic,
                         left: 0,
                         right: 0,
-                        bottom: _scrollToLatestBottom + bottomInset,
+                        bottom:
+                            _scrollToLatestBottom +
+                            bottomInset +
+                            _composerAttachmentHeight,
                         child: IgnorePointer(
                           ignoring: !showScrollControl,
-                          child: AnimatedOpacity(
-                            duration: effectiveMediaQuery.disableAnimations
-                                ? Duration.zero
-                                : const Duration(milliseconds: 160),
-                            opacity: showScrollControl ? 1 : 0,
-                            child: AnimatedScale(
+                          child: AnimatedSlide(
+                            // Keep this utility attached to the composer
+                            // while it slides out of the way during reading.
+                            // Using the same curve and duration makes the
+                            // loading dots and the latest-content arrow feel
+                            // like part of one surface.
+                            offset: _composerVisible
+                                ? Offset.zero
+                                : const Offset(0, 1.28),
+                            duration: composerSlideDuration,
+                            curve: _composerDampedCurve,
+                            child: AnimatedOpacity(
                               duration: effectiveMediaQuery.disableAnimations
                                   ? Duration.zero
-                                  : const Duration(milliseconds: 220),
-                              curve: Curves.easeOutCubic,
-                              scale: showScrollControl ? 1 : 0.82,
-                              child: ExcludeSemantics(
-                                excluding: !showScrollControl,
-                                child: TickerMode(
-                                  enabled: showScrollControl,
-                                  child: Center(
-                                    child: ScrollToLatestButton(
-                                      running: timelineIsRunning,
-                                      reduceMotion: reduceAnimations,
-                                      onPressed: _scrollToLatest,
+                                  : const Duration(milliseconds: 160),
+                              opacity: showScrollControl ? 1 : 0,
+                              child: AnimatedScale(
+                                duration: effectiveMediaQuery.disableAnimations
+                                    ? Duration.zero
+                                    : const Duration(milliseconds: 220),
+                                curve: Curves.easeOutCubic,
+                                scale: showScrollControl ? 1 : 0.82,
+                                child: ExcludeSemantics(
+                                  excluding: !showScrollControl,
+                                  child: TickerMode(
+                                    enabled: showScrollControl,
+                                    child: Center(
+                                      child: ScrollToLatestButton(
+                                        running: timelineIsRunning,
+                                        reduceMotion: reduceAnimations,
+                                        onPressed: _scrollToLatest,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -558,29 +649,89 @@ class _MainPageState extends State<MainPage> {
                               opacity: _composerVisible ? 1 : 0,
                               duration: composerFadeDuration,
                               curve: Curves.easeOutCubic,
-                              child: ComposerBar(
-                                controller: _promptController,
-                                focusNode: _composerFocusNode,
-                                enabled: controller.canUseWorkspace,
-                                context: controller.composerContext.value,
-                                contextWindowUsage:
-                                    controller.contextWindowUsage,
-                                permissionMode: controller.permissionMode.value,
-                                onSend: _sendPrompt,
-                                onSteer: _sendingSupplement ? null : _sendSupplement,
-                                // Derive the composer state from the same
-                                // canonical lifecycle used by the answer
-                                // header.  The legacy boolean can otherwise
-                                // briefly disagree and leave a stop button
-                                // visible next to an "已中断/已完成" header.
-                                running: timelineIsRunning,
-                                onStop: controller.interrupt,
-                                onModelChanged: controller.setComposerModel,
-                                onReasoningChanged:
-                                    controller.setReasoningEffort,
-                                onPermissionModeChanged:
-                                    controller.setPermissionMode,
-                                onVoicePressed: _toggleVoiceInput,
+                              child: DropTarget(
+                                enable:
+                                    _composerVisible &&
+                                    !_drawerOpen &&
+                                    !_imageDraft.busy &&
+                                    (ModalRoute.of(context)?.isCurrent ?? true),
+                                onDragDone: (details) =>
+                                    _addImageFiles(details.files),
+                                child: ComposerBar(
+                                  controller: _promptController,
+                                  focusNode: _composerFocusNode,
+                                  enabled: controller.canUseWorkspace,
+                                  context: controller.composerContext.value,
+                                  contextWindowUsage:
+                                      controller.contextWindowUsage,
+                                  permissionMode:
+                                      controller.permissionMode.value,
+                                  onSend: _sendPrompt,
+                                  onSteer:
+                                      _sendingSupplement ||
+                                          _imageDraft.images.isNotEmpty
+                                      ? null
+                                      : _sendSupplement,
+                                  imageButton: ComposerImageButton(
+                                    enabled:
+                                        controller.canUseWorkspace &&
+                                        !_imageDraft.busy &&
+                                        !_pickingImage &&
+                                        !_imageDraft.unknown,
+                                    onSelected: _pickImages,
+                                    onFiles: _pickWorkspaceReferences,
+                                    onSkills: _pickSkills,
+                                  ),
+                                  referenceTray:
+                                      (_referenceDraft.files.isEmpty &&
+                                          _referenceDraft.skills.isEmpty)
+                                      ? null
+                                      : ComposerReferenceTray(
+                                          files: _referenceDraft.files,
+                                          skills: _referenceDraft.skills,
+                                          onRemoveFile: (file) => setState(
+                                            () => _referenceDraft.files.remove(
+                                              file,
+                                            ),
+                                          ),
+                                          onRemoveSkill: (skill) => setState(
+                                            () => _referenceDraft.skills.remove(
+                                              skill,
+                                            ),
+                                          ),
+                                        ),
+                                  imageTray: _imageDraft.images.isEmpty
+                                      ? null
+                                      : ComposerImageTray(
+                                          images: _imageDraft.images,
+                                          busy: _imageDraft.busy,
+                                          progress: _imageDraft.progress,
+                                          error: _imageDraft.error,
+                                          unknown: _imageDraft.unknown,
+                                          onRemove: _removeImage,
+                                          onReview: _reviewImageSend,
+                                        ),
+                                  hasAttachments:
+                                      _imageDraft.images.isNotEmpty ||
+                                      _referenceDraft.files.isNotEmpty ||
+                                      _referenceDraft.skills.isNotEmpty,
+                                  busy: _imageDraft.busy,
+                                  sendBlocked: _imageDraft.unknown,
+                                  onPaste: () => _pasteImageOrText(),
+                                  // Derive the composer state from the same
+                                  // canonical lifecycle used by the answer
+                                  // header.  The legacy boolean can otherwise
+                                  // briefly disagree and leave a stop button
+                                  // visible next to an "已中断/已完成" header.
+                                  running: timelineIsRunning,
+                                  onStop: controller.interrupt,
+                                  onModelChanged: controller.setComposerModel,
+                                  onReasoningChanged:
+                                      controller.setReasoningEffort,
+                                  onPermissionModeChanged:
+                                      controller.setPermissionMode,
+                                  onVoicePressed: _toggleVoiceInput,
+                                ),
                               ),
                             ),
                           ),
@@ -630,7 +781,8 @@ class _MainPageState extends State<MainPage> {
         answerTurnId = event.turnId;
         entries.add(_TimelineEntry.user(event));
       } else {
-        if (event.turnId != null && answerTurnId != null &&
+        if (event.turnId != null &&
+            answerTurnId != null &&
             event.turnId != answerTurnId) {
           flushAnswer();
         }
@@ -697,9 +849,7 @@ class _MainPageState extends State<MainPage> {
     if (output.isEmpty) return;
     await Clipboard.setData(ClipboardData(text: output));
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('任务输出已复制')));
+    RecodexNotice.show(context, '任务输出已复制', tone: RecodexNoticeTone.success);
   }
 
   String get _selectedTaskTitle {
@@ -722,7 +872,8 @@ class _MainPageState extends State<MainPage> {
   }
 
   void _updateHeaderBackground() {
-    if (!_scrollController.hasClients || !_scrollController.position.hasPixels) {
+    if (!_scrollController.hasClients ||
+        !_scrollController.position.hasPixels) {
       return;
     }
     final next = (_scrollController.offset / 72).clamp(0.0, 1.0);
@@ -759,13 +910,24 @@ class _MainPageState extends State<MainPage> {
       _userDetachedFromLatest = distance > _scrollToLatestThreshold;
     }
     _updateScrollToLatestVisibility();
-    if (notification is ScrollStartNotification ||
-        notification is ScrollUpdateNotification ||
-        notification is OverscrollNotification) {
+    final userScroll =
+        (notification is UserScrollNotification &&
+            notification.direction != ScrollDirection.idle) ||
+        (notification is ScrollStartNotification &&
+            notification.dragDetails != null) ||
+        (notification is ScrollUpdateNotification &&
+            notification.dragDetails != null) ||
+        (notification is OverscrollNotification &&
+            notification.dragDetails != null);
+    if (userScroll) {
+      // animateTo, jumpTo, and layout corrections emit scroll notifications
+      // too. Only a user gesture should hide the composer; retain that state
+      // through its ballistic scrolling, whose updates have no dragDetails.
+      _userScrollingTimeline = true;
       _setComposerVisible(false);
-      return false;
-    }
-    if (notification is ScrollEndNotification) {
+    } else if (notification is ScrollEndNotification &&
+        _userScrollingTimeline) {
+      _userScrollingTimeline = false;
       _setComposerVisible(true);
     }
     return false;
@@ -816,7 +978,7 @@ class _MainPageState extends State<MainPage> {
 
   void _scheduleScrollToLatest(String signature) {
     if (signature == _lastAutoScrollSignature) return;
-    if (_userDetachedFromLatest) return;
+    if (_userDetachedFromLatest || _userScrollingTimeline) return;
     _lastAutoScrollSignature = signature;
     _scrollToLatestAfterLayout();
     Future<void>.delayed(
@@ -840,7 +1002,7 @@ class _MainPageState extends State<MainPage> {
   void _scrollToLatestAfterLayout({bool force = false}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scrollController.hasClients) return;
-      if (_userDetachedFromLatest && !force) return;
+      if ((_userDetachedFromLatest || _userScrollingTimeline) && !force) return;
       if (!_scrollController.position.hasContentDimensions) return;
       final target = _scrollController.position.maxScrollExtent;
       if (_reduceMotionEnabled) {
@@ -884,21 +1046,493 @@ class _MainPageState extends State<MainPage> {
     if (!mounted) return;
     setState(() => _sendingSupplement = false);
     if (accepted) {
-      if (_draftKey == key && _promptController.text == draft) _promptController.clear();
+      if (_draftKey == key && _promptController.text == draft)
+        _promptController.clear();
       if (_drafts[key] == draft) _drafts.remove(key);
     }
   }
 
   void _sendPrompt() {
+    if (_imageDraft.busy || _imageDraft.unknown) return;
     if (controller.timelineStatus.value.isActive) return;
     if (controller.timelineLoading.value) {
       controller.lastError.value = '任务对话仍在加载，请稍候再发送。';
       return;
     }
     final prompt = _promptController.text.trim();
-    if (prompt.isEmpty) return;
-    controller.startSession(prompt);
+    final refs = _referenceDraft.files
+        .map((item) => item.path)
+        .toList(growable: false);
+    final skills = _referenceDraft.skills
+        .map((item) => item.name)
+        .toList(growable: false);
+    if (_imageDraft.images.isNotEmpty) {
+      unawaited(_sendImagePrompt(prompt));
+      return;
+    }
+    if (prompt.isEmpty && refs.isEmpty && skills.isEmpty) return;
+    if (refs.isEmpty && skills.isEmpty) {
+      // Preserve the small overridable API used by platform integrations.
+      controller.startSession(prompt);
+    } else {
+      controller.startSessionWithContext(
+        prompt,
+        workspaceRefs: refs,
+        skills: skills,
+      );
+    }
     _promptController.clear();
+    setState(() {
+      _referenceDraft.files.clear();
+      _referenceDraft.skills.clear();
+    });
+  }
+
+  Future<void> _pickWorkspaceReferences() async {
+    if (!controller.canUseWorkspace) return;
+    final selected = {..._referenceDraft.files.map((item) => item.path)};
+    final entriesByPath = <String, WorkspaceEntry>{
+      for (final item in _referenceDraft.files) item.path: item,
+    };
+    final queryController = TextEditingController();
+    var results = <WorkspaceEntry>[];
+    var loading = true;
+    var started = false;
+    final confirmed = await showDialog<List<WorkspaceEntry>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Future<void> search() async {
+            setDialogState(() => loading = true);
+            try {
+              results = await controller.searchWorkspace(queryController.text);
+              entriesByPath.addAll({
+                for (final item in results) item.path: item,
+              });
+            } catch (error) {
+              if (mounted) controller.lastError.value = error.toString();
+            }
+            if (context.mounted) setDialogState(() => loading = false);
+          }
+
+          if (!started) {
+            started = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) search();
+            });
+          }
+          return AlertDialog(
+            title: const Text('引用工作区文件'),
+            content: SizedBox(
+              width: 420,
+              height: 420,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: queryController,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(RecodexIcons.search),
+                      hintText: '搜索文件或文件夹',
+                    ),
+                    onChanged: (_) => search(),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: loading
+                        ? const Center(child: CircularProgressIndicator())
+                        : ListView.builder(
+                            itemCount: results.length,
+                            itemBuilder: (_, index) {
+                              final item = results[index];
+                              final checked = selected.contains(item.path);
+                              return CheckboxListTile(
+                                dense: true,
+                                value: checked,
+                                onChanged: (_) => setDialogState(
+                                  () => checked
+                                      ? selected.remove(item.path)
+                                      : selected.add(item.path),
+                                ),
+                                secondary: Icon(
+                                  item.kind == 'directory'
+                                      ? RecodexIcons.folder
+                                      : RecodexIcons.fileText,
+                                ),
+                                title: Text(
+                                  item.path,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(
+                  dialogContext,
+                  entriesByPath.values
+                      .where((item) => selected.contains(item.path))
+                      .toList(),
+                ),
+                child: Text('添加 ${selected.length} 项'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    queryController.dispose();
+    if (!mounted || confirmed == null) return;
+    setState(() {
+      _referenceDraft.files
+        ..clear()
+        ..addAll(confirmed);
+    });
+  }
+
+  Future<void> _pickSkills() async {
+    if (!controller.canUseWorkspace) return;
+    try {
+      await controller.loadSkills();
+    } catch (error) {
+      controller.lastError.value = error.toString();
+      return;
+    }
+    if (!mounted) return;
+    final selected = {..._referenceDraft.skills.map((item) => item.name)};
+    final confirmed = await showDialog<List<SkillInfo>>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('选择 Skill'),
+          content: SizedBox(
+            width: 420,
+            height: 420,
+            child: ListView(
+              children: [
+                for (final skill in controller.skills)
+                  CheckboxListTile(
+                    dense: true,
+                    value: selected.contains(skill.name),
+                    onChanged: (_) => setDialogState(() {
+                      if (selected.contains(skill.name)) {
+                        selected.remove(skill.name);
+                      } else {
+                        selected.add(skill.name);
+                      }
+                    }),
+                    secondary: const Icon(RecodexIcons.fast),
+                    title: Text('\$${skill.name}'),
+                    subtitle: Text(
+                      skill.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(
+                dialogContext,
+                controller.skills
+                    .where((skill) => selected.contains(skill.name))
+                    .toList(),
+              ),
+              child: Text('添加 ${selected.length} 项'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || confirmed == null) return;
+    setState(() {
+      _referenceDraft.skills
+        ..clear()
+        ..addAll(confirmed);
+    });
+  }
+
+  Future<void> _pickImages(ComposerImageSource source) async {
+    if (_pickingImage || _imageDraft.busy) return;
+    if (!controller.imageAttachmentsAvailable.value) {
+      controller.lastError.value = '当前主机未启用图片发送，请更新并重启 Codex Relay 插件';
+      return;
+    }
+    final key = _draftKey;
+    final draft = _imageDraft;
+    _composerFocusNode.unfocus();
+    setState(() => _pickingImage = true);
+    try {
+      if (source == ComposerImageSource.clipboard) {
+        final bytes = await Pasteboard.image;
+        if (bytes == null) throw const FormatException('剪贴板中没有图片');
+        await _addImageFiles([
+          XFile.fromData(bytes, name: '截图.png'),
+        ], draftKey: key);
+      } else {
+        final platform = Theme.of(context).platform;
+        final mobile =
+            platform == TargetPlatform.iOS ||
+            platform == TargetPlatform.android;
+        final List<XFile> files;
+        if (source == ComposerImageSource.camera) {
+          final file = await ImagePicker().pickImage(
+            source: ImageSource.camera,
+            maxWidth: 2048,
+            maxHeight: 2048,
+            imageQuality: 90,
+          );
+          files = file == null ? [] : [file];
+        } else if (mobile) {
+          files = await ImagePicker().pickMultiImage(
+            maxWidth: 2048,
+            maxHeight: 2048,
+            imageQuality: 90,
+            limit: ComposerImage.maxCount,
+          );
+        } else {
+          files = await openFiles(
+            acceptedTypeGroups: [
+              const XTypeGroup(
+                label: '图片',
+                extensions: ['png', 'jpg', 'jpeg', 'webp'],
+                uniformTypeIdentifiers: [
+                  'public.png',
+                  'public.jpeg',
+                  'org.webmproject.webp',
+                ],
+              ),
+            ],
+          );
+        }
+        await _addImageFiles(files, draftKey: key);
+      }
+    } catch (error) {
+      draft.error = error is PlatformException
+          ? '无法访问图片，请检查相册或相机权限'
+          : error.toString().replaceFirst('FormatException: ', '');
+      if (_draftKey == key) controller.lastError.value = draft.error!;
+    } finally {
+      if (mounted) setState(() => _pickingImage = false);
+    }
+  }
+
+  Future<void> _addImageFiles(List<XFile> files, {String? draftKey}) async {
+    if (!mounted || files.isEmpty) return;
+    final key = draftKey ?? _draftKey;
+    final draft = _imageDrafts.putIfAbsent(key, _ImageDraft.new);
+    if (draft.busy || draft.unknown) return;
+    try {
+      if (files.length + draft.images.length > ComposerImage.maxCount) {
+        throw const FormatException('每条消息最多添加 4 张图片');
+      }
+      for (final file in files) {
+        final image = await ComposerImage.fromFile(file);
+        if (!mounted) return;
+        if (draft.images.length >= ComposerImage.maxCount) {
+          throw const FormatException('每条消息最多添加 4 张图片');
+        }
+        final total = _imageDrafts.values
+            .expand((draft) => draft.images)
+            .fold<int>(0, (sum, image) => sum + image.bytes.length);
+        if (total + image.bytes.length > 48 * 1024 * 1024) {
+          throw const FormatException('图片草稿过多，请先发送或移除已有图片');
+        }
+        if (draft.busy || draft.unknown) return;
+        setState(() {
+          draft.images.add(image);
+          draft.error = null;
+        });
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(
+        () => draft.error = error.toString().replaceFirst(
+          'FormatException: ',
+          '',
+        ),
+      );
+      if (_draftKey == key) controller.lastError.value = draft.error!;
+    }
+  }
+
+  Future<void> _pasteImageOrText() async {
+    if (_imageDraft.busy) return;
+    final key = _draftKey;
+    final value = _promptController.value;
+    try {
+      final bytes = await Pasteboard.image;
+      if (!mounted) return;
+      if (bytes != null) {
+        await _addImageFiles([
+          XFile.fromData(bytes, name: '截图.png'),
+        ], draftKey: key);
+        return;
+      }
+    } catch (_) {
+      /* Text paste remains available if image paste is unsupported. */
+    }
+    final clipboard = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted ||
+        _draftKey != key ||
+        _promptController.value != value ||
+        clipboard?.text == null) {
+      return;
+    }
+    final selection = value.selection.isValid
+        ? value.selection
+        : TextSelection.collapsed(offset: value.text.length);
+    _promptController.value = TextEditingValue(
+      text: value.text.replaceRange(
+        selection.start,
+        selection.end,
+        clipboard!.text!,
+      ),
+      selection: TextSelection.collapsed(
+        offset: selection.start + clipboard.text!.length,
+      ),
+    );
+  }
+
+  void _removeImage(ComposerImage image) {
+    final scope = controller.imageMessageContext;
+    setState(() {
+      _imageDraft.images.remove(image);
+      _imageDraft.error = null;
+    });
+    unawaited(controller.removeUploadedImage(image, scope));
+  }
+
+  Future<void> _reviewImageSend() async {
+    final draft = _imageDraft;
+    final key = _draftKey;
+    controller.refreshProjectTasks();
+    final sent = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('核对发送结果'),
+        content: const Text('正在刷新任务记录。请关闭此提示查看最新对话；确认结果后，可以清除已发送的草稿，或保留为待发送。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('先查看对话'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('确认未发送'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('已发送，清除草稿'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || sent == null) return;
+    setState(() {
+      draft.unknown = false;
+      if (sent) {
+        draft.images.clear();
+        _drafts.remove(key);
+        if (_draftKey == key) _promptController.clear();
+      }
+    });
+  }
+
+  Future<void> _sendImagePrompt(String prompt) async {
+    final draft = _imageDraft;
+    var key = _draftKey;
+    final scope = controller.imageMessageContext;
+    final images = List<ComposerImage>.of(draft.images);
+    setState(() {
+      draft.busy = true;
+      draft.error = null;
+      draft.progress = 0;
+    });
+    try {
+      final ids = <String>[];
+      for (var i = 0; i < images.length; i++) {
+        ids.add(
+          await controller.uploadImage(images[i], scope, (progress) {
+            if (mounted) {
+              setState(() => draft.progress = (i + progress) / images.length);
+            }
+          }),
+        );
+      }
+      final refs = _referenceDraft.files
+          .map((item) => item.path)
+          .toList(growable: false);
+      final skills = _referenceDraft.skills
+          .map((item) => item.name)
+          .toList(growable: false);
+      final outcome = (refs.isEmpty && skills.isEmpty)
+          ? await controller.sendImageMessage(
+              prompt,
+              images,
+              ids,
+              scope,
+              onThreadCreated: () {
+                if (!mounted) return;
+                _imageDrafts.remove(key);
+                _drafts.remove(key);
+                key = _currentDraftKey;
+                _imageDrafts[key] = draft;
+                _drafts[key] = prompt;
+                _promptController.text = prompt;
+              },
+            )
+          : await controller.sendImageMessageWithContext(
+              prompt,
+              images,
+              ids,
+              scope,
+              workspaceRefs: refs,
+              skills: skills,
+              onThreadCreated: () {
+                // The new server id replaces the local "new task" draft key. Move
+                // exactly this draft, keeping unrelated host/task drafts intact.
+                if (!mounted) return;
+                _imageDrafts.remove(key);
+                _drafts.remove(key);
+                key = _currentDraftKey;
+                _imageDrafts[key] = draft;
+                _drafts[key] = prompt;
+                _promptController.text = prompt;
+              },
+            );
+      if (!mounted) return;
+      if (outcome == ImageSendOutcome.accepted) {
+        draft.images.clear();
+        _referenceDrafts[key]?.files.clear();
+        _referenceDrafts[key]?.skills.clear();
+        _drafts.remove(key);
+        if (_draftKey == key) _promptController.clear();
+      } else {
+        draft.unknown = outcome == ImageSendOutcome.unknown;
+        draft.error = draft.unknown ? null : controller.lastError.value;
+      }
+    } catch (error) {
+      draft.error =
+          '上传未完成，图片已保留。${error.toString().replaceFirst('FormatException: ', '')}';
+    } finally {
+      if (mounted) setState(() => draft.busy = false);
+    }
   }
 
   void _focusComposer() {
@@ -909,9 +1543,12 @@ class _MainPageState extends State<MainPage> {
   }
 
   void _startNewConversation() {
+    _composerFocusNode.unfocus();
     controller.startNewConversation();
     _promptController.clear();
-    _focusComposer();
+    if (!_composerVisible && mounted) {
+      setState(() => _composerVisible = true);
+    }
   }
 
   void _toggleSidebar() {
@@ -926,6 +1563,7 @@ class _MainPageState extends State<MainPage> {
 
   void _showCommandPalette() {
     if (!mounted) return;
+    _composerFocusNode.unfocus();
     showDialog<void>(
       context: context,
       builder: (dialogContext) => SimpleDialog(
@@ -939,7 +1577,7 @@ class _MainPageState extends State<MainPage> {
             child: const ListTile(
               leading: Icon(RecodexIcons.add),
               title: Text('新建任务'),
-              subtitle: Text('清空当前对话并聚焦输入框'),
+              subtitle: Text('清空当前对话，准备新任务'),
             ),
           ),
           SimpleDialogOption(
@@ -1007,13 +1645,15 @@ class _MainPageState extends State<MainPage> {
   }
 
   void _openPage(String route, {Object? arguments}) {
-    if (Scaffold.maybeOf(context)?.isDrawerOpen ?? false) {
-      Navigator.of(context).pop();
-    }
+    // Clear the route's saved input focus as well as hiding the keyboard, so
+    // returning from settings or pairing does not reopen it automatically.
+    _composerFocusNode.unfocus();
+    _scaffoldKey.currentState?.closeDrawer();
     Get.toNamed(route, arguments: arguments);
   }
 
   void _openGitDiff(GitFileChange file, List<SessionEvent> answerEvents) {
+    _composerFocusNode.unfocus();
     final snapshot = GitSnapshot.fromEvents(answerEvents);
     Get.toNamed(
       Routes.gitDiff,
@@ -1395,4 +2035,17 @@ class _TimelineIndexMarker {
 
   final int entryIndex;
   final String preview;
+}
+
+class _ImageDraft {
+  final images = <ComposerImage>[];
+  bool busy = false;
+  bool unknown = false;
+  double progress = 0;
+  String? error;
+}
+
+class _ReferenceDraft {
+  final files = <WorkspaceEntry>[];
+  final skills = <SkillInfo>[];
 }

@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
 import '../../components/liquid_page_app_bar.dart';
+import '../../components/status_chips.dart';
 import '../../routes/app_pages.dart';
 import '../../services/task_notification_controller.dart';
 import '../../theme/recodex_theme.dart';
@@ -196,7 +197,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     subtitle: controller.connected.value
                         ? 'Relay 在线'
                         : 'Relay 未连接',
-                    trailing: _StatusDot(connected: controller.connected.value),
+                    trailing: ConnectionStatusBadge(
+                      connected: controller.connected.value,
+                    ),
                     trailingIcon: RecodexIcons.chevronRight,
                     onTap: () => _openPage(Routes.service),
                   ),
@@ -383,22 +386,6 @@ class _SettingsTile extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(onTap: onTap, child: child),
-    );
-  }
-}
-
-class _StatusDot extends StatelessWidget {
-  const _StatusDot({required this.connected});
-
-  final bool connected;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    return Icon(
-      RecodexIcons.circle,
-      size: 12,
-      color: connected ? colors.success : colors.textMuted,
     );
   }
 }

@@ -6,6 +6,7 @@ import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
 import '../../components/liquid_page_app_bar.dart';
+import '../../components/recodex_notice.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
 import 'settings_preferences_controller.dart';
@@ -203,9 +204,11 @@ class SecuritySettingsPage extends StatelessWidget {
   Future<void> _copy(BuildContext context, String value, String message) async {
     await Clipboard.setData(ClipboardData(text: value));
     if (!context.mounted) return;
-    ScaffoldMessenger.of(
+    RecodexNotice.show(
       context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+      message,
+      tone: RecodexNoticeTone.success,
+    );
   }
 
   String _shorten(String value) {

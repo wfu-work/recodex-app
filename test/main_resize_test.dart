@@ -130,10 +130,16 @@ void main() {
               SessionEvent(
                 kind: 'assistant',
                 turnId: '$i',
-                text: List.filled(
-                  12,
-                  '窗口变窄时文字需要重新换行，内容高度会随可用宽度变化。',
-                ).join('\n\n'),
+                text: [
+                  List.filled(
+                    12,
+                    '窗口变窄时文字需要重新换行，内容高度会随可用宽度变化。',
+                  ).join('\n\n'),
+                  '- [admin-pool-account-create.component.html]'
+                      '(/project/admin-pool-account-create.component.html:42)',
+                  '- [admin-pool-account-create.component.scss]'
+                      '(/project/admin-pool-account-create.component.scss)',
+                ].join('\n\n'),
               ),
               if (i < 11 || !running)
                 SessionEvent(kind: 'done', text: '', turnId: '$i'),

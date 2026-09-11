@@ -9,6 +9,7 @@ import '../models/bridge_models.dart';
 import '../pages/settings/theme_controller.dart';
 import '../services/answer_metadata.dart';
 import '../theme/recodex_theme.dart';
+import 'recodex_notice.dart';
 
 class AnswerFooter extends StatefulWidget {
   const AnswerFooter({
@@ -66,9 +67,11 @@ class _AnswerFooterState extends State<AnswerFooter> {
       });
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.maybeOf(
+      RecodexNotice.show(
         context,
-      )?.showSnackBar(const SnackBar(content: Text('复制失败，请重试')));
+        '复制失败，请重试',
+        tone: RecodexNoticeTone.error,
+      );
     } finally {
       _copying = false;
     }

@@ -7,6 +7,7 @@ import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
 import '../../components/liquid_page_app_bar.dart';
+import '../../components/recodex_notice.dart';
 import '../../models/bridge_models.dart';
 import '../../services/diff_lines.dart';
 import '../../theme/recodex_theme.dart';
@@ -242,9 +243,11 @@ class _DiffCodePanelState extends State<_DiffCodePanel> {
       });
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
+      RecodexNotice.show(
         context,
-      ).showSnackBar(const SnackBar(content: Text('复制失败，请重试')));
+        '复制失败，请重试',
+        tone: RecodexNoticeTone.error,
+      );
     }
   }
 

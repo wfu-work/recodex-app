@@ -8,6 +8,8 @@ class WorkspaceInfo {
     required this.path,
     this.id = '',
     this.position,
+    this.isPinned = false,
+    this.pinnedPosition,
     this.roots = const [],
   });
 
@@ -15,6 +17,8 @@ class WorkspaceInfo {
   final String path;
   final String id;
   final int? position;
+  final bool isPinned;
+  final int? pinnedPosition;
   final List<String> roots;
 
   factory WorkspaceInfo.fromJson(Map<String, dynamic> json) {
@@ -34,6 +38,10 @@ class WorkspaceInfo {
       name: json['name']?.toString() ?? '',
       path: rawPath.isNotEmpty ? rawPath : (roots.isEmpty ? '' : roots.first),
       position: (json['position'] as num?)?.toInt(),
+      isPinned: json['isPinned'] == true,
+      pinnedPosition: json['isPinned'] == true
+          ? (json['pinnedPosition'] as num?)?.toInt()
+          : null,
       roots: roots,
     );
   }
@@ -43,8 +51,50 @@ class WorkspaceInfo {
     'name': name,
     'path': path,
     if (position != null) 'position': position,
+    'isPinned': isPinned,
+    if (isPinned && pinnedPosition != null) 'pinnedPosition': pinnedPosition,
     if (roots.isNotEmpty) 'roots': roots,
   };
+}
+
+class WorkspaceEntry {
+  const WorkspaceEntry({
+    required this.path,
+    required this.name,
+    required this.kind,
+    this.size,
+  });
+  final String path;
+  final String name;
+  final String kind;
+  final int? size;
+
+  factory WorkspaceEntry.fromJson(Map<String, dynamic> json) => WorkspaceEntry(
+    path: json['path']?.toString() ?? '',
+    name: json['name']?.toString() ?? '',
+    kind: json['kind']?.toString() ?? 'file',
+    size: (json['size'] as num?)?.toInt(),
+  );
+}
+
+class SkillInfo {
+  const SkillInfo({
+    required this.name,
+    required this.description,
+    required this.source,
+    required this.path,
+  });
+  final String name;
+  final String description;
+  final String source;
+  final String path;
+
+  factory SkillInfo.fromJson(Map<String, dynamic> json) => SkillInfo(
+    name: json['name']?.toString() ?? '',
+    description: json['description']?.toString() ?? '',
+    source: json['source']?.toString() ?? 'global',
+    path: json['path']?.toString() ?? '',
+  );
 }
 
 /// The endpoint identity material shown while creating a Relay pairing.
@@ -668,6 +718,7 @@ class SessionEvent {
   /// expose an authoritative turn duration even when individual items do not
   /// carry timestamps.
   final int? durationMs;
+
   /// Turn completion time, distinct from an item's creation/receipt time.
   final DateTime? completedAt;
   final TokenUsage? usage;
@@ -732,7 +783,9 @@ class SessionEvent {
       usage: json['usage'] is Map
           ? TokenUsage.fromJson((json['usage'] as Map).cast<String, dynamic>())
           : null,
-      contextWindowUsage: ContextWindowUsage.tryParse(json['contextWindowUsage']),
+      contextWindowUsage: ContextWindowUsage.tryParse(
+        json['contextWindowUsage'],
+      ),
       attachments: ((json['attachments'] as List?) ?? const [])
           .whereType<Map>()
           .map((item) => EventAttachment.fromJson(item.cast<String, dynamic>()))
@@ -750,7 +803,8 @@ class SessionEvent {
     'text': text,
     if (time != null) 'time': time!.toUtc().toIso8601String(),
     if (durationMs != null) 'durationMs': durationMs,
-    if (completedAt != null) 'completedAt': completedAt!.toUtc().toIso8601String(),
+    if (completedAt != null)
+      'completedAt': completedAt!.toUtc().toIso8601String(),
     if (usage != null) 'usage': usage!.toJson(),
     if (contextWindowUsage != null)
       'contextWindowUsage': contextWindowUsage!.toJson(),
@@ -924,8 +978,12 @@ class TokenUsage {
         orElse: () => TokenUsageScope.unknown,
       ),
       hasBreakdown: json['hasBreakdown'] as bool? ?? true,
-      cachedInputTokens: _jsonNullableInt(json['cachedInputTokens'] ?? json['cached_input_tokens']),
-      reasoningOutputTokens: _jsonNullableInt(json['reasoningOutputTokens'] ?? json['reasoning_output_tokens']),
+      cachedInputTokens: _jsonNullableInt(
+        json['cachedInputTokens'] ?? json['cached_input_tokens'],
+      ),
+      reasoningOutputTokens: _jsonNullableInt(
+        json['reasoningOutputTokens'] ?? json['reasoning_output_tokens'],
+      ),
     );
   }
 
@@ -936,7 +994,8 @@ class TokenUsage {
     'scope': scope.name,
     'hasBreakdown': hasBreakdown,
     if (cachedInputTokens != null) 'cachedInputTokens': cachedInputTokens,
-    if (reasoningOutputTokens != null) 'reasoningOutputTokens': reasoningOutputTokens,
+    if (reasoningOutputTokens != null)
+      'reasoningOutputTokens': reasoningOutputTokens,
   };
 }
 

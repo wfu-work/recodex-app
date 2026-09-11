@@ -20,6 +20,8 @@ void main() {
           id: 'project-1',
           name: 'recodex',
           path: '/work/recodex',
+          isPinned: true,
+          pinnedPosition: 2,
         );
 
         await cache.saveCatalog(
@@ -35,6 +37,8 @@ void main() {
         final snapshot = await cache.load(scope);
         expect(snapshot.sessions.single.id, session.id);
         expect(snapshot.workspaces.single.path, workspace.path);
+        expect(snapshot.workspaces.single.isPinned, isTrue);
+        expect(snapshot.workspaces.single.pinnedPosition, 2);
         expect(snapshot.lastSequence, 18);
         expect(snapshot.eventsByThread, isEmpty);
         expect(backend.readTimelineCalls, 0);

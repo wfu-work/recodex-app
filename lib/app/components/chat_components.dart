@@ -1,15 +1,17 @@
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 
 import '../models/bridge_models.dart';
 import '../pages/settings/theme_controller.dart';
 import '../services/answer_metadata.dart';
+import '../services/markdown_table.dart';
 import '../theme/recodex_theme.dart';
 import 'answer_footer.dart';
+import 'answer_table.dart';
 import 'context_window_indicator.dart';
 import 'live_activity.dart';
 import 'recodex_dropdown.dart';
@@ -1494,6 +1496,7 @@ class _AnswerText extends StatelessWidget {
     var inModifiedFiles = false;
     final modifiedFiles = <_ModifiedFileReference>[];
     var inCodeBlock = false;
+    var codeFence = '';
     var codeLanguage = '';
     final codeLines = <String>[];
 
@@ -1516,25 +1519,49 @@ class _AnswerText extends StatelessWidget {
       );
       codeLines.clear();
       codeLanguage = '';
+      codeFence = '';
       inCodeBlock = false;
     }
 
-    for (final rawLine in lines) {
+    for (var lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      final rawLine = lines[lineIndex];
       final line = rawLine.trimRight();
       final fence = line.trimLeft();
-      if (fence.startsWith('```')) {
-        if (inCodeBlock) {
+      final fenceMatch = RegExp(r'^(`{3,}|~{3,})(.*)$').firstMatch(fence);
+      if (fenceMatch != null) {
+        final marker = fenceMatch[1]!;
+        final info = fenceMatch[2]!.trim();
+        if (inCodeBlock &&
+            marker.startsWith(codeFence[0]) &&
+            marker.length >= codeFence.length &&
+            info.isEmpty) {
           flushCodeBlock();
-        } else {
+          continue;
+        } else if (!inCodeBlock) {
           flushModifiedFiles();
           inModifiedFiles = false;
           inCodeBlock = true;
-          codeLanguage = fence.substring(3).trim();
+          codeFence = marker;
+          codeLanguage = info;
+          continue;
         }
-        continue;
       }
       if (inCodeBlock) {
         codeLines.add(line);
+        continue;
+      }
+      final table = MarkdownTable.tryParse(lines, lineIndex);
+      if (table != null) {
+        flushModifiedFiles();
+        inModifiedFiles = false;
+        widgets.add(
+          AnswerTable(
+            table: table,
+            inlineSpans: _inlineSpans,
+            fontScale: Get.find<ThemeController>().fontScale.value,
+          ),
+        );
+        lineIndex = table.endLine - 1;
         continue;
       }
       if (line.trim().isEmpty) {
@@ -2406,6 +2433,13 @@ class ComposerBar extends StatelessWidget {
     this.listening = false,
     this.focusNode,
     this.contextWindowUsage,
+    this.imageButton,
+    this.referenceTray,
+    this.imageTray,
+    this.hasAttachments = false,
+    this.busy = false,
+    this.sendBlocked = false,
+    this.onPaste,
     super.key,
   });
 
@@ -2426,6 +2460,67 @@ class ComposerBar extends StatelessWidget {
   final bool listening;
   final FocusNode? focusNode;
   final ContextWindowUsage? contextWindowUsage;
+  final Widget? imageButton;
+  final Widget? referenceTray;
+  final Widget? imageTray;
+  final bool hasAttachments;
+  final bool busy;
+  final bool sendBlocked;
+  final VoidCallback? onPaste;
+
+  void _submitPrompt() {
+    // Enter must follow the send action, never the running turn's stop action
+    // or its explicit supplement action. Keep that draft until requested.
+    if (!enabled ||
+        running ||
+        busy ||
+        sendBlocked ||
+        (controller.text.trim().isEmpty && !hasAttachments)) {
+      return;
+    }
+    onSend();
+  }
+
+  KeyEventResult _handleInputKey(FocusNode node, KeyEvent event) {
+    if (onPaste != null &&
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        (HardwareKeyboard.instance.isMetaPressed ||
+            HardwareKeyboard.instance.isControlPressed)) {
+      if (event is KeyDownEvent && enabled && !busy) onPaste!();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey != LogicalKeyboardKey.enter &&
+        event.logicalKey != LogicalKeyboardKey.numpadEnter) {
+      return KeyEventResult.ignored;
+    }
+    final value = controller.value;
+    if (value.isComposingRangeValid && !value.composing.isCollapsed) {
+      // Let the IME confirm a candidate before any send shortcut can run.
+      return KeyEventResult.skipRemainingHandlers;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    if (keyboard.isControlPressed ||
+        keyboard.isMetaPressed ||
+        keyboard.isAltPressed) {
+      return KeyEventResult.ignored;
+    }
+    // Consume repeats and key-up too, so holding Enter cannot submit twice or
+    // forward an extra platform text-input action.
+    if (event is KeyDownEvent && enabled) {
+      if (keyboard.isShiftPressed) {
+        final selection = value.selection.isValid
+            ? value.selection
+            : TextSelection.collapsed(offset: value.text.length);
+        controller.value = TextEditingValue(
+          text: value.text.replaceRange(selection.start, selection.end, '\n'),
+          selection: TextSelection.collapsed(offset: selection.start + 1),
+        );
+      } else {
+        _submitPrompt();
+      }
+    }
+    return KeyEventResult.handled;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2441,33 +2536,43 @@ class ComposerBar extends StatelessWidget {
           radius: 28,
           child: Column(
             children: [
-              TextField(
-                controller: controller,
-                focusNode: focusNode,
-                enabled: enabled,
-                readOnly: false,
-                showCursor: enabled,
-                minLines: 1,
-                maxLines: 4,
-                style: TextStyle(
-                  color: colors.text,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w400,
-                ),
-                decoration: InputDecoration(
-                  hintText: running
-                      ? '编辑草稿，或补充到当前任务…'
-                      : 'Ask anything... @files, \$skills, /commands',
-                  hintStyle: TextStyle(
-                    color: colors.textMuted.withValues(alpha: 0.72),
+              ?referenceTray,
+              ?imageTray,
+              Focus(
+                canRequestFocus: false,
+                onKeyEvent: _handleInputKey,
+                child: TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  autofocus: false,
+                  keyboardType: TextInputType.multiline,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _submitPrompt(),
+                  enabled: enabled,
+                  readOnly: busy,
+                  showCursor: enabled,
+                  minLines: 1,
+                  maxLines: 4,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: 16,
                     fontWeight: FontWeight.w400,
                   ),
-                  disabledBorder: InputBorder.none,
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  filled: false,
-                  contentPadding: const EdgeInsets.fromLTRB(14, 6, 14, 8),
+                  decoration: InputDecoration(
+                    hintText: running
+                        ? '编辑草稿，或补充到当前任务…'
+                        : 'Ask anything... @files, \$skills, /commands',
+                    hintStyle: TextStyle(
+                      color: colors.textMuted.withValues(alpha: 0.72),
+                      fontWeight: FontWeight.w400,
+                    ),
+                    disabledBorder: InputBorder.none,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    filled: false,
+                    contentPadding: const EdgeInsets.fromLTRB(14, 6, 14, 8),
+                  ),
                 ),
               ),
               const SizedBox(height: 8),
@@ -2479,9 +2584,13 @@ class ComposerBar extends StatelessWidget {
                   // allocate more than the available row width.
                   if (constraints.maxWidth < 240) {
                     final veryNarrow = constraints.maxWidth < 190;
-                    return Row(
-                      mainAxisSize: MainAxisSize.max,
+                    return Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      runSpacing: 4,
                       children: [
+                        if (imageButton != null)
+                          SizedBox(width: 44, height: 44, child: imageButton!),
                         if (running)
                           SizedBox(
                             width: 48,
@@ -2498,7 +2607,6 @@ class ComposerBar extends StatelessWidget {
                             onModelChanged: onModelChanged,
                             onReasoningChanged: onReasoningChanged,
                           ),
-                        const Spacer(),
                         if (!running && !veryNarrow)
                           _ComposerIconButton(
                             icon: RecodexIcons.mic,
@@ -2507,12 +2615,15 @@ class ComposerBar extends StatelessWidget {
                           ),
                         Tooltip(
                           message: running ? '停止任务' : '发送消息',
-                          child: SizedBox.square(
-                            dimension: 36,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxWidth: 44,
+                              maxHeight: 44,
+                            ),
                             child: FilledButton(
                               onPressed: running
                                   ? onStop
-                                  : enabled
+                                  : enabled && !busy && !sendBlocked
                                   ? onSend
                                   : null,
                               style: FilledButton.styleFrom(
@@ -2528,6 +2639,10 @@ class ComposerBar extends StatelessWidget {
                                     .withValues(alpha: 0.34),
                                 disabledForegroundColor: colors.textMuted,
                                 shape: const CircleBorder(),
+                                minimumSize: const Size.square(30),
+                                fixedSize: const Size.square(30),
+                                tapTargetSize: MaterialTapTargetSize.padded,
+                                visualDensity: VisualDensity.standard,
                                 padding: EdgeInsets.zero,
                                 elevation: 0,
                               ),
@@ -2535,7 +2650,7 @@ class ComposerBar extends StatelessWidget {
                                 running
                                     ? RecodexIcons.stop
                                     : RecodexIcons.arrowUp,
-                                size: running ? 18 : 22,
+                                size: running ? 14 : 18,
                               ),
                             ),
                           ),
@@ -2546,10 +2661,11 @@ class ComposerBar extends StatelessWidget {
 
                   return Row(
                     children: [
-                      _ComposerIconButton(
-                        icon: RecodexIcons.add,
-                        onPressed: enabled && !running ? () {} : null,
-                      ),
+                      imageButton ??
+                          _ComposerIconButton(
+                            icon: RecodexIcons.add,
+                            onPressed: null,
+                          ),
                       if (running) ...[
                         const SizedBox(width: 6),
                         Expanded(
@@ -2641,29 +2757,26 @@ class ComposerBar extends StatelessWidget {
                       if (running)
                         ValueListenableBuilder<TextEditingValue>(
                           valueListenable: controller,
-                          builder: (context, value, _) => IconButton(
+                          builder: (context, value, _) => _ComposerIconButton(
                             tooltip: '补充到当前任务',
                             onPressed: enabled && value.text.trim().isNotEmpty
                                 ? onSteer
                                 : null,
-                            icon: const Icon(
-                              Icons.subdirectory_arrow_left,
-                              size: 20,
-                            ),
+                            icon: Icons.subdirectory_arrow_left,
                           ),
                         ),
                       Tooltip(
                         message: running ? '停止任务' : '发送消息',
-                        child: SizedBox.square(
-                          // Keep the primary action in the same visual rhythm as
-                          // the compact selector pills beside it. The hit target
-                          // remains easy to reach while the circular button no
-                          // longer dominates the composer row.
-                          dimension: 36,
+                        child: ConstrainedBox(
+                          // Keep a 44px touch target around the smaller circle.
+                          constraints: const BoxConstraints(
+                            maxWidth: 44,
+                            maxHeight: 44,
+                          ),
                           child: FilledButton(
                             onPressed: running
                                 ? onStop
-                                : enabled
+                                : enabled && !busy && !sendBlocked
                                 ? onSend
                                 : null,
                             style: FilledButton.styleFrom(
@@ -2681,6 +2794,10 @@ class ComposerBar extends StatelessWidget {
                                   .withValues(alpha: 0.34),
                               disabledForegroundColor: colors.textMuted,
                               shape: const CircleBorder(),
+                              minimumSize: const Size.square(30),
+                              fixedSize: const Size.square(30),
+                              tapTargetSize: MaterialTapTargetSize.padded,
+                              visualDensity: VisualDensity.standard,
                               padding: EdgeInsets.zero,
                               elevation: 0,
                             ),
@@ -2688,7 +2805,7 @@ class ComposerBar extends StatelessWidget {
                               running
                                   ? RecodexIcons.stop
                                   : RecodexIcons.arrowUp,
-                              size: running ? 18 : 22,
+                              size: running ? 14 : 18,
                             ),
                           ),
                         ),
@@ -2775,24 +2892,28 @@ class _ComposerIconButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     this.active = false,
+    this.tooltip,
   });
 
   final IconData icon;
   final VoidCallback? onPressed;
   final bool active;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
     return IconButton(
+      tooltip: tooltip,
       onPressed: onPressed,
       icon: Icon(icon),
       color: active
           ? context.recodexColors.icon
           : context.recodexColors.textMuted,
-      iconSize: 24,
+      iconSize: 18,
       style: IconButton.styleFrom(
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        minimumSize: const Size(38, 38),
+        minimumSize: const Size(44, 44),
+        visualDensity: VisualDensity.standard,
       ),
     );
   }
@@ -2869,7 +2990,11 @@ class _ComposerCompactSettingsButton extends StatelessWidget {
     ];
     return RecodexPopupMenuButton<String>(
       tooltip: '模型和推理设置',
-      icon: Icon(RecodexIcons.tune, color: context.recodexColors.textMuted),
+      icon: Icon(
+        RecodexIcons.tune,
+        size: 18,
+        color: context.recodexColors.textMuted,
+      ),
       onSelected: (value) {
         if (value.startsWith('model:')) {
           onModelChanged(value.substring('model:'.length));
@@ -2922,6 +3047,7 @@ class _PermissionModePill extends StatelessWidget {
             onSelected: onChanged,
             icon: Icon(
               icon,
+              size: 18,
               color: selected == '完全访问权限'
                   ? context.recodexColors.warning
                   : context.recodexColors.textMuted,
@@ -2946,6 +3072,7 @@ class _PermissionModePill extends StatelessWidget {
               )
               .toList(),
           leadingIcon: icon,
+          compact: true,
           warningWhen: (item) => item == '完全访问权限',
           showBorder: false,
           tooltip: '选择权限模式',
@@ -3090,15 +3217,20 @@ InlineSpan _fileLinkSpan(BuildContext context, String target, String? label) {
         children: [
           Icon(RecodexIcons.fileText, size: 16, color: color),
           const SizedBox(width: 4),
-          Text(
-            fileName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: color,
-              fontSize: 15.5,
-              fontWeight: FontWeight.w500,
-              height: 1.1,
+          // WidgetSpan receives the paragraph's available width. Pass the
+          // space remaining after the icon to the label so ellipsis works;
+          // loose flex also keeps short references compact within prose.
+          Flexible(
+            child: Text(
+              fileName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color,
+                fontSize: 15.5,
+                fontWeight: FontWeight.w500,
+                height: 1.1,
+              ),
             ),
           ),
         ],

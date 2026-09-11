@@ -4,6 +4,7 @@ import 'package:get/get.dart';
 import '../../components/liquid_background.dart';
 import '../../components/liquid_page_app_bar.dart';
 import '../../components/recodex_dropdown.dart';
+import '../../components/recodex_notice.dart';
 import '../../routes/app_pages.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
@@ -158,7 +159,11 @@ class ConnectionSettingsPage extends StatelessWidget {
   ) async {
     final profile = bridge.activePairing;
     if (profile == null) {
-      _showMessage(context, '请先创建并选择一个配对。');
+      RecodexNotice.show(
+        context,
+        '请先创建并选择一个配对。',
+        tone: RecodexNoticeTone.warning,
+      );
       return;
     }
     final error = bridge.connected.value
@@ -177,12 +182,10 @@ class ConnectionSettingsPage extends StatelessWidget {
             inputGrantExpiresAt: profile.grantExpiresAt,
           );
     if (!context.mounted) return;
-    _showMessage(context, error ?? '连接测试成功，Relay 连接正常。');
-  }
-
-  void _showMessage(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+    RecodexNotice.show(
+      context,
+      error ?? '连接测试成功，Relay 连接正常。',
+      tone: error == null ? RecodexNoticeTone.success : RecodexNoticeTone.error,
     );
   }
 }

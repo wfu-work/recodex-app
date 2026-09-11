@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../configs/global_binding.dart';
+import 'components/recodex_notice.dart';
+import 'pages/settings/settings_preferences_controller.dart';
 import 'pages/settings/theme_controller.dart';
 import 'routes/app_pages.dart';
 import 'theme/recodex_theme.dart';
@@ -33,7 +35,14 @@ class RecodexApp extends StatelessWidget {
             data: MediaQuery.of(
               context,
             ).copyWith(textScaler: TextScaler.linear(fontScale)),
-            child: child ?? const SizedBox.shrink(),
+            child: Obx(
+              () => RecodexNoticeHost(
+                reduceMotion: Get.find<SettingsPreferencesController>()
+                    .reduceAnimations
+                    .value,
+                child: child ?? const SizedBox.shrink(),
+              ),
+            ),
           );
         },
       );

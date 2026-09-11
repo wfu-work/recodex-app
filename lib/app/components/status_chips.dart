@@ -90,11 +90,7 @@ class ConnectionDot extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(
-          RecodexIcons.circle,
-          size: 8,
-          color: connected ? colors.success : colors.textMuted,
-        ),
+        _ConnectionLight(color: connected ? colors.success : colors.textMuted),
         const SizedBox(width: 6),
         Flexible(
           child: Text(
@@ -112,4 +108,54 @@ class ConnectionDot extends StatelessWidget {
       ],
     );
   }
+}
+
+/// An explicit connection state for service and settings rows.
+class ConnectionStatusBadge extends StatelessWidget {
+  const ConnectionStatusBadge({required this.connected, super.key});
+
+  final bool connected;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final color = connected ? colors.success : colors.textMuted;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: connected ? 0.10 : 0.06),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _ConnectionLight(color: color),
+          const SizedBox(width: 6),
+          Text(
+            connected ? '在线' : '未连接',
+            style: TextStyle(
+              color: color,
+              fontSize: 13,
+              height: 1.2,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConnectionLight extends StatelessWidget {
+  const _ConnectionLight({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 8,
+    height: 8,
+    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+  );
 }

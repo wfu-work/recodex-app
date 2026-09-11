@@ -10,6 +10,7 @@ import 'package:get_storage/get_storage.dart';
 import '../../models/bridge_models.dart';
 import '../../models/pending_interaction.dart';
 import '../../services/event_recovery.dart';
+import '../../services/composer_images.dart';
 import '../../services/answer_metadata.dart';
 import '../../services/context_window_usage.dart';
 import '../../services/relay_protocol.dart';
@@ -21,6 +22,325 @@ import '../../services/task_notification_controller.dart';
 import '../settings/settings_preferences_controller.dart';
 
 class BridgeController extends GetxController {
+  BridgeController({SessionCache? sessionCache})
+    : _sessionCache = sessionCache ?? SessionCache();
+
+  final imageAttachmentsAvailable = false.obs;
+  final workspaceSearchResults = <WorkspaceEntry>[].obs;
+  final skills = <SkillInfo>[].obs;
+
+  ImageMessageContext get imageMessageContext => ImageMessageContext(
+    host:
+        '${activePairingId.value}:${baseUrl.value}:${spaceId.value}:${targetDeviceId.value}',
+    cwd: selectedWorkspace.value?.path ?? '',
+    threadId: selectedSessionId.value,
+  );
+
+  void _checkImageContext(ImageMessageContext context) {
+    if (!connected.value) {
+      throw const ImageCommandException(
+        'CONNECTION_LOST',
+        '连接已断开，图片保留在草稿中，连接后可重试上传',
+      );
+    }
+    if (imageMessageContext.key != context.key) {
+      throw const ImageCommandException('DRAFT_CHANGED', '已切换任务，图片保留在原任务的草稿中');
+    }
+  }
+
+  Future<Map<String, dynamic>> _imageRequest(
+    String type,
+    Map<String, dynamic> command, {
+    String? threadId,
+    bool responseOnly = true,
+  }) async {
+    final completion = Completer<Map<String, dynamic>>();
+    if (!_sendCommand(
+      type,
+      command,
+      threadId: threadId,
+      responseCompletion: completion,
+      responseOnly: responseOnly,
+    )) {
+      throw const ImageCommandException('NOT_SENT', '连接不可用，消息未发送');
+    }
+    final response = await completion.future.timeout(
+      _commandTimeout,
+      onTimeout: () => {
+        'success': false,
+        'error': {
+          'code': 'COMMAND_OUTCOME_UNKNOWN',
+          'message': '命令回执超时，请核对任务后再发送',
+        },
+      },
+    );
+    if (response['success'] != true) {
+      final error = _asMap(response['error']) ?? {};
+      throw ImageCommandException(
+        _readString(error['code']) ?? 'IMAGE_FAILED',
+        _readString(error['message']) ?? '图片发送失败',
+      );
+    }
+    return _asMap(response['result']) ?? {};
+  }
+
+  Future<Map<String, dynamic>> _query(
+    String type,
+    Map<String, dynamic> command,
+  ) async {
+    final completion = Completer<Map<String, dynamic>>();
+    if (!_sendCommand(
+      type,
+      command,
+      responseCompletion: completion,
+      responseOnly: true,
+    )) {
+      throw const ImageCommandException('NOT_SENT', '连接不可用');
+    }
+    final response = await completion.future.timeout(
+      _commandTimeout,
+      onTimeout: () => {
+        'success': false,
+        'error': {'code': 'COMMAND_OUTCOME_UNKNOWN', 'message': '查询超时，请稍后重试'},
+      },
+    );
+    if (response['success'] != true) {
+      final error = _asMap(response['error']) ?? {};
+      throw ImageCommandException(
+        _readString(error['code']) ?? 'QUERY_FAILED',
+        _readString(error['message']) ?? '查询失败',
+      );
+    }
+    return _asMap(response['result']) ?? {};
+  }
+
+  Future<List<WorkspaceEntry>> searchWorkspace(
+    String query, {
+    String kind = 'all',
+  }) async {
+    final result = await _query('workspace.search', {
+      'cwd': selectedWorkspace.value?.path ?? '',
+      'query': query.trim(),
+      'kind': kind,
+      'limit': 50,
+    });
+    final rows = result['data'];
+    final parsed = rows is List
+        ? rows
+              .whereType<Map>()
+              .map(
+                (item) =>
+                    WorkspaceEntry.fromJson(Map<String, dynamic>.from(item)),
+              )
+              .where((item) => item.path.isNotEmpty)
+              .toList()
+        : <WorkspaceEntry>[];
+    workspaceSearchResults.assignAll(parsed);
+    return parsed;
+  }
+
+  Future<List<SkillInfo>> loadSkills() async {
+    final result = await _query('skills.list', {
+      'cwd': selectedWorkspace.value?.path ?? '',
+    });
+    final rows = result['data'];
+    final parsed = rows is List
+        ? rows
+              .whereType<Map>()
+              .map(
+                (item) => SkillInfo.fromJson(Map<String, dynamic>.from(item)),
+              )
+              .where((item) => item.name.isNotEmpty)
+              .toList()
+        : <SkillInfo>[];
+    skills.assignAll(parsed);
+    return parsed;
+  }
+
+  Future<String> uploadImage(
+    ComposerImage image,
+    ImageMessageContext context,
+    void Function(double) onProgress,
+  ) {
+    _checkImageContext(context);
+    if (!imageAttachmentsAvailable.value) {
+      throw const ImageCommandException(
+        'IMAGE_UNSUPPORTED',
+        '当前主机未启用图片发送，请更新并重启 Codex Relay 插件',
+      );
+    }
+    final chunkBytes = ((_maxFrameSize - 4096) * 3 ~/ 4).clamp(1, 96 * 1024);
+    return uploadComposerImage(
+      image: image,
+      context: context,
+      chunkBytes: chunkBytes,
+      onProgress: onProgress,
+      request: (type, command) {
+        _checkImageContext(context);
+        return _imageRequest(type, command);
+      },
+    );
+  }
+
+  Future<void> removeUploadedImage(
+    ComposerImage image,
+    ImageMessageContext context,
+  ) async {
+    if (!connected.value || imageMessageContext.host != context.host) return;
+    try {
+      await _imageRequest('image.upload.remove', {
+        'uploadId': image.uploadId(context.key),
+      });
+    } catch (_) {
+      /* Abandoned uploads also expire on the host. */
+    }
+  }
+
+  Future<ImageSendOutcome> sendImageMessage(
+    String prompt,
+    List<ComposerImage> images,
+    List<String> attachmentIds,
+    ImageMessageContext context, {
+    void Function()? onThreadCreated,
+  }) => sendImageMessageWithContext(
+    prompt,
+    images,
+    attachmentIds,
+    context,
+    onThreadCreated: onThreadCreated,
+  );
+
+  Future<ImageSendOutcome> sendImageMessageWithContext(
+    String prompt,
+    List<ComposerImage> images,
+    List<String> attachmentIds,
+    ImageMessageContext context, {
+    List<String> workspaceRefs = const [],
+    List<String> skills = const [],
+    void Function()? onThreadCreated,
+  }) async {
+    var turnDispatched = false;
+    String? submittedThreadId;
+    try {
+      _checkImageContext(context);
+      if (timelineStatus.value.isActive || timelineLoading.value) {
+        throw const ImageCommandException('TASK_BUSY', '任务正在执行或加载，图片已保留为草稿');
+      }
+      var threadId = context.threadId;
+      if (threadId == null || threadId.isEmpty) {
+        final settings = composerContext.value;
+        final permission = permissionMode.value;
+        final result = await _imageRequest('thread.create', {
+          'cwd': context.cwd,
+        });
+        _checkImageContext(context);
+        final thread = _asMap(result['thread']) ?? result;
+        threadId = _readString(thread['id']);
+        if (threadId == null) {
+          throw const ImageCommandException('INVALID_THREAD', '主机未返回任务标识');
+        }
+        final accepted = await _imageRequest('thread.settings.update', {
+          if (settings.model.isNotEmpty) 'model': settings.model,
+          if (settings.reasoningEffort.isNotEmpty)
+            'effort': settings.reasoningEffort,
+          'permissionMode': permission,
+        }, threadId: threadId);
+        _checkImageContext(context);
+        final record = _sessionFromThread(result);
+        if (record != null) _upsertSession(record);
+        selectedSessionId.value = threadId;
+        onThreadCreated?.call();
+        _storedSessionId = threadId;
+        _sessionRestoreAttempted = true;
+        unawaited(_storeSelectedSession(threadId));
+        _applyThreadComposerSettings(threadId, accepted);
+      } else {
+        final waiting = _pendingCommands.values
+            .where(
+              (p) =>
+                  p.kind == 'thread.settings.update' && p.threadId == threadId,
+            )
+            .map((p) => p.completion!.future)
+            .toList();
+        final accepted = await Future.wait(
+          waiting,
+        ).timeout(_commandTimeout, onTimeout: () => [false]);
+        _checkImageContext(context);
+        if (accepted.any((ok) => !ok)) {
+          throw const ImageCommandException(
+            'SETTINGS_FAILED',
+            '任务设置未同步成功，请核对后重试',
+          );
+        }
+      }
+      if (timelineStatus.value.isActive) {
+        throw const ImageCommandException('TASK_BUSY', '任务已开始执行，图片已保留为草稿');
+      }
+      currentSessionId.value = threadId;
+      _currentTurnId = null;
+      _lastTerminalTurnId = null;
+      _currentTurnStartedAt = null;
+      _interruptRequested = false;
+      _setTimelineStatus(TimelineTaskStatus.processing);
+      _markSessionRunningForNotification(threadId);
+      turnDispatched = true;
+      submittedThreadId = threadId;
+      final result = await _imageRequest(
+        'turn.start',
+        {
+          'text': prompt.trim(),
+          'attachmentIds': attachmentIds,
+          'cwd': context.cwd,
+          if (workspaceRefs.isNotEmpty) 'workspaceRefs': workspaceRefs,
+          if (skills.isNotEmpty) 'skills': skills,
+        },
+        threadId: threadId,
+        responseOnly: false,
+      );
+      final turnId =
+          _readString(_asMap(result['turn'])?['id']) ??
+          _readString(result['turnId']);
+      if (selectedSessionId.value == threadId) {
+        if (turnId != null &&
+            !events.any(
+              (event) => event.kind == 'user' && event.turnId == turnId,
+            )) {
+          _appendSessionEvent(
+            SessionEvent(
+              kind: 'user',
+              text: prompt.trim(),
+              turnId: turnId,
+              attachments: images.map((image) => image.attachment).toList(),
+            ),
+          );
+        }
+        _requestedEventsSessionId = threadId;
+        _requestedEventsPrompt = prompt;
+        _requestTimelineRead(threadId, force: true);
+      }
+      return ImageSendOutcome.accepted;
+    } catch (error) {
+      final unknown =
+          turnDispatched && error is ImageCommandException && error.uncertain;
+      if (turnDispatched &&
+          (unknown ||
+              error is ImageCommandException && error.code == 'NOT_SENT') &&
+          selectedSessionId.value == submittedThreadId &&
+          _currentTurnId == null) {
+        // An optimistic send is not proof of an active turn. Without an id
+        // from the host, let the next snapshot establish the real state.
+        _timelineSnapshotGuard.reset();
+        _sessionLifecycles[submittedThreadId]?.visibleRunning = false;
+        _setTimelineStatus(TimelineTaskStatus.unknown);
+        _reconcileSelectedTask();
+      }
+      lastError.value = unknown
+          ? '图片消息发送结果待确认，请刷新任务核对，勿重复发送。'
+          : error.toString();
+      return unknown ? ImageSendOutcome.unknown : ImageSendOutcome.rejected;
+    }
+  }
+
   static const _storageContainer = 'recodex';
   static const _commandTimeout = Duration(seconds: 35);
   static const _tokenRefreshLead = Duration(minutes: 1);
@@ -42,6 +362,11 @@ class BridgeController extends GetxController {
   static const _legacySecureStorage = FlutterSecureStorage();
   static const _pairingsStorageKey = 'recodex_pairings_v2';
   static const _activePairingStorageKey = 'recodex_active_pairing_id_v2';
+  // Stable identity used when creating a new pairing on this phone. Existing
+  // profiles keep their own deviceKey so already-issued Relay tokens remain
+  // valid.
+  static const _sharedEndpointPrivateKeyStorageKey =
+      'recodex_mobile_endpoint_private_key_v1';
   static Future<void>? _storageReady;
 
   /// Initializes the local configuration container before any controller
@@ -92,6 +417,7 @@ class BridgeController extends GetxController {
   final workspaces = <WorkspaceInfo>[].obs;
   final sessions = <SessionRecord>[].obs;
   final _officialWorkspaces = <WorkspaceInfo>[];
+  bool _projectCatalogLoaded = false;
   final events = <SessionEvent>[].obs;
   final selectedWorkspace = Rxn<WorkspaceInfo>();
 
@@ -159,6 +485,8 @@ class BridgeController extends GetxController {
   bool _pendingSessionStart = false;
   bool _interruptRequested = false;
   String? _pendingPrompt;
+  List<String> _pendingWorkspaceRefs = const [];
+  List<String> _pendingSkills = const [];
   String? _currentTurnId;
   String? _lastTerminalTurnId;
   DateTime? _currentTurnStartedAt;
@@ -200,7 +528,7 @@ class BridgeController extends GetxController {
   bool _sessionRestoreAttempted = false;
   final _sessionLifecycles = <String, _SessionLifecycle>{};
   final _notifiedTerminalSessions = <String>{};
-  final SessionCache _sessionCache = SessionCache();
+  final SessionCache _sessionCache;
   SessionCacheScope? _cacheScope;
   String? _cacheLoadedScopeKey;
   int _cacheGeneration = 0;
@@ -256,12 +584,41 @@ class BridgeController extends GetxController {
 
   /// Creates (or restores) the Ed25519 identity for a pairing editor.
   ///
-  /// This deliberately does not write to secure storage. The caller can show
-  /// the public key immediately, let the user copy it into relay-web, and only
-  /// persist the private seed together with the pairing after an explicit save.
+  /// New drafts persist the phone identity in secure storage so subsequent
+  /// pairings show the same public key. Existing profiles continue to pass
+  /// their own seed and therefore retain compatibility with issued tokens.
   Future<EndpointKeyMaterial> prepareEndpointKey({String? deviceKey}) async {
     SimpleKeyPair pair;
-    final encodedSeed = deviceKey?.trim() ?? '';
+    var encodedSeed = deviceKey?.trim() ?? '';
+    if (encodedSeed.isEmpty) {
+      // New pairing drafts reuse the phone identity. This keeps the public
+      // key stable while still allowing saved legacy profiles to retain
+      // their original key material.
+      try {
+        await initializeStorage();
+        encodedSeed =
+            (await _legacySecureStorage.read(
+                      key: _sharedEndpointPrivateKeyStorageKey,
+                    ) ??
+                    '')
+                .trim();
+        // Migrate the first existing pairing identity when upgrading from a
+        // version that only stored keys inside pairing profiles.
+        if (encodedSeed.isEmpty) {
+          encodedSeed = this.deviceKey.value.trim();
+        }
+        if (encodedSeed.isEmpty) {
+          for (final profile in pairings) {
+            if (profile.deviceKey.trim().isNotEmpty) {
+              encodedSeed = profile.deviceKey.trim();
+              break;
+            }
+          }
+        }
+      } catch (_) {
+        // Fall through to generating an in-memory identity.
+      }
+    }
     if (encodedSeed.isNotEmpty) {
       try {
         pair = await RelayProtocol.keyPairFromSeed(
@@ -274,8 +631,20 @@ class BridgeController extends GetxController {
       pair = await RelayProtocol.newKeyPair();
     }
     final seed = await pair.extractPrivateKeyBytes();
+    final normalizedSeed = RelayProtocol.encodeBase64Url(seed);
+    if ((deviceKey?.trim() ?? '').isEmpty) {
+      try {
+        await initializeStorage();
+        await _legacySecureStorage.write(
+          key: _sharedEndpointPrivateKeyStorageKey,
+          value: normalizedSeed,
+        );
+      } catch (_) {
+        // Keep the identity in memory when secure storage is unavailable.
+      }
+    }
     return EndpointKeyMaterial(
-      deviceKey: RelayProtocol.encodeBase64Url(seed),
+      deviceKey: normalizedSeed,
       publicKey: await RelayProtocol.publicKey(pair),
     );
   }
@@ -435,6 +804,7 @@ class BridgeController extends GetxController {
   }
 
   void _resetHostState() {
+    imageAttachmentsAvailable.value = false;
     _eventRecovery.reset();
     pendingInteractions.clear();
     submittedInteractions.clear();
@@ -445,6 +815,7 @@ class BridgeController extends GetxController {
     lastError.value = '';
     workspaces.clear();
     _officialWorkspaces.clear();
+    _projectCatalogLoaded = false;
     sessions.clear();
     events.clear();
     selectedWorkspace.value = null;
@@ -1174,6 +1545,16 @@ class BridgeController extends GetxController {
   }
 
   Future<void> _closeSocket() async {
+    // Explicit disconnects cancel the stream subscription, so onDone will
+    // not resolve uploads or send receipts waiting on that connection.
+    for (final pending in _pendingCommands.values) {
+      if (pending.responseCompletion?.isCompleted == false) {
+        pending.responseCompletion!.complete({
+          'success': false,
+          'error': {'code': 'CONNECTION_LOST', 'message': '连接已断开，请核对任务后再发送'},
+        });
+      }
+    }
     final socket = _socket;
     final subscription = _socketSubscription;
     _socket = null;
@@ -1399,11 +1780,19 @@ class BridgeController extends GetxController {
     }
   }
 
-  void startSession(String prompt) {
+  void startSession(String prompt) => startSessionWithContext(prompt);
+
+  void startSessionWithContext(
+    String prompt, {
+    List<String> workspaceRefs = const [],
+    List<String> skills = const [],
+  }) {
     final workspace = selectedWorkspace.value;
     if (workspace == null) return;
     final trimmedPrompt = prompt.trim();
-    if (trimmedPrompt.isEmpty) return;
+    if (trimmedPrompt.isEmpty && workspaceRefs.isEmpty && skills.isEmpty) {
+      return;
+    }
 
     // The composer is shared by both the "new conversation" state and an
     // already selected task.  A selected task must keep its identity: the
@@ -1426,7 +1815,12 @@ class BridgeController extends GetxController {
       _appendSessionEvent(
         const SessionEvent(kind: 'running', text: '正在继续 Codex 任务...'),
       );
-      if (!_sendTurnStart(trimmedPrompt, threadId: selectedId)) {
+      if (!_sendTurnStart(
+        trimmedPrompt,
+        threadId: selectedId,
+        workspaceRefs: workspaceRefs,
+        skills: skills,
+      )) {
         _finishCurrentSession(
           status: TaskNotificationStatus.failed,
           sessionId: selectedId,
@@ -1445,6 +1839,8 @@ class BridgeController extends GetxController {
     _interruptRequested = false;
     _pendingSessionStart = true;
     _pendingPrompt = trimmedPrompt;
+    _pendingWorkspaceRefs = List<String>.of(workspaceRefs);
+    _pendingSkills = List<String>.of(skills);
     timelineTurnStartedAt.value = null;
     selectedSessionId.value = null;
     _sessionRestoreAttempted = true;
@@ -1461,7 +1857,12 @@ class BridgeController extends GetxController {
     }
   }
 
-  bool _sendTurnStart(String prompt, {required String threadId}) {
+  bool _sendTurnStart(
+    String prompt, {
+    required String threadId,
+    List<String> workspaceRefs = const [],
+    List<String> skills = const [],
+  }) {
     if (!connected.value) return false;
     final waiting = _pendingCommands.values
         .where(
@@ -1473,6 +1874,8 @@ class BridgeController extends GetxController {
       'text': prompt,
       if ((selectedWorkspace.value?.path ?? '').trim().isNotEmpty)
         'cwd': selectedWorkspace.value!.path,
+      if (workspaceRefs.isNotEmpty) 'workspaceRefs': workspaceRefs,
+      if (skills.isNotEmpty) 'skills': skills,
     };
     if (waiting.isEmpty) {
       // The shared thread is authoritative. Echoing a cached model/effort
@@ -2014,7 +2417,14 @@ class BridgeController extends GetxController {
       merged.sort(compareSessionRecords);
       sessions.assignAll(merged.map(_sessionWithLiveStatus));
     }
-    if (snapshot.workspaces.isNotEmpty) {
+    if (!_projectCatalogLoaded && snapshot.workspaces.isNotEmpty) {
+      // Keep official identities and pin metadata through offline startup.
+      // A late disk read must never undo a catalog already received from Relay.
+      if (_officialWorkspaces.isEmpty) {
+        _officialWorkspaces.addAll(
+          snapshot.workspaces.where((workspace) => workspace.id.isNotEmpty),
+        );
+      }
       final known = <String>{
         for (final workspace in workspaces)
           _normalizeWorkspaceKey(
@@ -2625,6 +3035,9 @@ class BridgeController extends GetxController {
     final requestId = message['requestId'] as String? ?? '';
     final pending = _pendingCommands.remove(requestId);
     if (pending == null) return;
+    if (pending.responseCompletion?.isCompleted == false)
+      pending.responseCompletion!.complete(message);
+    if (pending.responseOnly) return;
     if (pending.kind == 'thread.settings.update' &&
         pending.settingsStreamId != _eventRecovery.streamId) {
       if (pending.completion?.isCompleted == false) {
@@ -2753,6 +3166,15 @@ class BridgeController extends GetxController {
         if (startedTurnId != null && startedTurnId.isNotEmpty) {
           _currentTurnId = startedTurnId;
           _lastTerminalTurnId = null;
+          // The acknowledgement identifies the active turn even when its
+          // turn.started event was lost. Later completed snapshots must be
+          // able to match this identity instead of leaving the UI running.
+          if (timelineStatus.value.isActive) {
+            _timelineSnapshotGuard.recordTrusted(
+              timelineStatus.value,
+              turnId: startedTurnId,
+            );
+          }
         }
         _sendRequestedInterrupt();
       case 'turn.interrupt':
@@ -3058,32 +3480,38 @@ class BridgeController extends GetxController {
 
   void _applyProjectListResult(Object? value) {
     final items = _projectListItems(value);
+    if (items == null) return;
     final projects = items
         .map(_workspaceFromProject)
         .whereType<WorkspaceInfo>()
         .toList(growable: false);
-    if (items.isEmpty) {
-      _officialWorkspaces.clear();
-      _deriveWorkspaces(sessions);
-      _queueCatalogCacheWrite();
-      return;
-    }
-    if (projects.isEmpty) return;
+    if (items.isNotEmpty && projects.isEmpty) return;
+    _projectCatalogLoaded = true;
     _officialWorkspaces
       ..clear()
       ..addAll(projects);
     _deriveWorkspaces(sessions);
+    final selected = selectedWorkspace.value;
+    if (selected != null) {
+      for (final workspace in workspaces) {
+        if ((selected.id.isNotEmpty && selected.id == workspace.id) ||
+            (selected.id.isEmpty && selected.path == workspace.path)) {
+          selectedWorkspace.value = workspace;
+          break;
+        }
+      }
+    }
     selectedWorkspace.value ??= _restoreSelectedWorkspace();
     selectedWorkspace.value ??= _defaultWorkspace();
     _queueCatalogCacheWrite();
   }
 
-  List<Object?> _projectListItems(Object? value) {
+  List<Object?>? _projectListItems(Object? value) {
     var current = value;
     for (var depth = 0; depth < 3; depth += 1) {
       if (current is List) return List<Object?>.from(current);
       final map = _asMap(current);
-      if (map == null) return const [];
+      if (map == null) return null;
       Object? next;
       for (final key in const [
         'data',
@@ -3097,10 +3525,10 @@ class BridgeController extends GetxController {
           break;
         }
       }
-      if (next == null) return const [];
+      if (next == null) return null;
       current = next;
     }
-    return const [];
+    return null;
   }
 
   WorkspaceInfo? _workspaceFromProject(Object? value) {
@@ -3125,6 +3553,10 @@ class BridgeController extends GetxController {
       name: name,
       path: path,
       position: (project['position'] as num?)?.toInt(),
+      isPinned: project['isPinned'] == true,
+      pinnedPosition: project['isPinned'] == true
+          ? (project['pinnedPosition'] as num?)?.toInt()
+          : null,
       roots: roots,
     );
   }
@@ -3261,7 +3693,7 @@ class BridgeController extends GetxController {
   }
 
   void _deriveWorkspaces(List<SessionRecord> records) {
-    if (_officialWorkspaces.isNotEmpty) {
+    if (_projectCatalogLoaded || _officialWorkspaces.isNotEmpty) {
       final ordered = List<WorkspaceInfo>.of(_officialWorkspaces)
         ..sort((left, right) {
           final leftPosition = left.position ?? 1 << 30;
@@ -3973,14 +4405,26 @@ class BridgeController extends GetxController {
     );
     final prompt = _pendingPrompt;
     _pendingPrompt = null;
-    if (prompt != null && prompt.isNotEmpty) {
+    final workspaceRefs = _pendingWorkspaceRefs;
+    final selectedSkills = _pendingSkills;
+    _pendingWorkspaceRefs = const [];
+    _pendingSkills = const [];
+    if (prompt != null &&
+        (prompt.isNotEmpty ||
+            workspaceRefs.isNotEmpty ||
+            selectedSkills.isNotEmpty)) {
       if (_sendComposerSettings({
         if (draftContext.model.isNotEmpty) 'model': draftContext.model,
         if (draftContext.reasoningEffort.isNotEmpty)
           'effort': draftContext.reasoningEffort,
         'permissionMode': draftPermission,
       }, threadId: record.id)) {
-        _sendTurnStart(prompt, threadId: record.id);
+        _sendTurnStart(
+          prompt,
+          threadId: record.id,
+          workspaceRefs: workspaceRefs,
+          skills: selectedSkills,
+        );
       }
     }
   }
@@ -4470,6 +4914,7 @@ class BridgeController extends GetxController {
             time: event.time ?? turnStartedAt ?? promptEvent.time,
             usage: event.usage ?? promptEvent.usage,
             turnId: snapshotTurnId,
+            itemId: event.itemId,
             attachments: _mergeEventAttachments(
               promptEvent.attachments,
               event.attachments,
@@ -5335,6 +5780,9 @@ class BridgeController extends GetxController {
     final map = _asMap(value);
     if (map == null) return;
     if (!_adoptEventStream(map['eventStreamId'])) return;
+    imageAttachmentsAvailable.value =
+        _asMap(_asMap(map['capabilities'])?['imageAttachments'])?['version'] ==
+        1;
     final appServer = _asMap(map['appServer']) ?? map;
     final state = _readString(appServer['state']);
     if (state != null) {
@@ -5456,6 +5904,8 @@ class BridgeController extends GetxController {
     int? refreshToken,
     String? interactionId,
     Completer<bool>? completion,
+    Completer<Map<String, dynamic>>? responseCompletion,
+    bool responseOnly = false,
   }) {
     if (!connected.value ||
         targetDeviceId.value.isEmpty ||
@@ -5498,6 +5948,8 @@ class BridgeController extends GetxController {
       interactionRevision: _interactionRevision,
       interactionId: interactionId,
       completion: completion,
+      responseCompletion: responseCompletion,
+      responseOnly: responseOnly,
       settingsStreamId: _eventRecovery.streamId,
       composerPatch: type == 'thread.settings.update'
           ? Map<String, dynamic>.from(command)
@@ -5550,6 +6002,11 @@ class BridgeController extends GetxController {
 
   void _markUnconfirmedWrites() {
     for (final pending in _pendingCommands.values) {
+      if (pending.responseCompletion?.isCompleted == false)
+        pending.responseCompletion!.complete({
+          'success': false,
+          'error': {'code': 'CONNECTION_LOST', 'message': '连接中断，等待重新连接后核对任务'},
+        });
       if (!{
         'thread.create',
         'thread.settings.update',
@@ -6747,10 +7204,9 @@ class BridgeController extends GetxController {
         existing.contextWindowUsage,
         snapshot.contextWindowUsage,
       ),
-      attachments: _mergeEventAttachments(
-        existing.attachments,
-        snapshot.attachments,
-      ),
+      attachments: snapshot.kind == 'user' && snapshot.attachments.isNotEmpty
+          ? snapshot.attachments
+          : _mergeEventAttachments(existing.attachments, snapshot.attachments),
       itemId: existing.itemId ?? snapshot.itemId,
       turnId: existing.turnId ?? snapshot.turnId,
       phase: snapshot.phase ?? existing.phase,
@@ -7239,6 +7695,15 @@ class BridgeController extends GetxController {
     try {
       await initializeStorage();
       await _storage.write('recodex_endpoint_private_key', deviceKey.value);
+      final sharedIdentity = await _legacySecureStorage.read(
+        key: _sharedEndpointPrivateKeyStorageKey,
+      );
+      if (sharedIdentity == null || sharedIdentity.trim().isEmpty) {
+        await _legacySecureStorage.write(
+          key: _sharedEndpointPrivateKeyStorageKey,
+          value: deviceKey.value,
+        );
+      }
     } catch (_) {
       // Keep the key in memory when local storage is unavailable.
     }
@@ -8175,6 +8640,8 @@ class _PendingCommand {
     this.completion,
     this.composerPatch,
     this.settingsStreamId,
+    this.responseCompletion,
+    this.responseOnly = false,
   });
 
   final String kind;
@@ -8188,6 +8655,8 @@ class _PendingCommand {
   final Completer<bool>? completion;
   final Map<String, dynamic>? composerPatch;
   final String? settingsStreamId;
+  final Completer<Map<String, dynamic>>? responseCompletion;
+  final bool responseOnly;
 
   bool matches(String commandKind, {String? threadId}) {
     return kind == commandKind && this.threadId == threadId;

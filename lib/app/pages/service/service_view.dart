@@ -3,6 +3,8 @@ import 'package:get/get.dart';
 
 import '../../components/liquid_background.dart';
 import '../../components/liquid_page_app_bar.dart';
+import '../../components/recodex_notice.dart';
+import '../../components/status_chips.dart';
 import '../../theme/recodex_theme.dart';
 import '../main/bridge_controller.dart';
 import '../settings/settings_widgets.dart';
@@ -31,8 +33,12 @@ class ServicePage extends StatelessWidget {
                         ? RecodexIcons.cloudDone
                         : RecodexIcons.cloudOff,
                     title: 'Relay 连接',
-                    subtitle: controller.connected.value ? '在线' : '未连接',
-                    trailing: _StatusDot(connected: controller.connected.value),
+                    subtitle: controller.connected.value
+                        ? '已连接到中继服务'
+                        : '等待建立连接',
+                    trailing: ConnectionStatusBadge(
+                      connected: controller.connected.value,
+                    ),
                   ),
                   _DividerLine(),
                   _ServiceTile(
@@ -153,11 +159,10 @@ class ServicePage extends StatelessWidget {
             inputGrantExpiresAt: profile.grantExpiresAt,
           );
     if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(error ?? '连接测试成功，Relay 连接正常。'),
-        duration: const Duration(seconds: 3),
-      ),
+    RecodexNotice.show(
+      context,
+      error ?? '连接测试成功，Relay 连接正常。',
+      tone: error == null ? RecodexNoticeTone.success : RecodexNoticeTone.error,
     );
   }
 }
@@ -295,37 +300,27 @@ class _ServiceTile extends StatelessWidget {
               ],
             ),
           ),
-          ?trailing,
-          if (trailingText != null)
-            Flexible(
-              child: Text(
-                trailingText!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: colors.textMuted,
-                  fontWeight: FontWeight.w700,
+          if (trailing != null) ...[const SizedBox(width: 12), trailing!],
+          if (trailingText != null) ...[
+            const SizedBox(width: 12),
+            Expanded(
+              child: Tooltip(
+                message: trailingText!,
+                child: Text(
+                  trailingText!,
+                  textAlign: TextAlign.right,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colors.textMuted,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
             ),
+          ],
         ],
       ),
-    );
-  }
-}
-
-class _StatusDot extends StatelessWidget {
-  const _StatusDot({required this.connected});
-
-  final bool connected;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.recodexColors;
-    return Icon(
-      RecodexIcons.circle,
-      size: 12,
-      color: connected ? colors.success : colors.textMuted,
     );
   }
 }

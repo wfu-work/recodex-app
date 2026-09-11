@@ -6,7 +6,7 @@ import '../../../theme/recodex_theme.dart';
 /// A compact floating control above the composer for live output and
 /// jump-to-latest navigation.
 ///
-/// While a turn is running, the down arrow becomes the quiet ripple mark used
+/// While a turn is running, the down arrow becomes the three moving dots used
 /// for live activity. The control remains a jump-to-latest action in both
 /// states; only its visual language changes.
 class ScrollToLatestButton extends StatelessWidget {
@@ -25,8 +25,7 @@ class ScrollToLatestButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
     final media = MediaQuery.of(context);
-    final motionDisabled =
-        reduceMotion || media.disableAnimations || media.accessibleNavigation;
+    final motionDisabled = reduceMotion || media.disableAnimations;
     final tooltip = running ? '回到最新内容（任务进行中）' : '回到最新内容';
     final icon = AnimatedSwitcher(
       duration: motionDisabled
@@ -37,13 +36,13 @@ class ScrollToLatestButton extends StatelessWidget {
       child: running
           ? RecodexActivityRipple(
               key: const ValueKey('running-ripple'),
-              size: 28,
+              size: 22,
               reduceMotion: reduceMotion,
               color: colors.text,
             )
           : const Center(
               key: ValueKey('latest-arrow'),
-              child: Icon(RecodexIcons.arrowDown, size: 20),
+              child: Icon(RecodexIcons.arrowDown, size: 18),
             ),
     );
 
@@ -66,8 +65,8 @@ class ScrollToLatestButton extends StatelessWidget {
             splashColor: colors.text.withValues(alpha: 0.12),
             highlightColor: colors.text.withValues(alpha: 0.06),
             child: SizedBox(
-              width: 46,
-              height: 46,
+              width: 40,
+              height: 40,
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,

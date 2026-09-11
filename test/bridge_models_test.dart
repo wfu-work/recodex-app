@@ -194,6 +194,8 @@ void main() {
       'id': 'project-1',
       'name': 'recodex',
       'position': 3,
+      'isPinned': true,
+      'pinnedPosition': 1,
       'roots': [
         {'path': '/work/recodex'},
         {'path': '/work/shared'},
@@ -202,9 +204,27 @@ void main() {
 
     expect(workspace.id, 'project-1');
     expect(workspace.position, 3);
+    expect(workspace.isPinned, isTrue);
+    expect(workspace.pinnedPosition, 1);
+    expect(WorkspaceInfo.fromJson(workspace.toJson()).isPinned, isTrue);
     expect(workspace.path, '/work/recodex');
     expect(workspace.roots, ['/work/recodex', '/work/shared']);
   });
+
+  test(
+    'WorkspaceInfo defaults older catalogs to unpinned and honors unpinning',
+    () {
+      expect(WorkspaceInfo.fromJson({'name': 'legacy'}).isPinned, isFalse);
+      final unpinned = WorkspaceInfo.fromJson({
+        'name': 'project',
+        'isPinned': false,
+        'pinnedPosition': 0,
+      });
+      expect(unpinned.isPinned, isFalse);
+      expect(unpinned.pinnedPosition, isNull);
+      expect(unpinned.toJson().containsKey('pinnedPosition'), isFalse);
+    },
+  );
 
   test('TimelineTaskStatus distinguishes active and terminal states', () {
     expect(TimelineTaskStatus.processing.isActive, isTrue);
