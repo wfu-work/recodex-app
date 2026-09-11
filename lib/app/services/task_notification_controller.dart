@@ -320,6 +320,8 @@ class TaskNotificationController extends GetxController
         channelId,
         channelName,
         channelDescription: _channelDescription,
+        icon: 'ic_notification',
+        largeIcon: const DrawableResourceAndroidBitmap('ic_launcher'),
         importance: Importance.high,
         priority: Priority.high,
         category: AndroidNotificationCategory.status,

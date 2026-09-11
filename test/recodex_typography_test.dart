@@ -160,6 +160,44 @@ Distinguish instructions in attached documents from the user's request.
     expect(tester.getTopLeft(tile).dx, greaterThan(600));
   });
 
+  testWidgets('renders assistant image attachments inside the final answer', (
+    tester,
+  ) async {
+    Get.testMode = true;
+    Get.put<ThemeController>(_TestThemeController(), permanent: true);
+    addTearDown(Get.reset);
+
+    const tinyPng =
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: RecodexTheme.dark,
+        home: AssistantAnswerBlock(
+          completed: true,
+          events: const [
+            SessionEvent(
+              kind: 'assistant',
+              text: '已生成图片。',
+              attachments: [
+                EventAttachment(
+                  type: 'image',
+                  mime: 'image/png',
+                  thumbnailDataUrl: tinyPng,
+                ),
+              ],
+            ),
+            SessionEvent(kind: 'done', text: '完成。'),
+          ],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('已生成图片。'), findsOneWidget);
+    expect(find.byType(Image), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('folds completed reasoning and toggles it from the elapsed bar', (
     tester,
   ) async {

@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -14,6 +13,9 @@ class NotificationSettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = Get.find<TaskNotificationController>();
+    final platform = Theme.of(context).platform;
+    final isMobile =
+        platform == TargetPlatform.android || platform == TargetPlatform.iOS;
     return Obx(
       () => LiquidBackground(
         child: Scaffold(
@@ -134,9 +136,15 @@ class NotificationSettingsPage extends StatelessWidget {
                         value: controller.soundEnabled.value,
                         onChanged: controller.setSoundEnabled,
                       ),
-                      if (_isMobilePlatform) ...[
+                      if (isMobile) ...[
                         const _NotificationDivider(),
-                        _NotificationVibrationControl(controller: controller),
+                        Obx(
+                          () => _NotificationVibrationControl(
+                            controller: controller,
+                            enabled: controller.vibrationEnabled.value,
+                            strength: controller.vibrationStrength.value,
+                          ),
+                        ),
                       ],
                     ],
                   ),
@@ -206,10 +214,6 @@ class NotificationSettingsPage extends StatelessWidget {
     );
   }
 }
-
-bool get _isMobilePlatform =>
-    defaultTargetPlatform == TargetPlatform.android ||
-    defaultTargetPlatform == TargetPlatform.iOS;
 
 class _NotificationHero extends StatelessWidget {
   const _NotificationHero({required this.controller});
@@ -448,14 +452,19 @@ class _NotificationDivider extends StatelessWidget {
 }
 
 class _NotificationVibrationControl extends StatelessWidget {
-  const _NotificationVibrationControl({required this.controller});
+  const _NotificationVibrationControl({
+    required this.controller,
+    required this.enabled,
+    required this.strength,
+  });
 
   final TaskNotificationController controller;
+  final bool enabled;
+  final int strength;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.recodexColors;
-    final strength = controller.vibrationStrength.value;
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 12, 14, 13),
       child: Column(
@@ -463,9 +472,7 @@ class _NotificationVibrationControl extends StatelessWidget {
           Row(
             children: [
               Icon(
-                controller.vibrationEnabled.value
-                    ? RecodexIcons.vibrate
-                    : RecodexIcons.vibrateOff,
+                enabled ? RecodexIcons.vibrate : RecodexIcons.vibrateOff,
                 color: colors.icon,
                 size: 21,
               ),
@@ -497,12 +504,12 @@ class _NotificationVibrationControl extends StatelessWidget {
               ),
               const SizedBox(width: 8),
               CodexSwitch(
-                value: controller.vibrationEnabled.value,
+                value: enabled,
                 onChanged: controller.setVibrationEnabled,
               ),
             ],
           ),
-          if (controller.vibrationEnabled.value) ...[
+          if (enabled) ...[
             const SizedBox(height: 8),
             Row(
               children: [

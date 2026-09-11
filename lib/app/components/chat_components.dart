@@ -778,6 +778,20 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
         );
         continue;
       }
+      // Assistant image attachments are part of the answer stream. Keep
+      // them in the answer column instead of reducing them to an activity
+      // count; this mirrors Codex's inline image cards and preserves the
+      // event order relative to surrounding text.
+      final imageAttachments = event.attachments
+          .where(_isRenderableImageAttachment)
+          .toList();
+      if (imageAttachments.isNotEmpty && event.kind != 'user') {
+        flushAnswerText();
+        if (answerChildren.isNotEmpty) {
+          answerChildren.add(const SizedBox(height: 12));
+        }
+        answerChildren.add(_EventImageGrid(attachments: imageAttachments));
+      }
       if (event.kind.toLowerCase().contains('reason')) {
         if (!widget.showReasoning) continue;
         if (reasoningBuffer.isNotEmpty) reasoningBuffer.write('\n\n');
@@ -866,14 +880,6 @@ class _AssistantAnswerBlockState extends State<AssistantAnswerBlock> {
           ),
         );
         continue;
-      }
-      final imageCount = event.attachments
-          .where(_isRenderableImageAttachment)
-          .length;
-      if (imageCount > 0) {
-        reasoningSteps.add(
-          _AnswerStep(icon: RecodexIcons.image, title: '已查看 $imageCount 张图像'),
-        );
       }
       final text = _cleanEventText(event);
       if (text.isEmpty) continue;
