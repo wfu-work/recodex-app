@@ -6,7 +6,8 @@
     <application
         android:label="recodex"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@mipmap/ic_launcher_v2"
+        android:roundIcon="@mipmap/ic_launcher_v2"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"

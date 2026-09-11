@@ -55,7 +55,9 @@ class TaskNotificationController extends GetxController
   /// system haptics settings because notification vibration has no public
   /// intensity API.
   final vibrationStrength = 2.obs;
-  int _notificationId = 1000;
+  // Start after the IDs used by previous releases so Android/OEM notification
+  // centers do not reuse a cached card with the former application icon.
+  int _notificationId = 2000;
   Future<void>? _initialization;
   AppLifecycleState _lifecycle = AppLifecycleState.resumed;
 
@@ -97,7 +99,7 @@ class TaskNotificationController extends GetxController
 
   Future<void> _initialize() async {
     const androidSettings = AndroidInitializationSettings(
-      '@mipmap/ic_launcher',
+      '@mipmap/ic_launcher_v2',
     );
     const darwinSettings = DarwinInitializationSettings(
       requestAlertPermission: false,
@@ -274,6 +276,20 @@ class TaskNotificationController extends GetxController
   }
 
   Future<void> sendTestNotification() async {
+    // The OS permission can be revoked outside the app while our cached
+    // observable still says it is granted. Re-check it before sending so the
+    // test action can recover instead of silently returning from _showNotification.
+    await initialize();
+    if (!ready.value) return;
+    final granted = await _safeRequestPermissions();
+    permissionGranted.value = granted;
+    if (!granted) {
+      enabled.value = false;
+      await _persistPreferences();
+      return;
+    }
+    enabled.value = true;
+    await _persistPreferences();
     await _showNotification(
       event: TaskNotificationEvent.completed,
       title: '通知测试成功',
@@ -336,8 +352,10 @@ class TaskNotificationController extends GetxController
         channelId,
         channelName,
         channelDescription: _channelDescription,
-        icon: 'ic_notification',
-        largeIcon: const DrawableResourceAndroidBitmap('ic_notification_large'),
+        icon: 'ic_notification_v2',
+        largeIcon: const DrawableResourceAndroidBitmap(
+          'ic_notification_large_v2',
+        ),
         importance: Importance.high,
         priority: Priority.high,
         category: AndroidNotificationCategory.status,
@@ -431,8 +449,18 @@ class TaskNotificationController extends GetxController
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
         >();
-    final androidGranted =
+    var androidGranted =
         await android?.requestNotificationsPermission() ?? true;
+    // POST_NOTIFICATIONS can be granted while the user has disabled the
+    // application's notification switch in Android system settings. The
+    // permission request alone reports true in that case, so query the final
+    // app-level state before attempting to show a test notification.
+    if (android != null) {
+      final notificationsEnabled = await android.areNotificationsEnabled();
+      if (notificationsEnabled == false) {
+        androidGranted = false;
+      }
+    }
 
     final ios = _plugin
         .resolvePlatformSpecificImplementation<

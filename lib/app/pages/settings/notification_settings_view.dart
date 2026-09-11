@@ -176,21 +176,18 @@ class NotificationSettingsPage extends StatelessWidget {
                       _NotificationActionRow(
                         icon: RecodexIcons.notificationsActive,
                         title: '发送测试通知',
-                        subtitle:
-                            controller.enabled.value &&
-                                controller.permissionGranted.value
+                        subtitle: controller.permissionGranted.value
                             ? '验证当前设备的通知投递'
-                            : '先开启消息通知并授予系统权限',
-                        actionLabel:
-                            controller.enabled.value &&
-                                controller.permissionGranted.value
+                            : '先授予系统通知权限',
+                        actionLabel: controller.permissionGranted.value
                             ? '发送'
-                            : '先开启',
-                        onTap:
-                            controller.enabled.value &&
-                                controller.permissionGranted.value
-                            ? controller.sendTestNotification
-                            : controller.requestPermissions,
+                            : '请求权限',
+                        // Keep one entry point for both cases. The
+                        // controller re-checks the OS permission, enables
+                        // notifications when needed, and then sends the test
+                        // message. The app-level switch must not prevent a
+                        // user from testing delivery.
+                        onTap: controller.sendTestNotification,
                       ),
                     ],
                   ),
