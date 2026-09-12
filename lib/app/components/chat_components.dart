@@ -2481,6 +2481,7 @@ class ComposerBar extends StatelessWidget {
         running ||
         busy ||
         sendBlocked ||
+        listening ||
         (controller.text.trim().isEmpty && !hasAttachments)) {
       return;
     }
@@ -2629,7 +2630,10 @@ class ComposerBar extends StatelessWidget {
                             child: FilledButton(
                               onPressed: running
                                   ? onStop
-                                  : enabled && !busy && !sendBlocked
+                                  : enabled &&
+                                        !busy &&
+                                        !sendBlocked &&
+                                        !listening
                                   ? onSend
                                   : null,
                               style: FilledButton.styleFrom(
@@ -2782,7 +2786,7 @@ class ComposerBar extends StatelessWidget {
                           child: FilledButton(
                             onPressed: running
                                 ? onStop
-                                : enabled && !busy && !sendBlocked
+                                : enabled && !busy && !sendBlocked && !listening
                                 ? onSend
                                 : null,
                             style: FilledButton.styleFrom(

@@ -13,6 +13,8 @@ class HomeHeader extends StatelessWidget {
     this.onRefreshTasks,
     this.onShowTaskOutput,
     this.onCopyTaskOutput,
+    this.onShowTaskInbox,
+    this.taskInboxCount = 0,
     required this.onRefreshGit,
     this.taskOutputAvailable = false,
     this.refreshing = false,
@@ -26,6 +28,8 @@ class HomeHeader extends StatelessWidget {
   final VoidCallback? onRefreshTasks;
   final VoidCallback? onShowTaskOutput;
   final VoidCallback? onCopyTaskOutput;
+  final VoidCallback? onShowTaskInbox;
+  final int taskInboxCount;
   final VoidCallback? onRefreshGit;
   final bool taskOutputAvailable;
   final bool refreshing;
@@ -126,17 +130,90 @@ class HomeHeader extends StatelessWidget {
               ),
             ),
             SizedBox(width: compact ? 8 : 12),
-            _HeaderActionMenu(
-              compact: compact,
-              onRefreshTasks: onRefreshTasks,
-              onShowTaskOutput: onShowTaskOutput,
-              onCopyTaskOutput: onCopyTaskOutput,
-              onRefreshGit: onRefreshGit,
-              taskOutputAvailable: taskOutputAvailable,
-              refreshing: refreshing,
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _TaskInboxButton(
+                  compact: compact,
+                  count: taskInboxCount,
+                  onPressed: onShowTaskInbox,
+                ),
+                _HeaderActionMenu(
+                  compact: compact,
+                  onRefreshTasks: onRefreshTasks,
+                  onShowTaskOutput: onShowTaskOutput,
+                  onCopyTaskOutput: onCopyTaskOutput,
+                  onRefreshGit: onRefreshGit,
+                  taskOutputAvailable: taskOutputAvailable,
+                  refreshing: refreshing,
+                ),
+              ],
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _TaskInboxButton extends StatelessWidget {
+  const _TaskInboxButton({
+    required this.compact,
+    required this.count,
+    required this.onPressed,
+  });
+
+  final bool compact;
+  final int count;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.recodexColors;
+    final label = count > 0 ? '任务通知，$count 个未读完成任务' : '任务通知';
+    return SizedBox(
+      width: compact ? 44 : 36,
+      height: compact ? 44 : 36,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          LiquidIconButton(
+            icon: count > 0
+                ? RecodexIcons.notificationsActive
+                : RecodexIcons.notifications,
+            tooltip: label,
+            size: compact ? 44 : 36,
+            iconSize: compact ? 20 : null,
+            onPressed: onPressed,
+          ),
+          if (count > 0)
+            Positioned(
+              top: compact ? 5 : 2,
+              right: compact ? 4 : 0,
+              child: IgnorePointer(
+                child: Container(
+                  constraints: const BoxConstraints(minWidth: 15),
+                  height: 15,
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  decoration: BoxDecoration(
+                    color: colors.error,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: colors.headerColor, width: 1.5),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    count > 99 ? '99+' : '$count',
+                    style: TextStyle(
+                      color: colors.glassColor,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      height: 1,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -232,14 +309,25 @@ class _HeaderActionMenu extends StatelessWidget {
           button: true,
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 180),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
             child: refreshing
                 ? SizedBox(
                     key: const ValueKey('refreshing'),
                     width: 20,
                     height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: colors.text,
+                    child: RepaintBoundary(
+                      child: Padding(
+                        // Keep the glyph optically aligned with the other
+                        // 20px header icons while leaving the 44px touch
+                        // target untouched.
+                        padding: const EdgeInsets.all(1),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.8,
+                          strokeCap: StrokeCap.round,
+                          color: colors.text,
+                        ),
+                      ),
                     ),
                   )
                 : Icon(

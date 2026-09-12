@@ -5,6 +5,8 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:pasteboard/pasteboard.dart';
+import 'package:speech_to_text/speech_recognition_result.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -33,6 +35,7 @@ import 'widget/inline_error.dart';
 import 'widget/pending_interaction_card.dart';
 import 'widget/main_helpers.dart';
 import 'widget/task_output_dialog.dart';
+import 'widget/task_inbox_panel.dart';
 import 'widget/scroll_to_latest_button.dart';
 import 'widget/timeline_load_state.dart';
 import 'widget/welcome_timeline.dart';
@@ -44,7 +47,7 @@ class MainPage extends StatefulWidget {
   State<MainPage> createState() => _MainPageState();
 }
 
-class _MainPageState extends State<MainPage> {
+class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   static const double _headerReservedHeight = 142;
   static const double _composerReservedHeight = 286;
   static const double _scrollToLatestThreshold = 132;
@@ -82,6 +85,11 @@ class _MainPageState extends State<MainPage> {
   late Worker _draftWorkspaceWorker;
   String _draftKey = '';
   bool _sendingSupplement = false;
+  final stt.SpeechToText _speech = stt.SpeechToText();
+  bool _speechInitialized = false;
+  bool _listening = false;
+  bool _voiceStopping = false;
+  String _voiceBaseText = '';
 
   String get _currentDraftKey =>
       '${controller.activePairingId.value}:${controller.selectedSessionId.value ?? 'new:${controller.selectedWorkspace.value?.path}'}';
@@ -109,6 +117,7 @@ class _MainPageState extends State<MainPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _scrollController.addListener(_updateHeaderBackground);
     _scrollController.addListener(_updateScrollToLatestVisibility);
     _draftKey = _currentDraftKey;
@@ -126,6 +135,8 @@ class _MainPageState extends State<MainPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_speech.cancel());
     _scrollController
       ..removeListener(_updateHeaderBackground)
       ..removeListener(_updateScrollToLatestVisibility)
@@ -137,6 +148,15 @@ class _MainPageState extends State<MainPage> {
     _promptController.dispose();
     _composerFocusNode.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _stopVoiceInput(cancel: true);
+    }
   }
 
   @override
@@ -558,6 +578,8 @@ class _MainPageState extends State<MainPage> {
                             onCopyTaskOutput: _taskOutputText.isEmpty
                                 ? null
                                 : _copyTaskOutput,
+                            onShowTaskInbox: _showTaskInbox,
+                            taskInboxCount: controller.unreadCompletedTaskCount,
                             onRefreshGit: controller.canUseWorkspace
                                 ? () => controller.gitStatus(includeDiff: true)
                                 : null,
@@ -725,6 +747,7 @@ class _MainPageState extends State<MainPage> {
                                   busy: _imageDraft.busy,
                                   sendBlocked: _imageDraft.unknown,
                                   onPaste: () => _pasteImageOrText(),
+                                  listening: _listening,
                                   // Derive the composer state from the same
                                   // canonical lifecycle used by the answer
                                   // header.  The legacy boolean can otherwise
@@ -848,6 +871,51 @@ class _MainPageState extends State<MainPage> {
       context: context,
       builder: (_) =>
           TaskOutputDialog(output: output, subtitle: _selectedTaskTitle),
+    );
+  }
+
+  void _showTaskInbox() {
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    Widget buildPanel() => Obx(() {
+      final sessions = List<SessionRecord>.from(controller.sessions);
+      return TaskInboxPanel(
+        sessions: sessions,
+        selectedSessionId: controller.selectedSessionId.value,
+        onSelect: (session) {
+          controller.selectSession(session);
+          Navigator.of(context).pop();
+        },
+        onRefresh: controller.connected.value
+            ? controller.refreshProjects
+            : null,
+        showRefresh: controller.connected.value,
+      );
+    });
+
+    if (compact) {
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => Padding(
+          padding: const EdgeInsets.fromLTRB(10, 24, 10, 10),
+          child: buildPanel(),
+        ),
+      );
+      return;
+    }
+
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.28),
+      builder: (_) => Align(
+        alignment: Alignment.topRight,
+        child: Padding(
+          padding: const EdgeInsets.only(top: 76, right: 22),
+          child: buildPanel(),
+        ),
+      ),
     );
   }
 
@@ -1061,6 +1129,7 @@ class _MainPageState extends State<MainPage> {
   }
 
   void _sendPrompt() {
+    if (_listening) unawaited(_stopVoiceInput());
     if (_imageDraft.busy || _imageDraft.unknown) return;
     if (controller.timelineStatus.value.isActive) return;
     if (controller.timelineLoading.value) {
@@ -1778,7 +1847,74 @@ class _MainPageState extends State<MainPage> {
   }
 
   Future<void> _toggleVoiceInput() async {
-    controller.lastError.value = '语音输入暂未启用。';
+    if (_listening) {
+      await _stopVoiceInput();
+      return;
+    }
+    _composerFocusNode.unfocus();
+    if (!_speechInitialized) {
+      _speechInitialized = await _speech.initialize(
+        onError: (error) {
+          if (!mounted) return;
+          setState(() => _listening = false);
+          controller.lastError.value = '语音识别失败：${error.errorMsg}';
+        },
+        onStatus: (status) {
+          if (!mounted) return;
+          if (status == stt.SpeechToText.notListeningStatus ||
+              status == stt.SpeechToText.doneStatus) {
+            setState(() => _listening = false);
+          }
+        },
+      );
+    }
+    if (!_speechInitialized) {
+      controller.lastError.value = '当前设备不支持语音识别，或麦克风权限未开启。';
+      return;
+    }
+    _voiceBaseText = _promptController.text.trimRight();
+    try {
+      _voiceStopping = false;
+      await _speech.listen(
+        onResult: _onVoiceResult,
+        listenOptions: stt.SpeechListenOptions(
+          partialResults: true,
+          listenMode: stt.ListenMode.dictation,
+          autoPunctuation: true,
+          pauseFor: const Duration(seconds: 3),
+          listenFor: const Duration(minutes: 2),
+        ),
+      );
+      if (mounted) setState(() => _listening = true);
+    } catch (_) {
+      if (mounted) setState(() => _listening = false);
+      controller.lastError.value = '无法启动语音识别，请检查麦克风权限。';
+    }
+  }
+
+  void _onVoiceResult(SpeechRecognitionResult result) {
+    if (!mounted) return;
+    final recognized = result.recognizedWords.trim();
+    if (recognized.isEmpty) return;
+    final separator = _voiceBaseText.isEmpty ? '' : ' ';
+    _promptController.value = TextEditingValue(
+      text: '$_voiceBaseText$separator$recognized',
+      selection: TextSelection.collapsed(
+        offset: _voiceBaseText.length + separator.length + recognized.length,
+      ),
+    );
+    if (!_voiceStopping) setState(() => _listening = true);
+  }
+
+  Future<void> _stopVoiceInput({bool cancel = false}) async {
+    if (!_speechInitialized) return;
+    _voiceStopping = true;
+    if (cancel) {
+      await _speech.cancel();
+    } else {
+      await _speech.stop();
+    }
+    if (mounted) setState(() => _listening = false);
   }
 
   Future<void> _confirmUndoChanges() async {

@@ -48,4 +48,32 @@ void main() {
     expect(title.style?.fontSize, 24);
     expect(title.style?.fontWeight, FontWeight.w600);
   });
+
+  testWidgets(
+    'uses a compact rounded loader without shrinking the touch target',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: RecodexTheme.dark,
+          home: Scaffold(
+            body: HomeHeader(
+              title: 'recodex',
+              subtitle: '',
+              backgroundProgress: 0,
+              topPadding: 0,
+              refreshing: true,
+              onRefreshGit: () {},
+            ),
+          ),
+        ),
+      );
+
+      final loader = find.byType(CircularProgressIndicator);
+      expect(loader, findsOneWidget);
+      expect(tester.widget<CircularProgressIndicator>(loader).strokeWidth, 1.8);
+      expect(tester.getSize(loader), const Size(18, 18));
+    },
+  );
 }

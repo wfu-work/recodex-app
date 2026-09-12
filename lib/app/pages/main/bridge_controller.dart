@@ -21,6 +21,7 @@ import '../../services/timeline_events.dart';
 import '../../services/session_cache.dart';
 import '../../services/usage_statistics.dart';
 import '../../services/task_notification_controller.dart';
+import '../../services/android_relay_foreground_service.dart';
 import '../settings/settings_preferences_controller.dart';
 
 class BridgeController extends GetxController with WidgetsBindingObserver {
@@ -350,7 +351,7 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
   static const _tokenRefreshRetry = Duration(seconds: 15);
   // These are fallback reconciliation intervals. Normal streaming updates
   // arrive from the Relay event channel; the shorter intervals close the
-  // recovery window when a desktop-owned thread cannot be resumed.
+  // recovery window when a task is currently owned by another Codex client.
   static const _liveTimelineInterval = Duration(seconds: 2);
   static const _catalogRefreshInterval = Duration(seconds: 15);
   static const _activeTimelineReadInterval = Duration(seconds: 5);
@@ -364,10 +365,12 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
   static const _legacySecureStorage = FlutterSecureStorage();
   static const _pairingsStorageKey = 'recodex_pairings_v2';
   static const _activePairingStorageKey = 'recodex_active_pairing_id_v2';
-  // Stable identity used when creating a new pairing on this phone. Existing
+  static const _unreadCompletedTasksStorageKey =
+      'recodex_unread_completed_tasks_v1';
+  // Stable phone identity used when creating a new pairing. Existing
   // profiles keep their own deviceKey so already-issued Relay tokens remain
   // valid.
-  static const _sharedEndpointPrivateKeyStorageKey =
+  static const _phoneEndpointPrivateKeyStorageKey =
       'recodex_mobile_endpoint_private_key_v1';
   static Future<void>? _storageReady;
 
@@ -380,6 +383,48 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
     final pending = GetStorage.init(_storageContainer).then<void>((_) {});
     _storageReady = pending;
     return pending;
+  }
+
+  Future<void> _loadUnreadCompletedTaskIds() async {
+    try {
+      await initializeStorage();
+      final stored = _storage.read<dynamic>(_unreadCompletedTasksStorageKey);
+      if (stored is List) {
+        unreadCompletedTaskIds.addAll(
+          stored
+              .map((value) => value.toString().trim())
+              .where((value) => value.isNotEmpty),
+        );
+      }
+    } catch (_) {
+      // A missing or unreadable local record simply starts with no badge.
+    }
+  }
+
+  Future<void> _persistUnreadCompletedTaskIds() async {
+    try {
+      await initializeStorage();
+      await _storage.write(
+        _unreadCompletedTasksStorageKey,
+        unreadCompletedTaskIds.toList(growable: false),
+      );
+    } catch (_) {
+      // Keep the in-memory badge when local storage is unavailable.
+    }
+  }
+
+  void _markCompletedTaskUnread(String? sessionId) {
+    final id = sessionId?.trim() ?? '';
+    if (id.isEmpty || unreadCompletedTaskIds.contains(id)) return;
+    unreadCompletedTaskIds.add(id);
+    unawaited(_persistUnreadCompletedTaskIds());
+  }
+
+  void _markCompletedTaskRead(String? sessionId) {
+    final id = sessionId?.trim() ?? '';
+    if (id.isEmpty || !unreadCompletedTaskIds.contains(id)) return;
+    unreadCompletedTaskIds.remove(id);
+    unawaited(_persistUnreadCompletedTaskIds());
   }
 
   final baseUrl = 'ws://127.0.0.1:8788/v1/connect'.obs;
@@ -415,6 +460,10 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
   /// the same data flow.
   final pairings = <PairingProfile>[].obs;
   final activePairingId = RxnString();
+
+  /// Completed tasks that finished while the user was not viewing them.
+  /// IDs are persisted so the badge remains correct across app restarts.
+  final unreadCompletedTaskIds = <String>{}.obs;
 
   final workspaces = <WorkspaceInfo>[].obs;
   final sessions = <SessionRecord>[].obs;
@@ -558,6 +607,16 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
       connected.value && selectedWorkspace.value != null;
   bool get hasDeviceKey => deviceKey.value.isNotEmpty;
 
+  int get unreadCompletedTaskCount {
+    return sessions
+        .where(
+          (session) =>
+              unreadCompletedTaskIds.contains(session.id.trim()) &&
+              _isSuccessfulCompletedStatus(session.status),
+        )
+        .length;
+  }
+
   PairingProfile? get activePairing {
     final id = activePairingId.value;
     if (id == null) return null;
@@ -601,13 +660,13 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
     var encodedSeed = deviceKey?.trim() ?? '';
     if (encodedSeed.isEmpty) {
       // New pairing drafts reuse the phone identity. This keeps the public
-      // key stable while still allowing saved legacy profiles to retain
-      // their original key material.
+      // key stable while allowing saved profiles to retain their own key
+      // material.
       try {
         await initializeStorage();
         encodedSeed =
             (await _legacySecureStorage.read(
-                      key: _sharedEndpointPrivateKeyStorageKey,
+                      key: _phoneEndpointPrivateKeyStorageKey,
                     ) ??
                     '')
                 .trim();
@@ -645,7 +704,7 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
       try {
         await initializeStorage();
         await _legacySecureStorage.write(
-          key: _sharedEndpointPrivateKeyStorageKey,
+          key: _phoneEndpointPrivateKeyStorageKey,
           value: normalizedSeed,
         );
       } catch (_) {
@@ -762,6 +821,7 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
     super.onInit();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_loadStoredCredentials());
+    unawaited(_loadUnreadCompletedTaskIds());
     unawaited(_applySavedTaskPreferences());
     // Credentials are loaded asynchronously; [_loadStoredCredentials] will
     // activate the scope again once the selected pairing is known.
@@ -790,6 +850,7 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
       await _flushCacheWrites();
       await _sessionCache.close();
     }());
+    unawaited(AndroidRelayForegroundService.stop());
     unawaited(disconnect(silent: true));
     super.onClose();
   }
@@ -798,24 +859,33 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.inactive:
+        // Android emits `inactive` briefly while a route, permission dialog,
+        // or the lock screen is being presented. Mark the app as backgrounded
+        // so reconnect checks are deferred, but wait for `paused` before
+        // starting a foreground service.
+        _markBackground();
+        break;
       case AppLifecycleState.paused:
-      case AppLifecycleState.detached:
       case AppLifecycleState.hidden:
         _enterBackground();
+        break;
+      case AppLifecycleState.detached:
+        _markBackground();
+        break;
       case AppLifecycleState.resumed:
         _resumeFromBackground();
+        break;
     }
   }
 
-  void _enterBackground() {
+  void _markBackground() {
     if (_appInBackground) return;
     _appInBackground = true;
-    _disconnectNotificationTimer?.cancel();
-    _disconnectNotificationTimer = null;
-    _reconnectTimer?.cancel();
-    _reconnectTimer = null;
-    _heartbeatTimer?.cancel();
-    _heartbeatTimer = null;
+    // Keep the Relay socket, heartbeat, and reconnect loop alive while the
+    // Android foreground service holds the process at foreground priority.
+    // Closing these timers here makes lock-screen transitions look like a
+    // disconnected host and delays terminal notifications until the next
+    // manual resume.
     final socket = _socket;
     if (!connected.value ||
         socket == null ||
@@ -824,9 +894,24 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
     }
   }
 
+  void _enterBackground() {
+    _markBackground();
+    // Starting a foreground service is only valid once Android has actually
+    // paused the activity. Avoid showing a persistent service notification for
+    // short-lived inactive states such as a permission prompt.
+    if (_manualDisconnect ||
+        (pairingToken.value.isEmpty && endpointGrant.value.isEmpty) ||
+        spaceId.value.isEmpty ||
+        targetDeviceId.value.isEmpty) {
+      return;
+    }
+    unawaited(AndroidRelayForegroundService.start());
+  }
+
   void _resumeFromBackground() {
     if (!_appInBackground) return;
     _appInBackground = false;
+    unawaited(AndroidRelayForegroundService.stop());
     final reconnectPending = _resumeReconnectPending;
     final socket = _socket;
     final healthy =
@@ -1492,6 +1577,7 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
     _connectionAttempt += 1;
     _manualDisconnect = true;
     _resumeReconnectPending = false;
+    unawaited(AndroidRelayForegroundService.stop());
     _disconnectNotificationTimer?.cancel();
     _disconnectNotificationTimer = null;
     _reconnectedNotificationTimer?.cancel();
@@ -1745,6 +1831,7 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
   void selectSession(SessionRecord session) {
     if (backendReady.value) interactionNotice.value = '';
     if (session.id.trim().isEmpty) return;
+    _markCompletedTaskRead(session.id);
 
     final previousSessionId = selectedSessionId.value?.trim();
     if (previousSessionId != null && previousSessionId != session.id.trim()) {
@@ -1899,7 +1986,7 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
       return;
     }
 
-    // The composer is shared by both the "new conversation" state and an
+    // The composer is used by both the "new conversation" state and an
     // already selected task.  A selected task must keep its identity: the
     // App Server creates a new thread only for an explicit new-conversation
     // action.  Clearing selectedSessionId here used to make every follow-up
@@ -1983,8 +2070,8 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
       if (skills.isNotEmpty) 'skills': skills,
     };
     if (waiting.isEmpty) {
-      // The shared thread is authoritative. Echoing a cached model/effort
-      // here would overwrite a desktop edit that is still crossing Relay.
+      // The Relay task state is authoritative. Echoing a cached model/effort
+      // here could overwrite an edit that is still crossing Relay.
       return _sendCommand('turn.start', command, threadId: threadId);
     }
     final sendToken = Object();
@@ -2900,8 +2987,8 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
         _storage.remove('recodex_token_expires_at'),
         _storage.remove('recodex_grant_expires_at'),
       ]);
-      // Also clear the pre-GetStorage Keychain values so an explicit
-      // credential reset cannot be undone by a later migration.
+      // Also clear the older Keychain values so an explicit credential reset
+      // cannot be undone by a stale local record.
       await Future.wait([
         _legacySecureStorage.delete(key: _pairingsStorageKey),
         _legacySecureStorage.delete(key: _activePairingStorageKey),
@@ -3760,9 +3847,8 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
         }
       }
     }
-    // Profiles created before selectedSessionId was introduced have no saved
-    // task. The server returns newest-first, so opening the first non-archived
-    // task is the least surprising migration fallback.
+    // Profiles without a saved selected task use the server's newest
+    // non-archived task as the initial selection.
     selected ??= records.cast<SessionRecord?>().firstWhere(
       (session) => session != null && !session.isArchived,
       orElse: () => null,
@@ -3995,8 +4081,8 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
       }
     }
     // A catalog snapshot without lifecycle evidence is not proof that the
-    // task completed.  In particular, a desktop-owned active thread can be
-    // visible here before its persisted status catches up.  Keep it in an
+    // task completed.  In particular, a task owned by another Codex client
+    // can be visible here before its persisted status catches up.  Keep it in an
     // explicit synchronizing state so the sidebar never fabricates a terminal
     // status from missing metadata.
     return normalizedStatus?.isNotEmpty == true ? normalizedStatus! : 'unknown';
@@ -4710,6 +4796,9 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
           session = candidate;
           break;
         }
+      }
+      if (status == TimelineTaskStatus.completed) {
+        _recordCompletedTaskUnread(id);
       }
       unawaited(
         _notifySessionFinishedOnce(
@@ -5854,6 +5943,9 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
         status == TaskNotificationStatus.failed) {
       lastError.value = message;
     }
+    if (status == TaskNotificationStatus.completed) {
+      _recordCompletedTaskUnread(id);
+    }
     if (id != null && id.isNotEmpty) _markSessionTerminal(id);
     _lastTerminalTurnId = _currentTurnId;
     unawaited(
@@ -6059,10 +6151,10 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
     }
     _expirePendingCommands();
     // Timeline reads are reconciliation reads.  Do not implicitly resume a
-    // historical thread here: an official desktop task may still be owned by
-    // the desktop App Server, and attempting `thread/resume` would contend
-    // for its writer.  Relay-created tasks are already subscribed when they
-    // are created; desktop-owned tasks converge through persisted snapshots.
+    // historical thread here: another Codex client may still own its writer,
+    // and attempting `thread/resume` would contend for that writer. Tasks
+    // created through Relay are already tracked; other tasks converge through
+    // persisted snapshots.
     if (_coalescesPendingCommand(type) &&
         !force &&
         _pendingCommands.values.any(
@@ -6780,6 +6872,9 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
         continue;
       }
       _markSessionTerminal(session.id);
+      if (_isSuccessfulCompletedStatus(status)) {
+        _recordCompletedTaskUnread(session.id);
+      }
       unawaited(
         _notifySessionFinishedOnce(
           status: _notificationStatusForSessionStatus(status),
@@ -6837,6 +6932,24 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
         status == 'error' ||
         status == 'failed' ||
         status == 'interrupted';
+  }
+
+  bool _isSuccessfulCompletedStatus(String status) {
+    final normalized = status
+        .trim()
+        .toLowerCase()
+        .replaceAll('-', '_')
+        .replaceAll(' ', '_');
+    return normalized == 'done' ||
+        normalized == 'completed' ||
+        normalized == 'complete';
+  }
+
+  void _recordCompletedTaskUnread(String? sessionId) {
+    final id = sessionId?.trim() ?? '';
+    if (id.isEmpty) return;
+    if (id == selectedSessionId.value?.trim() && !_appInBackground) return;
+    _markCompletedTaskUnread(id);
   }
 
   TaskNotificationStatus _notificationStatusForSessionStatus(String status) {
@@ -7879,12 +7992,12 @@ class BridgeController extends GetxController with WidgetsBindingObserver {
     try {
       await initializeStorage();
       await _storage.write('recodex_endpoint_private_key', deviceKey.value);
-      final sharedIdentity = await _legacySecureStorage.read(
-        key: _sharedEndpointPrivateKeyStorageKey,
+      final phoneIdentity = await _legacySecureStorage.read(
+        key: _phoneEndpointPrivateKeyStorageKey,
       );
-      if (sharedIdentity == null || sharedIdentity.trim().isEmpty) {
+      if (phoneIdentity == null || phoneIdentity.trim().isEmpty) {
         await _legacySecureStorage.write(
-          key: _sharedEndpointPrivateKeyStorageKey,
+          key: _phoneEndpointPrivateKeyStorageKey,
           value: deviceKey.value,
         );
       }
